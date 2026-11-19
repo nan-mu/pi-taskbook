@@ -1,21 +1,30 @@
 # pi-taskbook
 
-把自己的任务书执行提示词加载进 Pi。流程入口是接受任务书，出口是交接、阻塞或用户退出。当前版本是可运行的原型，目标运行环境为 Pi 1.5.2。
+Pi 按任务书的 `Goal.Type` 进入不同执行流程。当前版本是可运行的原型，目标运行环境为 Pi 1.5.2。
+
+## 两个任务入口
+
+| 任务类型 | 阶段路径 |
+| --- | --- |
+| `new-feature`、`new-experiment` | 核查新增前提 → 设计新增目标及验收 → 实现新增目标并取证 → 公共审核 |
+| `fix-feature`、`fix-experiment` | 复现或核实原缺陷 → 设计修复和复验 → 修复已确认缺陷并复验 → 公共审核 |
+
+`taskFlow` 按任务类型确定起点，`nextPhase` 按相同类型推进。修复实验的设计与取证阶段明确受影响数据、重跑范围及仍有效的结果。
 
 ## 安装与使用
 
 在运行 T3 Code 的机器上用 `pi install /absolute/path/to/pi-taskbook` 安装到 Pi。将 `.audit/pi-taskbook/` 加入对应仓库的 Git 排除配置。
 
-| 入口 | Pi 执行 |
+| 工作区准备方式 | Pi 执行 |
 | --- | --- |
 | `/taskbook-new <任务书路径>` | 在当前项目解析固定基线，用 Git 建立任务书指定的新分支和 linked worktree，再直接调用 T3 MCP 的 `t3_thread_launch`。新 thread 在已创建的 worktree 上接收一条内部 `/taskbook` 命令。 |
 | `/taskbook <任务书路径>` | 在当前持久会话内核对 GitHub origin、工作分支、linked worktree 和基线，通过后建立审计记录并开始事实核查。重交同一任务书可从检查点恢复。 |
 
-新建入口需要 T3 为 Pi 注入本地 MCP 端点，以及 `PI_TASKBOOK_WORKTREE_ROOT` 指向已有的专用目录。接收端复核实际目录、任务书和事实摘要以及固定基线。新分支从 `Base commit` 或本地基线分支解析的提交创建。既有 worktree 的无显式 SHA 基线取其 HEAD 与基线分支的 merge-base。两个入口先做程序校验，通过后才启动模型轮次。MCP 回执缺失时，检查原 thread 是否已建立，保留已创建的 worktree 供核对。
+自动准备 worktree 需要 T3 为 Pi 注入本地 MCP 端点，以及 `PI_TASKBOOK_WORKTREE_ROOT` 指向已有的专用目录。接收端复核实际目录、任务书和事实摘要以及固定基线。新分支从 `Base commit` 或本地基线分支解析的提交创建。既有 worktree 的无显式 SHA 基线取其 HEAD 与基线分支的 merge-base。两种工作区准备方式汇入同一接收处理代码。工作区通过校验后，由任务书类型决定执行哪条流程。MCP 回执缺失时，检查原 thread 是否已建立，保留已创建的 worktree 供核对。
 
 `/taskbook-exit` 主动取消当前运行。没有有效阶段报告或模型被中断时，本轮退出并保留检查点。审计记录保存已通过验收的阶段事实和候审提交。
 
-## 当前识别的任务书入口
+## 当前识别的任务书格式
 
 任务书和事实清单仍使用 Markdown。原型只解析任务标识、仓库、分支、目标类型与可选事实文件。检查与验收细节保留原文，交由当前阶段理解。Facts 可以用同目录下的相对路径，含下级目录。
 
@@ -49,9 +58,11 @@ Type: fix-feature
 
 | 阶段 | 选择的上游方法 |
 | --- | --- |
-| 事实核查 | PStack Prove It Works。修复类任务另取 Matt diagnosing-bugs Phase 1–2。 |
+| 核查新增前提 | PStack Prove It Works。 |
+| 复现或核实缺陷 | PStack Prove It Works 和 Matt diagnosing-bugs Phase 1–2。 |
 | 澄清与设计 | PStack Model the Domain 和 Matt codebase-design。 |
-| 实现与取证 | PStack Sequence Work into Verifiable Units。新任务加 Matt tdd 及附文，修复类继续 diagnosing-bugs Phase 3 及之后。 |
+| 实现新增目标并取证 | PStack Sequence Work into Verifiable Units。新增功能加 Matt tdd 及附文，新增实验加 benchmark-checklist。 |
+| 修复已确认缺陷并复验 | PStack Sequence Work into Verifiable Units 和 Matt diagnosing-bugs Phase 3 及之后。 |
 | 规格与质量审核 | 分别取 Matt code-review 的 Spec 和 Standards 执行部分，并搭配相应的 PStack 原则。 |
 | 性能验证 | PStack benchmark-checklist。实验类型必经，其他任务由质量阶段报告测量需要后进入。 |
 

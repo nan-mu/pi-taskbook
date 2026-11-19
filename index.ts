@@ -5,7 +5,7 @@ import { existsSync, linkSync, lstatSync, mkdirSync, readFileSync, renameSync, r
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { git, gitOk, readTaskbook, workspace, type Taskbook } from "./taskbook.ts";
-import { nextPhase, phases, titles, type Outcome, type Phase } from "./workflow.ts";
+import { nextPhase, restorePhase, taskFlow, titles, type Outcome, type Phase } from "./workflow.ts";
 import { prepareTaskWorktree, readEntryArgument, verifyPreparedEntry, type PreparedEntry } from "./entry.ts";
 import { launchT3Thread, readT3Endpoint } from "./t3.ts";
 import { loadUpstreamInputs, pinUpstreamInputs, type UpstreamPins } from "./upstream.ts";
@@ -14,7 +14,10 @@ const reportTool = "taskbook_report";
 const kickoffType = "pi-taskbook-stage";
 const promptDir = fileURLToPath(new URL("./prompts/", import.meta.url));
 const common = readFileSync(join(promptDir, "common.md"), "utf8");
-const prompts = Object.fromEntries(phases.map(phase => [phase, readFileSync(join(promptDir, phase + ".md"), "utf8")]));
+const prompts = Object.fromEntries(Object.keys(titles).map(phase => {
+  const name = phase === "implement-new" || phase === "implement-fix" ? "implement" : phase;
+  return [phase, readFileSync(join(promptDir, name + ".md"), "utf8")];
+}));
 
 type Report = { phase: Phase; outcome: Outcome; summary: string; evidence: string[]; reviewThread?: string };
 type State = {
@@ -75,17 +78,22 @@ function openRun(ctx: ExtensionContext, task: Taskbook, prepared?: PreparedEntry
   }
 
   if (!existsSync(path)) {
-    const initial: State = { version: 1, digest: task.digest, session, base: preliminary.base, phase: "fact-check", reports: [],
+    const initial: State = { version: 1, digest: task.digest, session, base: preliminary.base, phase: taskFlow(task.type)[0], reports: [],
       upstream: pinUpstreamInputs() };
     try { save(path, initial, task, true); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
   }
   if (!lstatSync(path).isFile()) throw new Error("审计状态需要是普通文件。");
-  const state = JSON.parse(readFileSync(path, "utf8")) as State;
-  if (state.version !== 1 || state.digest !== task.digest || state.session !== session ||
-      (state.phase !== "exit" && !phases.includes(state.phase)) || !Array.isArray(state.reports)) {
+  const saved = JSON.parse(readFileSync(path, "utf8")) as Omit<State, "phase" | "reports"> & {
+    phase: string; reports: (Omit<Report, "phase"> & { phase: string })[];
+  };
+  if (saved.version !== 1 || saved.digest !== task.digest || saved.session !== session || !Array.isArray(saved.reports)) {
     throw new Error("审计记录不匹配，或任务已绑定到另一个 Pi 会话。");
   }
+  const state: State = { ...saved,
+    phase: saved.phase === "exit" ? "exit" : restorePhase(task.type, saved.phase),
+    reports: saved.reports.map(report => ({ ...report, phase: restorePhase(task.type, report.phase) })),
+  };
   workspace(ctx.cwd, task, state.base);
   return { task, root: preliminary.root, path, state };
 }
@@ -260,11 +268,11 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       }
       workspace(ctx.cwd, run.task, run.state.base);
       let revision = run.state.revision;
-      if (outcome !== "blocked" && phase === "implement") revision = cleanRevision(run);
+      if (outcome !== "blocked" && (phase === "implement-new" || phase === "implement-fix")) revision = cleanRevision(run);
       if (outcome !== "blocked" && revision && cleanRevision(run) !== revision) {
         throw new Error("待审快照已变化，应退出并使用更新的任务书重新提交。");
       }
-      const next = nextPhase(phase, outcome, run.task.type.endsWith("-experiment"));
+      const next = nextPhase(run.task.type, phase, outcome);
       const report: Report = { phase, outcome, summary, evidence, reviewThread };
       const exit = next === "ready" || next === "blocked";
       checkpoint(run, { ...run.state, revision, phase: exit ? "exit" : next,
