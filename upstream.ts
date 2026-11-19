@@ -9,12 +9,11 @@ type Pin = { root: string; commit: string };
 export type UpstreamPins = Record<Repository, Pin>;
 type Input = { repository: Repository; path: string; from?: string; until?: string };
 
-export function pinUpstreamInputs(): UpstreamPins | undefined {
+export function pinUpstreamInputs(): UpstreamPins {
   const pstack = process.env.PI_TASKBOOK_PSTACK_ROOT;
   const matt = process.env.PI_TASKBOOK_MATT_ROOT;
-  if (!pstack && !matt) return;
   if (!pstack || !matt || !isAbsolute(pstack) || !isAbsolute(matt)) {
-    throw new Error("启用上游原文时需要同时提供两个仓库的绝对路径。");
+    throw new Error("请设置 PI_TASKBOOK_PSTACK_ROOT 和 PI_TASKBOOK_MATT_ROOT 为两个必需上游仓库的绝对路径。");
   }
   function pin(path: string) {
     const root = realpathSync(path);
@@ -33,10 +32,14 @@ function matt(name: string, from?: string, until?: string, file = "SKILL.md"): I
 
 export function phaseSources(phase: Phase, type: Taskbook["type"]): Input[] {
   switch (phase) {
-    case "fact-check":
-      return [pstack("principle-prove-it-works"), ...(type.startsWith("fix-")
-        ? [matt("diagnosing-bugs", "## Phase 1:", "## Phase 3:")]
-        : [])];
+    case "fact-check": {
+      const sources = [
+        pstack("principle-prove-it-works"),
+        matt("research", "1. Investigate the question against", "2. Write the findings"),
+      ];
+      if (type.startsWith("fix-")) sources.push(matt("diagnosing-bugs", "## Redact", "## Phase 3:"));
+      return sources;
+    }
     case "design":
       return [pstack("principle-model-the-domain"), matt("codebase-design")];
     case "implement": {
@@ -50,6 +53,7 @@ export function phaseSources(phase: Phase, type: Taskbook["type"]): Input[] {
         matt("code-review", "Spec sub-agent prompt should include:", "### 5.")];
     case "quality":
       return [pstack("principle-minimize-reader-load"),
+        matt("code-review", "### 3. Identify the standards sources", "### 4."),
         matt("code-review", "Standards sub-agent prompt should include:", "Spec sub-agent prompt should include:")];
     case "performance":
       return [pstack("benchmark-checklist")];
@@ -57,15 +61,24 @@ export function phaseSources(phase: Phase, type: Taskbook["type"]): Input[] {
 }
 
 export function loadUpstreamInputs(pins: UpstreamPins | undefined, phase: Phase, type: Taskbook["type"]) {
-  if (!pins) return [];
+  if (!pins) throw new Error("任务缺少必需的固定上游版本。");
   return phaseSources(phase, type).map(input => {
     const pin = pins[input.repository];
-    const markdown = execFileSync("git", ["show", pin.commit + ":" + input.path],
-      { cwd: pin.root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    const source = input.repository + "@" + pin.commit + ":" + input.path;
+    let markdown: string;
+    try {
+      markdown = execFileSync("git", ["show", pin.commit + ":" + input.path],
+        { cwd: pin.root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    } catch {
+      throw new Error("无法读取必需的上游提示词：" + source);
+    }
     const lines = markdown.match(/[^\n]*\n|[^\n]+$/g) ?? [];
-    const start = input.from ? lines.findIndex(line => line.startsWith(input.from!)) : 0;
-    const end = input.until ? lines.findIndex((line, index) => index > start && line.startsWith(input.until!)) : lines.length;
-    if (start < 0 || end <= start) throw new Error("上游原文章节边界已变化：" + input.path);
-    return { source: input.repository + "@" + pin.commit + ":" + input.path, text: lines.slice(start, end).join("") };
+    const headings = lines.map(line => line.replaceAll("**", ""));
+    const start = input.from ? headings.findIndex(line => line.startsWith(input.from!)) : 0;
+    const end = input.until ? headings.findIndex((line, index) => index > start && line.startsWith(input.until!)) : lines.length;
+    if (start < 0 || end <= start) throw new Error("必需上游原文章节缺失：" + source + "（" + (input.from ?? "文件开头") + "）");
+    const text = lines.slice(start, end).join("");
+    if (!text.trim()) throw new Error("必需的上游提示词为空：" + source);
+    return { source, text };
   });
 }

@@ -10,14 +10,16 @@ import { prepareTaskWorktree, readEntryArgument, verifyPreparedEntry, type Prepa
 import { launchT3Thread, readT3Endpoint } from "./t3.ts";
 import { loadUpstreamInputs, pinUpstreamInputs, type UpstreamPins } from "./upstream.ts";
 
+import { checkFacts, factChecksParameter, type Observation, type CheckedFact } from "./fact-check.ts";
+
 const reportTool = "taskbook_report";
 const kickoffType = "pi-taskbook-stage";
 const promptDir = fileURLToPath(new URL("./prompts/", import.meta.url));
 const common = readFileSync(join(promptDir, "common.md"), "utf8");
-const promptNames = [...stages.slice(1), "fact-check-fix", "fact-check-new"];
+const promptNames = [...stages, "fact-check-fix", "fact-check-new"];
 const prompts = Object.fromEntries(promptNames.map(name => [name, readFileSync(join(promptDir, name + ".md"), "utf8")]));
 
-type Report = { phase: Phase; outcome: Outcome; summary: string; evidence: string[]; reviewThread?: string };
+type Report = { phase: Phase; outcome: Outcome; summary: string; evidence: string[]; factChecks?: CheckedFact[]; reviewThread?: string };
 type State = {
   version: 1;
   digest: string;
@@ -37,6 +39,7 @@ const reportParameters = Type.Object({
   outcome: Type.Union([Type.Literal("pass"), Type.Literal("blocked"), Type.Literal("measure")]),
   summary: Type.String({ minLength: 1, maxLength: 4000 }),
   evidence: Type.Array(Type.String({ minLength: 1, maxLength: 1200 }), { maxItems: 20 }),
+  factChecks: Type.Optional(factChecksParameter),
   reviewThread: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
 }, { additionalProperties: false });
 
@@ -77,9 +80,11 @@ function openRun(ctx: ExtensionContext, task: Taskbook, prepared?: PreparedEntry
   }
 
   if (!existsSync(path)) {
+    const upstream = pinUpstreamInputs();
+    loadUpstreamInputs(upstream, stages[0], task.type);
     const initial: State = { version: 1, digest: task.digest, session, base: preliminary.base, branch: preliminary.branch,
       phase: stages[0], reports: [],
-      upstream: pinUpstreamInputs() };
+      upstream };
     try { save(path, initial, task, true); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
   }
@@ -96,6 +101,12 @@ function openRun(ctx: ExtensionContext, task: Taskbook, prepared?: PreparedEntry
     reports: saved.reports.map(report => ({ ...report, phase: restorePhase(task.type, report.phase) })),
   };
   workspace(ctx.cwd, task, state.base, state.branch);
+  if (state.phase !== "exit" && !state.upstream) {
+    const pins = pinUpstreamInputs();
+    loadUpstreamInputs(pins, state.phase, task.type);
+    state.upstream = pins;
+    save(path, state, task);
+  }
   return { task, root: preliminary.root, path, state };
 }
 
@@ -113,9 +124,10 @@ function buildPhaseInput(run: Run, phase: Phase, attempt: string) {
     branch: state.branch, phase, attempt, priorReports: state.reports }, null, 2);
   const upstream = loadUpstreamInputs(state.upstream, phase, task.type);
   const methods = upstream.flatMap(file => ["## 当前阶段的上游方法 " + file.source, file.text]);
-  const prompt = phase === "fact-check" ? (task.type.startsWith("fix-") ? "fact-check-fix" : "fact-check-new") : phase;
-  return [common, prompts[prompt], ...methods, "## 当前运行数据", fixed, "## 任务书原文", task.markdown,
-    "## 任务书随附事实", task.facts ?? "任务书未声明随附事实文件。"].join("\n\n");
+  const guidance = [prompts[phase]];
+  if (phase === "fact-check") guidance.push(prompts[task.type.startsWith("fix-") ? "fact-check-fix" : "fact-check-new"]);
+  return [common, ...guidance, ...methods, "## 当前运行数据", fixed, "## 任务书原文", task.markdown,
+    ...(task.facts !== undefined ? ["## 任务书随附事实", task.facts] : [])].join("\n\n");
 }
 
 export default function taskbookExtension(pi: ExtensionAPI) {
@@ -125,6 +137,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   let reported = false;
   let launching = false;
   let phaseInput: string | undefined;
+  const observations = new Map<string, Observation>();
 
   function toggleReportTool(enabled: boolean) {
     const tools = pi.getActiveTools().filter(name => name !== reportTool);
@@ -137,6 +150,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     workspace(ctx.cwd, run.task, run.state.base, run.state.branch);
     const token = randomUUID();
     phaseInput = buildPhaseInput(run, run.state.phase, token);
+    observations.clear();
     attempt = token;
     started = false;
     reported = false;
@@ -146,6 +160,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   }
 
   function release(ctx: ExtensionContext) {
+    observations.clear();
     run = undefined;
     attempt = undefined;
     phaseInput = undefined;
@@ -203,6 +218,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       let preparedPath: string | undefined;
       try {
         const task = readTaskbook(ctx.cwd, args);
+        loadUpstreamInputs(pinUpstreamInputs(), stages[0], task.type);
         const endpoint = readT3Endpoint();
         const location = process.env.PI_TASKBOOK_WORKTREE_ROOT;
         if (!location) throw new Error("请设置 PI_TASKBOOK_WORKTREE_ROOT 为专用 worktree 根目录。");
@@ -247,6 +263,17 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     if (started && reported) return { block: true, reason: "当前阶段已提交，等待 Pi 结束这一轮。" };
   });
 
+  pi.on("tool_result", (event) => {
+    if (!started || reported || run?.state.phase !== "fact-check") return;
+    if ([reportTool, "write", "edit"].includes(event.toolName)) return;
+    const text = event.content.flatMap(part => part.type === "text" && part.text.trim() ? [part.text] : []);
+    if (text.length === 0) return;
+    const receipt = randomUUID();
+    observations.set(receipt, { toolName: event.toolName, toolCallId: event.toolCallId, isError: event.isError, text });
+    return { content: [...event.content, { type: "text" as const, text: "事实核查回执 " + receipt }],
+      structuredContent: event.structuredContent };
+  });
+
   pi.registerTool({
     name: reportTool,
     label: "提交任务书阶段证据",
@@ -262,7 +289,12 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       const summary = params.summary.trim();
       const evidence = params.evidence.map(item => item.trim()).filter(Boolean);
       const reviewThread = params.reviewThread?.trim();
-      if (!summary || (outcome !== "blocked" && evidence.length === 0)) throw new Error("请提供具体结论及对应证据。");
+      if (phase !== "fact-check" && params.factChecks) throw new Error("factChecks 仅用于事实核查。");
+      if (phase === "fact-check" && outcome === "pass" && !params.factChecks?.length) {
+        throw new Error("事实核查通过需要至少一项可定位、有摘录的 factChecks。");
+      }
+      const factChecks = params.factChecks && checkFacts(run.root, run.state.base, params.factChecks, observations);
+      if (!summary || (outcome !== "blocked" && !factChecks?.length && evidence.length === 0)) throw new Error("请提供具体结论及对应证据。");
       if (outcome !== "blocked" && (phase === "correctness" || phase === "quality")) {
         if (!reviewThread || run.state.reports.some(item => item.reviewThread === reviewThread)) {
           throw new Error("请提供本阶段独立审核的子 thread 标识。");
@@ -275,7 +307,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
         throw new Error("待审快照已变化，应退出并使用更新的任务书重新提交。");
       }
       const next = nextPhase(run.task.type, phase, outcome);
-      const report: Report = { phase, outcome, summary, evidence, reviewThread };
+      const report: Report = { phase, outcome, summary, evidence, factChecks, reviewThread };
       const exit = next === "ready" || next === "blocked";
       checkpoint(run, { ...run.state, revision, phase: exit ? "exit" : next,
         exit: exit ? next : undefined, reports: [...run.state.reports, report] });

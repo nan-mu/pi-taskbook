@@ -49,20 +49,32 @@ Entry 可写 `New feature`、`Fix feature`、`New experiment` 或 `Fix experimen
 
 ## 阶段驱动与附加提示词
 
-`startPhase` 从审计状态取阶段，用 `buildPhaseInput` 组装当地规则、任务书、事实、前序报告及该阶段的上游方法，仅启动一次当前阶段的模型轮次。`taskbook_report` 复核阶段执行标识、报告和 Git 快照。`nextPhase` 只依据类型、当前阶段和经过校验的结果决定迁移。
+`startPhase` 从审计状态取阶段，用 `buildPhaseInput` 组装阶段指导、任务书、事实、前序报告及该阶段的上游方法，仅启动一次当前阶段的模型轮次。`taskbook_report` 复核阶段执行标识、报告和 Git 快照。`nextPhase` 只依据类型、当前阶段和经过校验的结果决定迁移。
 
-同时设置 `PI_TASKBOOK_PSTACK_ROOT` 与 `PI_TASKBOOK_MATT_ROOT` 后，插件可从两份本地 Git checkout 读取原文。首次接收时固定两个 commit。已有记录恢复时沿用原有版本。两者都未配置时可运行原型自带的本地提示词。
+插件从两份必需的本地 Git checkout 读取上游原文。`PI_TASKBOOK_PSTACK_ROOT` 指向 cursor/plugins 的仓库根，`PI_TASKBOOK_MATT_ROOT` 指向 mattpocock/skills 的仓库根。两者均使用绝对路径。新任务固定两个提交，并检查首次核查所需的文件和段落。后续阶段按保存的版本读取所需片段，失败时报告具体来源。旧任务恢复时，如果缺少上游记录，先验证当前阶段的来源，再保存固定版本。
 
-| 阶段 | 配置上游后附加的内容 |
+| 阶段 | 本轮实际附加的内容 |
 | --- | --- |
-| 核查任务依据 | 附加 `pstack:principle-prove-it-works`。修复类额外附加 `matt:diagnosing-bugs` 第 1–2 阶段。 |
+| 核查任务依据 | 附加 `pstack:principle-prove-it-works` 与 `matt:research` 中逐项追溯一手来源的条款。修复类额外附加 `matt:diagnosing-bugs` 的 Redact 与第 1–2 阶段。 |
 | 澄清与设计 | 附加 `pstack:principle-model-the-domain` 和 `matt:codebase-design`。 |
 | 实施并取证 | 附加 `pstack:principle-sequence-verifiable-units`。新增功能额外附加 `matt:tdd` 和两份附文，新增实验额外附加 `pstack:benchmark-checklist`，修复类额外附加 `matt:diagnosing-bugs` 第 3 阶段及以后。 |
 | 规格审核 | 附加 `matt:code-review` 的 Spec 段和 `pstack:principle-prove-it-works`。 |
-| 质量审核 | 附加 `matt:code-review` 的 Standards 段和 `pstack:principle-minimize-reader-load`。 |
+| 质量审核 | 附加 `matt:code-review` 的 Standards 提示词与第 3 节审查清单，以及 `pstack:principle-minimize-reader-load`。 |
 | 性能验证 | 附加 `pstack:benchmark-checklist`。实验类型必经，功能任务在质量阶段报告测量需要时进入。 |
 
 `phaseSources` 按类型和阶段选择补充提示词。`workflow.ts` 维护状态和迁移。设计参考 `pstack:poteto-mode:Feature` 的先追踪受影响系统、再设计的顺序。
+
+### 事实核查的输入与报告
+
+当前主会话执行 `prompts/fact-check.md` 和对应入口的指导。任务书里的 Facts 随原文进入，另有事实附件时附加一次。例如，目标引用 /fact(1) 声明了旧输出目录，主会话用它定位基线实现，再以源代码或运行输出判断声明是否成立。任务书内列出的未来验收步骤只描述预期检查。
+
+主会话用 `factChecks` 提交决定是否能进入设计的主张、原文摘录和来源。`taskbook_report` 在工具调用内同步核对当前 attempt。通过报告至少需要一条可复查来源。Git 引用由 `checkFacts` 在固定基线的指定文件行核对，工具引用与本轮工具回执和原始输出比对。错误引用可在当前阶段修正。没有足够依据可以提交 blocked。如果轮次结束仍没有有效报告，保留检查点并退出。
+
+代码校验来源、位置及摘录的一致性。主会话判断观察是否触达目标、是否足以支持主张，以及是否覆盖关键前提。命令返回非零可以是正确的故障复现，需解释它和目标症状的关系。下一阶段能看到已接受的记录及其出处。恢复旧检查点会保留历史报告，新增的引用校验适用于此版本新提交的事实核查报告。
+
+### 本地回归
+
+安装 Pi 1.5.2 并准备 Git 和 Python 3 后，在仓库根运行 `python3 tests/workflow_rpc.py`。测试使用临时 Git 工作区及实际 Pi RPC，以本地模型与 MCP 替身验证插件发出的调用、报告接受与拒绝、退出和恢复。可用 `PI_BIN` 指定 Pi 可执行文件。若已设置上文的两个仓库路径，可运行 `node --test tests/upstream.test.ts`，逐项检查本机实际上游版本的提示词片段。
 
 当前原型在规格和质量阶段依次接收报告。插件校验审核标识非空、两次标识不同以及候审 SHA 相同。T3 子会话由现有阶段提示词请求，报告标识仍由模型提供。程序化委派并校验子会话回执属于后续接入。性能阶段目前在审核之后运行，测量需要的改动前基线应由任务准备阶段先提供。
 
