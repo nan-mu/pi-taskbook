@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { git, gitOk, readTaskbook, workspace, type Taskbook } from "./taskbook.ts";
 import { nextPhase, phases, titles, type Outcome, type Phase } from "./workflow.ts";
+import { prepareTaskWorktree, readEntryArgument, verifyPreparedEntry, type PreparedEntry } from "./entry.ts";
+import { launchT3Thread, readT3Endpoint } from "./t3.ts";
+import { loadUpstreamInputs, pinUpstreamInputs, type UpstreamPins } from "./upstream.ts";
 
 const reportTool = "taskbook_report";
 const kickoffType = "pi-taskbook-stage";
@@ -22,6 +25,7 @@ type State = {
   phase: Phase | "exit";
   exit?: "ready" | "blocked" | "cancelled";
   revision?: string;
+  upstream?: UpstreamPins;
   reports: Report[];
 };
 type Run = { task: Taskbook; path: string; root: string; state: State };
@@ -51,10 +55,10 @@ function checkpoint(run: Run, next: State) {
   run.state = next;
 }
 
-function openRun(ctx: ExtensionContext, task: Taskbook): Run {
+function openRun(ctx: ExtensionContext, task: Taskbook, prepared?: PreparedEntry): Run {
   const session = ctx.sessionManager.getSessionId();
   if (!ctx.sessionManager.getSessionFile()) throw new Error("请在有持久会话记录的 Pi thread 中启动任务。");
-  const preliminary = workspace(ctx.cwd, task);
+  const preliminary = verifyPreparedEntry(ctx.cwd, task, prepared);
   const relativePath = ".audit/pi-taskbook/" + task.id + "-" + task.digest.slice(0, 16) + "/state.json";
   if (!gitOk(preliminary.root, "check-ignore", "-q", "--", relativePath)) {
     throw new Error("请先将 .audit/pi-taskbook/ 加入 Git 排除配置。");
@@ -70,8 +74,9 @@ function openRun(ctx: ExtensionContext, task: Taskbook): Run {
     if (!lstatSync(directory).isDirectory()) throw new Error("审计路径需要真实的目录。");
   }
 
-  const initial: State = { version: 1, digest: task.digest, session, base: preliminary.base, phase: "fact-check", reports: [] };
   if (!existsSync(path)) {
+    const initial: State = { version: 1, digest: task.digest, session, base: preliminary.base, phase: "fact-check", reports: [],
+      upstream: pinUpstreamInputs() };
     try { save(path, initial, task, true); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
   }
@@ -93,11 +98,23 @@ function cleanRevision(run: Run) {
   return revision;
 }
 
+function buildPhaseInput(run: Run, phase: Phase, attempt: string) {
+  const { task, state } = run;
+  const fixed = JSON.stringify({ task: task.id, type: task.type, base: state.base, revision: state.revision,
+    branch: task.branch, phase, attempt, priorReports: state.reports }, null, 2);
+  const upstream = loadUpstreamInputs(state.upstream, phase, task.type);
+  const methods = upstream.flatMap(file => ["## 当前阶段的上游方法 " + file.source, file.text]);
+  return [common, prompts[phase], ...methods, "## 当前运行数据", fixed, "## 任务书原文", task.markdown,
+    "## 任务书随附事实", task.facts ?? "任务书未声明随附事实文件。"].join("\n\n");
+}
+
 export default function taskbookExtension(pi: ExtensionAPI) {
   let run: Run | undefined;
   let attempt: string | undefined;
   let started = false;
   let reported = false;
+  let launching = false;
+  let phaseInput: string | undefined;
 
   function toggleReportTool(enabled: boolean) {
     const tools = pi.getActiveTools().filter(name => name !== reportTool);
@@ -108,7 +125,9 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   function startPhase(ctx: ExtensionContext) {
     if (!run || run.state.phase === "exit") return;
     workspace(ctx.cwd, run.task, run.state.base);
-    attempt = randomUUID();
+    const token = randomUUID();
+    phaseInput = buildPhaseInput(run, run.state.phase, token);
+    attempt = token;
     started = false;
     reported = false;
     ctx.ui.setStatus("pi-taskbook", titles[run.state.phase]);
@@ -119,10 +138,19 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   function release(ctx: ExtensionContext) {
     run = undefined;
     attempt = undefined;
+    phaseInput = undefined;
     started = false;
     reported = false;
     toggleReportTool(false);
     ctx.ui.setStatus("pi-taskbook", undefined);
+  }
+
+  function exitInvocation(ctx: ExtensionContext, reason: string, recoverable?: Run) {
+    const message = recoverable
+      ? `退出（可恢复） · ${reason}\n检查点 ${recoverable.path}\n再次提交同一任务书可从检查点恢复。`
+      : "退出（阻塞） · " + reason;
+    release(ctx);
+    ctx.ui.notify(message, "warning");
   }
 
   function announce(ctx: ExtensionContext, active: Run) {
@@ -138,20 +166,48 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   }
 
   pi.registerCommand("taskbook", {
-    description: "从 Markdown 任务书开始或恢复工作流",
+    description: "在当前 linked worktree 接收任务书或恢复工作流",
     async handler(args, ctx) {
-      if (!args.trim()) return ctx.ui.notify("用法 /taskbook <任务书路径>", "warning");
-      if (!ctx.isIdle() || attempt) return ctx.ui.notify("请等待当前 Pi 阶段结束。", "warning");
+      if (!ctx.isIdle() || attempt || launching) return ctx.ui.notify("入口请求已退出：当前会话正在处理任务。", "warning");
+      if (!args.trim()) return exitInvocation(ctx, "用法 /taskbook <任务书路径>");
       try {
-        const task = readTaskbook(ctx.cwd, args);
-        if (run && run.task.digest !== task.digest) throw new Error("当前已有待恢复的任务，请先退出。");
-        const candidate = openRun(ctx, task);
+        const input = readEntryArgument(args.trim());
+        const task = readTaskbook(ctx.cwd, input.prepared ? '"' + input.path + '"' : input.path);
+        const candidate = openRun(ctx, task, input.prepared);
         if (candidate.state.phase === "exit") return announce(ctx, candidate);
         run = candidate;
         toggleReportTool(true);
         startPhase(ctx);
       } catch (error) {
-        ctx.ui.notify(String(error), "error");
+        exitInvocation(ctx, String(error), run);
+      }
+    },
+  });
+
+  pi.registerCommand("taskbook-new", {
+    description: "按任务书新建工作分支和 worktree，并启动 T3 thread",
+    async handler(args, ctx) {
+      if (!ctx.isIdle() || attempt || launching) return ctx.ui.notify("入口请求已退出：当前会话正在处理任务。", "warning");
+      if (!args.trim()) return exitInvocation(ctx, "用法 /taskbook-new <任务书路径>");
+      launching = true;
+      let preparedPath: string | undefined;
+      try {
+        const task = readTaskbook(ctx.cwd, args);
+        const endpoint = readT3Endpoint();
+        const location = process.env.PI_TASKBOOK_WORKTREE_ROOT;
+        if (!location) throw new Error("请设置 PI_TASKBOOK_WORKTREE_ROOT 为专用 worktree 根目录。");
+        const prepared = prepareTaskWorktree(ctx.cwd, task, location);
+        preparedPath = prepared.path;
+        const reply = await launchT3Thread(endpoint, {
+          title: task.id, branch: task.branch, worktreePath: prepared.path, message: prepared.message,
+          clientRequestId: "pi-taskbook-" + task.digest,
+        });
+        ctx.ui.notify(`已交给新 T3 thread ${reply.threadId}\n${reply.link ?? prepared.path}`, "info");
+      } catch (error) {
+        const recovery = preparedPath ? `\nworktree 已准备 ${preparedPath}\n如 T3 回执缺失，请先核对已存在的 thread。` : "";
+        exitInvocation(ctx, String(error) + recovery);
+      } finally {
+        launching = false;
       }
     },
   });
@@ -171,14 +227,10 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", (event) => {
-    if (!run || !attempt || run.state.phase === "exit" || event.messageType !== "custom" ||
+    if (!run || !attempt || !phaseInput || run.state.phase === "exit" || event.messageType !== "custom" ||
         event.message.customType !== kickoffType || event.message.details !== attempt) return;
     started = true;
-    const { task, state } = run;
-    const fixed = JSON.stringify({ task: task.id, type: task.type, base: state.base, revision: state.revision,
-      branch: task.branch, phase: state.phase, attempt, priorReports: state.reports }, null, 2);
-    return { systemPrompt: [event.systemPrompt, common, prompts[state.phase], "## 当前运行数据", fixed,
-      "## 任务书原文", task.markdown, "## 任务书随附事实", task.facts ?? "任务书未声明随附事实文件。"].join("\n\n") };
+    return { systemPrompt: event.systemPrompt + "\n\n" + phaseInput };
   });
 
   pi.on("tool_call", () => {
@@ -197,7 +249,6 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       }
       const phase = run.state.phase;
       const outcome = params.outcome;
-      const next = nextPhase(phase, outcome, run.task.type.endsWith("-experiment"));
       const summary = params.summary.trim();
       const evidence = params.evidence.map(item => item.trim()).filter(Boolean);
       const reviewThread = params.reviewThread?.trim();
@@ -213,6 +264,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       if (outcome !== "blocked" && revision && cleanRevision(run) !== revision) {
         throw new Error("待审快照已变化，应退出并使用更新的任务书重新提交。");
       }
+      const next = nextPhase(phase, outcome, run.task.type.endsWith("-experiment"));
       const report: Report = { phase, outcome, summary, evidence, reviewThread };
       const exit = next === "ready" || next === "blocked";
       checkpoint(run, { ...run.state, revision, phase: exit ? "exit" : next,
@@ -228,10 +280,9 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     attempt = undefined;
     if (run.state.phase === "exit") return announce(ctx, run);
     if (event.aborted || !reported) {
-      ctx.ui.notify("阶段尚待继续。再次提交同一任务书路径即可恢复。", "warning");
-      return;
+      return exitInvocation(ctx, event.aborted ? "当前轮次被中断。" : "本轮结束前没有通过校验的阶段报告。", run);
     }
     try { startPhase(ctx); }
-    catch (error) { ctx.ui.notify(String(error), "error"); }
+    catch (error) { exitInvocation(ctx, String(error), run); }
   });
 }

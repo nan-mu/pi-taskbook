@@ -16,6 +16,7 @@ export type Taskbook = {
   markdown: string;
   facts?: string;
   digest: string;
+  sourcePath: string;
 };
 
 function inside(path: string, directory: string) {
@@ -67,7 +68,7 @@ export function readTaskbook(cwd: string, argument: string): Taskbook {
     facts = document(factFile);
   }
   const digest = createHash("sha256").update(JSON.stringify([markdown, facts])).digest("hex");
-  return { id, repository, branch, baseBranch, baseCommit, type, markdown, facts, digest };
+  return { id, repository, branch, baseBranch, baseCommit, type, markdown, facts, digest, sourcePath: path };
 }
 
 export function git(cwd: string, ...args: string[]) {
@@ -78,27 +79,36 @@ export function gitOk(cwd: string, ...args: string[]) {
   return spawnSync("git", args, { cwd, stdio: "ignore" }).status === 0;
 }
 
-export function workspace(cwd: string, task: Taskbook, pinnedBase?: string) {
+export function taskRepository(cwd: string, task: Taskbook) {
   const root = git(cwd, "rev-parse", "--show-toplevel");
-  const dir = git(root, "rev-parse", "--absolute-git-dir");
-  const common = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir");
-  if (realpathSync(dir) === realpathSync(common)) throw new Error("当前是主 checkout，请在 T3 Code 中使用已绑定的 linked worktree。");
   if (!gitOk(root, "check-ref-format", "refs/heads/" + task.branch) ||
       !gitOk(root, "check-ref-format", "refs/heads/" + task.baseBranch)) {
     throw new Error("任务书中的 Git 分支名无效。");
   }
-  const branch = git(root, "branch", "--show-current");
-  if (branch !== task.branch) throw new Error("当前分支是 " + (branch || "detached HEAD") + "，任务书要求 " + task.branch + "。");
   const origin = git(root, "remote", "get-url", "origin");
   const repo = origin.match(/^(?:https?:\/\/(?:[^/@]+@)?github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)([\w.-]+\/[\w.-]+)$/i)?.[1]?.replace(/\.git$/i, "");
   if (repo?.toLowerCase() !== task.repository.toLowerCase()) throw new Error("origin 与任务书中的 GitHub 仓库不一致。");
+  return root;
+}
+
+export function resolveBase(root: string, task: Taskbook, requireBranch: boolean) {
   const baseRef = ["refs/heads/", "refs/remotes/origin/"].map(prefix => prefix + task.baseBranch)
     .find(ref => gitOk(root, "show-ref", "--verify", "--quiet", ref));
-  if (!pinnedBase && !task.baseCommit && !baseRef) throw new Error("本地找不到任务书的基线分支。");
-  if (!pinnedBase && task.baseCommit && baseRef && !gitOk(root, "merge-base", "--is-ancestor", task.baseCommit, baseRef)) {
+  if (!baseRef && (requireBranch || !task.baseCommit)) throw new Error("本地找不到任务书的基线分支。");
+  if (task.baseCommit && baseRef && !gitOk(root, "merge-base", "--is-ancestor", task.baseCommit, baseRef)) {
     throw new Error("Base commit 不在指定基线分支的本地历史中。");
   }
-  const base = pinnedBase ?? task.baseCommit ?? git(root, "merge-base", "HEAD", baseRef!);
+  return task.baseCommit ?? (requireBranch ? git(root, "rev-parse", baseRef!) : git(root, "merge-base", "HEAD", baseRef!));
+}
+
+export function workspace(cwd: string, task: Taskbook, pinnedBase?: string) {
+  const root = taskRepository(cwd, task);
+  const dir = git(root, "rev-parse", "--absolute-git-dir");
+  const common = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir");
+  if (realpathSync(dir) === realpathSync(common)) throw new Error("当前是主 checkout，既有工作区入口要求 linked worktree。");
+  const branch = git(root, "branch", "--show-current");
+  if (branch !== task.branch) throw new Error("当前分支是 " + (branch || "detached HEAD") + "，任务书要求 " + task.branch + "。");
+  const base = pinnedBase ?? resolveBase(root, task, false);
   if (!gitOk(root, "merge-base", "--is-ancestor", base, "HEAD")) throw new Error("当前 HEAD 未包含任务书的固定基线。");
   return { root, branch, base };
 }
