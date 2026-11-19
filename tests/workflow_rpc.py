@@ -747,4 +747,4 @@ Complete the shared stages.
 assert not list(errors.queue), list(errors.queue)
 assert max(item[3] for item in requests) == 1, requests
 print("Pi RPC passed: independent reviewer tools, fact acceptance, objective coverage, fresh review on rework, "
-      "protected facts pending user decision, signed observations, handoff, migration and exit.")
+      "protected facts pending user decision, commit-bound observations, handoff, migration and exit.")
