@@ -1,0 +1,237 @@
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { randomUUID } from "node:crypto";
+import { existsSync, linkSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { git, gitOk, readTaskbook, workspace, type Taskbook } from "./taskbook.ts";
+import { nextPhase, phases, titles, type Outcome, type Phase } from "./workflow.ts";
+
+const reportTool = "taskbook_report";
+const kickoffType = "pi-taskbook-stage";
+const promptDir = fileURLToPath(new URL("./prompts/", import.meta.url));
+const common = readFileSync(join(promptDir, "common.md"), "utf8");
+const prompts = Object.fromEntries(phases.map(phase => [phase, readFileSync(join(promptDir, phase + ".md"), "utf8")]));
+
+type Report = { phase: Phase; outcome: Outcome; summary: string; evidence: string[]; reviewThread?: string };
+type State = {
+  version: 1;
+  digest: string;
+  session: string;
+  base: string;
+  phase: Phase | "exit";
+  exit?: "ready" | "blocked" | "cancelled";
+  revision?: string;
+  reports: Report[];
+};
+type Run = { task: Taskbook; path: string; root: string; state: State };
+
+const reportParameters = Type.Object({
+  attempt: Type.String({ description: "当前阶段提示词中给出的执行标识。" }),
+  outcome: Type.Union([Type.Literal("pass"), Type.Literal("blocked"), Type.Literal("measure")]),
+  summary: Type.String({ minLength: 1, maxLength: 4000 }),
+  evidence: Type.Array(Type.String({ minLength: 1, maxLength: 1200 }), { maxItems: 20 }),
+  reviewThread: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+}, { additionalProperties: false });
+
+function save(path: string, value: State, taskbook: Taskbook, initial = false) {
+  const temporary = path + "." + randomUUID();
+  try {
+    writeFileSync(temporary, JSON.stringify({ ...value, taskbook }, null, 2) + "\n",
+      { flag: "wx", mode: 0o600 });
+    if (initial) linkSync(temporary, path);
+    else renameSync(temporary, path);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+}
+
+function checkpoint(run: Run, next: State) {
+  save(run.path, next, run.task);
+  run.state = next;
+}
+
+function openRun(ctx: ExtensionContext, task: Taskbook): Run {
+  const session = ctx.sessionManager.getSessionId();
+  if (!ctx.sessionManager.getSessionFile()) throw new Error("请在有持久会话记录的 Pi thread 中启动任务。");
+  const preliminary = workspace(ctx.cwd, task);
+  const relativePath = ".audit/pi-taskbook/" + task.id + "-" + task.digest.slice(0, 16) + "/state.json";
+  if (!gitOk(preliminary.root, "check-ignore", "-q", "--", relativePath)) {
+    throw new Error("请先将 .audit/pi-taskbook/ 加入 Git 排除配置。");
+  }
+  const path = join(preliminary.root, relativePath);
+  let directory = preliminary.root;
+  for (const component of relativePath.split("/").slice(0, -1)) {
+    directory = join(directory, component);
+    if (!existsSync(directory)) {
+      try { mkdirSync(directory, { mode: 0o700 }); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+    }
+    if (!lstatSync(directory).isDirectory()) throw new Error("审计路径需要真实的目录。");
+  }
+
+  const initial: State = { version: 1, digest: task.digest, session, base: preliminary.base, phase: "fact-check", reports: [] };
+  if (!existsSync(path)) {
+    try { save(path, initial, task, true); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  }
+  if (!lstatSync(path).isFile()) throw new Error("审计状态需要是普通文件。");
+  const state = JSON.parse(readFileSync(path, "utf8")) as State;
+  if (state.version !== 1 || state.digest !== task.digest || state.session !== session ||
+      (state.phase !== "exit" && !phases.includes(state.phase)) || !Array.isArray(state.reports)) {
+    throw new Error("审计记录不匹配，或任务已绑定到另一个 Pi 会话。");
+  }
+  workspace(ctx.cwd, task, state.base);
+  return { task, root: preliminary.root, path, state };
+}
+
+function cleanRevision(run: Run) {
+  const revision = git(run.root, "rev-parse", "HEAD");
+  if (git(run.root, "status", "--porcelain", "--untracked-files=all")) {
+    throw new Error("交付快照需要干净的工作区。保留任务外改动，待其妥善处理后重试。");
+  }
+  return revision;
+}
+
+export default function taskbookExtension(pi: ExtensionAPI) {
+  let run: Run | undefined;
+  let attempt: string | undefined;
+  let started = false;
+  let reported = false;
+
+  function toggleReportTool(enabled: boolean) {
+    const tools = pi.getActiveTools().filter(name => name !== reportTool);
+    if (enabled) tools.push(reportTool);
+    pi.setActiveTools(tools);
+  }
+
+  function startPhase(ctx: ExtensionContext) {
+    if (!run || run.state.phase === "exit") return;
+    workspace(ctx.cwd, run.task, run.state.base);
+    attempt = randomUUID();
+    started = false;
+    reported = false;
+    ctx.ui.setStatus("pi-taskbook", titles[run.state.phase]);
+    pi.sendMessage({ customType: kickoffType, content: "执行当前任务书阶段。", display: false, details: attempt },
+      { triggerTurn: true });
+  }
+
+  function release(ctx: ExtensionContext) {
+    run = undefined;
+    attempt = undefined;
+    started = false;
+    reported = false;
+    toggleReportTool(false);
+    ctx.ui.setStatus("pi-taskbook", undefined);
+  }
+
+  function announce(ctx: ExtensionContext, active: Run) {
+    const labels = { ready: "可交接", blocked: "有阻塞", cancelled: "已取消" };
+    const reports = active.state.exit === "cancelled" ? [] : active.state.reports;
+    const summaries = reports.map(report => `${titles[report.phase]} · ${report.summary}`);
+    const handoff = [labels[active.state.exit!] + " · " + active.task.id,
+      active.state.revision ? "交付提交 " + active.state.revision : "",
+      ...summaries, active.path].filter(Boolean).join("\n");
+    ctx.ui.notify(handoff, active.state.exit === "blocked" ? "warning" : "info");
+    release(ctx);
+    pi.sendMessage({ customType: "pi-taskbook-exit", content: handoff, display: true }, { triggerTurn: false });
+  }
+
+  pi.registerCommand("taskbook", {
+    description: "从 Markdown 任务书开始或恢复工作流",
+    async handler(args, ctx) {
+      if (!args.trim()) return ctx.ui.notify("用法 /taskbook <任务书路径>", "warning");
+      if (!ctx.isIdle() || attempt) return ctx.ui.notify("请等待当前 Pi 阶段结束。", "warning");
+      try {
+        const task = readTaskbook(ctx.cwd, args);
+        if (run && run.task.digest !== task.digest) throw new Error("当前已有待恢复的任务，请先退出。");
+        const candidate = openRun(ctx, task);
+        if (candidate.state.phase === "exit") return announce(ctx, candidate);
+        run = candidate;
+        toggleReportTool(true);
+        startPhase(ctx);
+      } catch (error) {
+        ctx.ui.notify(String(error), "error");
+      }
+    },
+  });
+
+  pi.registerCommand("taskbook-exit", {
+    description: "退出当前任务书工作流并保留审计记录",
+    async handler(_args, ctx) {
+      if (!run) return ctx.ui.notify("当前没有已加载的任务书。", "info");
+      try {
+        if (run.state.phase !== "exit") checkpoint(run, { ...run.state, phase: "exit", exit: "cancelled" });
+        if (!ctx.isIdle()) ctx.abort();
+        announce(ctx, run);
+      } catch (error) {
+        ctx.ui.notify(String(error), "error");
+      }
+    },
+  });
+
+  pi.on("before_agent_start", (event) => {
+    if (!run || !attempt || run.state.phase === "exit" || event.messageType !== "custom" ||
+        event.message.customType !== kickoffType || event.message.details !== attempt) return;
+    started = true;
+    const { task, state } = run;
+    const fixed = JSON.stringify({ task: task.id, type: task.type, base: state.base, revision: state.revision,
+      branch: task.branch, phase: state.phase, attempt, priorReports: state.reports }, null, 2);
+    return { systemPrompt: [event.systemPrompt, common, prompts[state.phase], "## 当前运行数据", fixed,
+      "## 任务书原文", task.markdown, "## 任务书随附事实", task.facts ?? "任务书未声明随附事实文件。"].join("\n\n") };
+  });
+
+  pi.on("tool_call", () => {
+    if (started && reported) return { block: true, reason: "当前阶段已提交，等待 Pi 结束这一轮。" };
+  });
+
+  pi.registerTool({
+    name: reportTool,
+    label: "提交任务书阶段证据",
+    description: "在本阶段结束时登记结论和证据，随后结束当前模型轮次。",
+    defaultActive: false,
+    parameters: reportParameters,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (!run || !started || reported || !attempt || params.attempt !== attempt || run.state.phase === "exit") {
+        throw new Error("执行标识已失效，或当前阶段已经提交。");
+      }
+      const phase = run.state.phase;
+      const outcome = params.outcome;
+      const next = nextPhase(phase, outcome, run.task.type.endsWith("-experiment"));
+      const summary = params.summary.trim();
+      const evidence = params.evidence.map(item => item.trim()).filter(Boolean);
+      const reviewThread = params.reviewThread?.trim();
+      if (!summary || (outcome !== "blocked" && evidence.length === 0)) throw new Error("请提供具体结论及对应证据。");
+      if (outcome !== "blocked" && (phase === "correctness" || phase === "quality")) {
+        if (!reviewThread || run.state.reports.some(item => item.reviewThread === reviewThread)) {
+          throw new Error("请提供本阶段独立审核的子 thread 标识。");
+        }
+      }
+      workspace(ctx.cwd, run.task, run.state.base);
+      let revision = run.state.revision;
+      if (outcome !== "blocked" && phase === "implement") revision = cleanRevision(run);
+      if (outcome !== "blocked" && revision && cleanRevision(run) !== revision) {
+        throw new Error("待审快照已变化，应退出并使用更新的任务书重新提交。");
+      }
+      const report: Report = { phase, outcome, summary, evidence, reviewThread };
+      const exit = next === "ready" || next === "blocked";
+      checkpoint(run, { ...run.state, revision, phase: exit ? "exit" : next,
+        exit: exit ? next : undefined, reports: [...run.state.reports, report] });
+      reported = true;
+      return { content: [{ type: "text", text: "阶段结果已登记。结束当前轮次。" }], details: { phase } };
+    },
+  });
+
+  pi.on("agent_settled", (event, ctx) => {
+    if (!run || !started) return;
+    started = false;
+    attempt = undefined;
+    if (run.state.phase === "exit") return announce(ctx, run);
+    if (event.aborted || !reported) {
+      ctx.ui.notify("阶段尚待继续。再次提交同一任务书路径即可恢复。", "warning");
+      return;
+    }
+    try { startPhase(ctx); }
+    catch (error) { ctx.ui.notify(String(error), "error"); }
+  });
+}
