@@ -2,7 +2,7 @@ import type { Taskbook } from "./taskbook.ts";
 
 export const stages = ["fact-check", "fact-review", "design", "implement", "correctness", "quality", "performance"] as const;
 export type Phase = typeof stages[number];
-export type Outcome = "pass" | "blocked" | "measure" | "rework" | "fact-conflict";
+export type Outcome = "pass" | "blocked" | "measure" | "rework" | "fact-conflict" | "plan-gap" | "needs-user";
 export type TaskType = Taskbook["type"];
 
 export const titles: Record<Phase, string> = {
@@ -25,6 +25,10 @@ export function restorePhase(type: TaskType, savedPhase: string): Phase {
 }
 
 export function nextPhase(type: TaskType, phase: Phase, outcome: Outcome, measured = false): Phase | "ready" | "blocked" {
+  if (outcome === "plan-gap" || outcome === "needs-user") {
+    if (phase !== (outcome === "plan-gap" ? "implement" : "design")) throw new Error("此阶段不能作此设计决定。");
+    return "design";
+  }
   if (outcome === "blocked") return "blocked";
   if (outcome === "fact-conflict") return phase;
   if (outcome === "rework") {

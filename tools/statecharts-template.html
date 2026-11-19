@@ -1,0 +1,994 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pi 任务书执行流程</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --black: #000;
+      --white: #fff;
+      --rule: #424242;
+      --font: Aptos, "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--black); color: var(--white); font-family: var(--font); }
+    a, button { color: inherit; }
+    a { text-decoration-thickness: .08em; text-underline-offset: .2em; }
+    button { font: inherit; }
+    :focus-visible { outline: 2px solid var(--white); outline-offset: 5px; }
+    [hidden] { display: none !important; }
+
+    .slide {
+      width: 1600px;
+      height: 900px;
+      padding: 56px 80px 64px;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 32px;
+      background: var(--black);
+    }
+    .slide:focus { outline: none; }
+    .heading {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 40px;
+      border-bottom: 1px solid var(--rule);
+      padding-bottom: 24px;
+    }
+    h1, h2, p, figure, ol, ul { margin: 0; }
+    h1 { font-size: 68px; font-weight: 720; letter-spacing: -.035em; line-height: 1.12; }
+    .subtitle { margin-top: 11px; font-size: 25px; line-height: 1.42; }
+    .source { flex: none; font-size: 20px; }
+
+    .spread { display: grid; min-height: 0; grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1.14fr) minmax(0, 1fr); }
+    .index .spread { grid-template-columns: minmax(0, .93fr) minmax(0, 1fr); }
+    .index .spread:has(.directory.compact) { grid-template-columns: minmax(0, .88fr) minmax(0, 1.12fr); }
+    .index h1 { font-size: 60px; }
+    .index .subtitle { font-size: 22px; }
+    .index .explanation { display: flex; flex-direction: column; }
+    .index .explanation > h2 { font-size: 20px; margin-bottom: 12px; }
+    .index .explanation > :is(h2, .aside) { flex: none; }
+    .directory-window { min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+    .directory-window:focus-visible { outline-offset: -2px; }
+    .graph { display: grid; place-items: center; min-height: 0; min-width: 0; padding: 4px 44px 4px 0; }
+    .graph-window { width: 100%; height: 100%; overflow: clip; }
+    .presenting .graph-window { cursor: grab; touch-action: none; user-select: none; }
+    .presenting .graph-window.dragging { cursor: grabbing; }
+    .graph svg { display: block; width: 100%; height: 100%; overflow: visible; transform-origin: 0 0; }
+
+    .explanation { min-height: 0; min-width: 0; padding-left: 47px; border-left: 1px solid var(--rule); }
+    h2 { margin-bottom: 16px; font-size: 23px; line-height: 1.4; font-weight: 720; }
+    .directory-dialog {
+      width: min(640px, calc(100% - 32px));
+      max-height: min(760px, calc(100dvh - 48px));
+      margin: auto;
+      padding: clamp(18px, 4vw, 36px);
+      overflow: hidden;
+      border: 1px solid var(--white);
+      background: var(--black);
+      color: var(--white);
+    }
+    .directory-dialog[open] { display: flex; flex-direction: column; }
+    .directory-body {
+      min-height: 0;
+      overflow: auto;
+      overscroll-behavior: contain;
+      scrollbar-width: thin;
+      padding: 4px;
+      margin: -4px;
+    }
+    .directory-dialog.wide { width: min(1110px, calc(100% - 32px)); }
+    .directory-dialog::backdrop { background: rgb(0 0 0 / .78); }
+    .directory-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      flex: none;
+      gap: 16px;
+      margin-bottom: 12px;
+    }
+    .directory-header h2 { margin: 0; font-size: 22px; }
+    .directory-close { min-height: 32px; padding: 3px 8px; border: 1px solid var(--rule); background: none; font-size: 15px; cursor: pointer; }
+    .directory-close:hover { border-color: var(--white); }
+    .directory { list-style: none; padding: 0; }
+    .directory a {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: baseline;
+      padding: 10px 0 11px;
+      border-top: 1px solid var(--rule);
+      text-decoration: none;
+    }
+    .directory a:hover .entry-title, .directory a:focus-visible .entry-title,
+    .directory a[aria-current="page"] .entry-title {
+      text-decoration: underline;
+      text-underline-offset: .18em;
+    }
+    .entry-title { display: block; font-size: 21px; font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; }
+    .entry-summary { display: block; margin-top: 3px; font-size: 15px; line-height: 1.35; overflow-wrap: anywhere; }
+    .entry-arrow { font: 17px/1 Arial, sans-serif; }
+
+    .index .entry-title { font-size: 26px; }
+    .index .entry-summary { font-size: 19px; line-height: 1.3; }
+    .index .entry-arrow { font-size: 20px; }
+    .directory.two-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; }
+    .index .two-columns a { padding: 8px 0 9px; gap: 8px; }
+    .index .two-columns .entry-title { font-size: 21px; }
+    .index .two-columns .entry-summary { font-size: 16px; }
+    .index .two-columns .entry-arrow { font-size: 17px; }
+
+    .directory.compact a { display: block; padding: 4px 3px 5px 0; }
+    .directory.compact .entry-title { font-size: 16px; line-height: 1.25; }
+    .directory.compact .entry-summary { margin-top: 2px; font-size: 13px; line-height: 1.3; }
+    .index .directory.compact a { padding: 2px 3px 3px 0; }
+    .index .directory.compact .entry-title { font-size: 17px; line-height: 1.25; }
+    .index .directory.compact .entry-summary { margin-top: 2px; font-size: 14px; line-height: 1.3; }
+    .directory-groups {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 218px), 1fr));
+      align-items: start;
+      gap: 20px 22px;
+    }
+    .index .directory-groups { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .directory-group h3 { margin: 0 0 5px; font-size: 17px; line-height: 1.35; }
+    .index .directory-group h3 { font-size: 19px; }
+    .directory-group .directory a { border-top: 0; }
+
+    .notes { list-style: none; padding: 0; }
+    .notes li {
+      display: grid;
+      grid-template-columns: minmax(1.15em, max-content) minmax(0, 1fr);
+      align-items: baseline;
+      gap: 17px;
+      border-top: 1px solid var(--rule);
+      padding: 10px 0;
+      font-size: 30px;
+      line-height: 1.38;
+      overflow-wrap: anywhere;
+    }
+    .note-key { font-weight: 730; font-variant-numeric: tabular-nums; }
+    .aside { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--rule); font-size: 23px; line-height: 1.4; }
+
+    .presenting { height: 100dvh; display: grid; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden; }
+    .presenting .stage { position: relative; min-height: 0; }
+    .presenting .slide {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) scale(var(--scale, 1));
+    }
+    .controls {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      min-height: 50px;
+      padding: 5px clamp(10px, 3vw, 44px);
+      border-top: 1px solid #292929;
+      font-size: 14px;
+    }
+    .pager { display: flex; gap: 8px; }
+    .controls button { background: none; border: 0; min-height: 38px; padding: 0 9px; cursor: pointer; }
+    .controls button:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 4px; }
+    .controls button:disabled { color: #858585; cursor: default; }
+
+
+.index .directory-groups { grid-template-columns: minmax(0,1fr); }
+.index .directory.compact a { padding: 12px 3px 12px 0; border-top: 1px solid var(--rule); }
+.index .directory.compact .entry-title {font-size: 24px; line-height: 1.35;}
+.index .directory.compact .entry-summary {font-size: 18px; line-height: 1.5;}
+</style>
+</head>
+<body>
+  <main class="stage">
+    <section class="slide index" id="contents" tabindex="-1" aria-labelledby="contents-title">
+      <header class="heading">
+        <div><h1 id="contents-title">Pi 如何执行一份任务书</h1></div>
+
+      </header>
+      <div class="spread">
+        <figure class="graph">
+          <div class="graph-window" tabindex="0" role="group" aria-label="状态机图" aria-description="用加减号缩放，Shift 加方向键平移，按 0 复位。">
+            <svg viewBox="-135.05 0.00 514.10 485.00" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" role="img" aria-label="新增功能／实验、修复功能／实验、解析任务书、#1 核查事实与授权、#2 设计并固定计划、按版本执行、正式测量、#3 独立规格审、质量审、交接">
+<g id="contents--graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 481)">
+<title>state transitions</title>
+
+<g id="contents--node1" class="node state regular">
+<title>new</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="107,-477 0,-477 0,-441 107,-441 107,-477" fill="#000" stroke="none" />
+<text text-anchor="start" x="11.5" y="-455.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">新增功能／实验</text>
+<path stroke-width="2" d="M12,-442.5C12,-442.5 95,-442.5 95,-442.5 100.5,-442.5 106,-448 106,-453.5 106,-453.5 106,-464.5 106,-464.5 106,-470 100.5,-475.5 95,-475.5 95,-475.5 12,-475.5 12,-475.5 6.5,-475.5 1,-470 1,-464.5 1,-464.5 1,-453.5 1,-453.5 1,-448 6.5,-442.5 12,-442.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="contents--node2" class="node state regular">
+<title>parse</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="159,-414 76,-414 76,-378 159,-378 159,-414" fill="#000" stroke="none" />
+<text text-anchor="start" x="87.5" y="-392.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">解析任务书</text>
+<path stroke-width="2" d="M88,-379.5C88,-379.5 147,-379.5 147,-379.5 152.5,-379.5 158,-385 158,-390.5 158,-390.5 158,-401.5 158,-401.5 158,-407 152.5,-412.5 147,-412.5 147,-412.5 88,-412.5 88,-412.5 82.5,-412.5 77,-407 77,-401.5 77,-401.5 77,-390.5 77,-390.5 77,-385 82.5,-379.5 88,-379.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="contents--edge1" class="edge transition">
+<title>new-&gt;parse</title>
+<path d="M71.67,-440.68C77.94,-434.71 85.08,-427.9 91.84,-421.46" fill="none" stroke="#fff" />
+<polygon points="94.68,-423.58 99.51,-414.15 89.85,-418.52 94.68,-423.58" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="91.5" y="-425" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">    </text>
+</g>
+
+<a href="#memory"><g id="contents--node4" class="node state regular">
+<title>fact</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="181.5,-351 53.5,-351 53.5,-315 181.5,-315 181.5,-351" fill="#000" stroke="none" />
+<text text-anchor="start" x="64.5" y="-329.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">#1 核查事实与授权</text>
+<path stroke-width="2" d="M65.5,-316.5C65.5,-316.5 169.5,-316.5 169.5,-316.5 175,-316.5 180.5,-322 180.5,-327.5 180.5,-327.5 180.5,-338.5 180.5,-338.5 180.5,-344 175,-349.5 169.5,-349.5 169.5,-349.5 65.5,-349.5 65.5,-349.5 60,-349.5 54.5,-344 54.5,-338.5 54.5,-338.5 54.5,-327.5 54.5,-327.5 54.5,-322 60,-316.5 65.5,-316.5" fill="none" stroke="#fff" />
+</g></a>
+
+<g id="contents--edge3" class="edge transition">
+<title>parse-&gt;fact</title>
+<path d="M117.5,-377.68C117.5,-372.62 117.5,-366.95 117.5,-361.42" fill="none" stroke="#fff" />
+<polygon points="121,-361.15 117.5,-351.15 114,-361.15 121,-361.15" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="117.5" y="-362" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">固定基线   </text>
+</g>
+
+<g id="contents--node3" class="node state regular">
+<title>fix</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="236,-477 129,-477 129,-441 236,-441 236,-477" fill="#000" stroke="none" />
+<text text-anchor="start" x="140.5" y="-455.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">修复功能／实验</text>
+<path stroke-width="2" d="M141,-442.5C141,-442.5 224,-442.5 224,-442.5 229.5,-442.5 235,-448 235,-453.5 235,-453.5 235,-464.5 235,-464.5 235,-470 229.5,-475.5 224,-475.5 224,-475.5 141,-475.5 141,-475.5 135.5,-475.5 130,-470 130,-464.5 130,-464.5 130,-453.5 130,-453.5 130,-448 135.5,-442.5 141,-442.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="contents--edge2" class="edge transition">
+<title>fix-&gt;parse</title>
+<path d="M164.05,-440.68C157.54,-434.58 150.11,-427.6 143.12,-421.04" fill="none" stroke="#fff" />
+<polygon points="145.46,-418.44 135.77,-414.15 140.67,-423.54 145.46,-418.44" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="155.5" y="-425" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">    </text>
+</g>
+
+<a href="#design"><g id="contents--node5" class="node state regular">
+<title>design</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="181.5,-288 53.5,-288 53.5,-252 181.5,-252 181.5,-288" fill="#000" stroke="none" />
+<text text-anchor="start" x="64.5" y="-266.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">#2 设计并固定计划</text>
+<path stroke-width="2" d="M65.5,-253.5C65.5,-253.5 169.5,-253.5 169.5,-253.5 175,-253.5 180.5,-259 180.5,-264.5 180.5,-264.5 180.5,-275.5 180.5,-275.5 180.5,-281 175,-286.5 169.5,-286.5 169.5,-286.5 65.5,-286.5 65.5,-286.5 60,-286.5 54.5,-281 54.5,-275.5 54.5,-275.5 54.5,-264.5 54.5,-264.5 54.5,-259 60,-253.5 65.5,-253.5" fill="none" stroke="#fff" />
+</g></a>
+
+<g id="contents--edge4" class="edge transition">
+<title>fact-&gt;design</title>
+<path d="M117.5,-314.68C117.5,-309.62 117.5,-303.95 117.5,-298.42" fill="none" stroke="#fff" />
+<polygon points="121,-298.15 117.5,-288.15 114,-298.15 121,-298.15" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="117.5" y="-299" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">事实审通过   </text>
+</g>
+
+<g id="contents--node6" class="node state regular">
+<title>impl</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="159,-225 76,-225 76,-189 159,-189 159,-225" fill="#000" stroke="none" />
+<text text-anchor="start" x="87.5" y="-203.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">按版本执行</text>
+<path stroke-width="2" d="M88,-190.5C88,-190.5 147,-190.5 147,-190.5 152.5,-190.5 158,-196 158,-201.5 158,-201.5 158,-212.5 158,-212.5 158,-218 152.5,-223.5 147,-223.5 147,-223.5 88,-223.5 88,-223.5 82.5,-223.5 77,-218 77,-212.5 77,-212.5 77,-201.5 77,-201.5 77,-196 82.5,-190.5 88,-190.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="contents--edge5" class="edge transition">
+<title>design-&gt;impl</title>
+<path d="M66.81,-251.96C59.88,-246.86 56.59,-240.56 61.5,-233 63.18,-230.4 65.21,-228.08 67.47,-225.99" fill="none" stroke="#fff" />
+<polygon points="69.96,-228.5 75.95,-219.77 65.82,-222.86 69.96,-228.5" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="61.5" y="-236" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">计划覆盖全部目标   </text>
+</g>
+
+<g id="contents--edge6" class="edge transition">
+<title>impl-&gt;design</title>
+<path d="M142.57,-225.05C146.45,-229.31 149.1,-234.1 146.51,-242.53" fill="none" stroke="#fff" />
+<polygon points="143.23,-241.28 142.27,-251.83 149.6,-244.18 143.23,-241.28" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="148.5" y="-236" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">计划缺口   </text>
+</g>
+
+<a href="#review"><g id="contents--node7" class="node state regular">
+<title>check</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="157,-99 12,-99 12,-63 157,-63 157,-99" fill="#000" stroke="none" />
+<text text-anchor="start" x="23.5" y="-77.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">#3 独立规格审、质量审</text>
+<path stroke-width="2" d="M24,-64.5C24,-64.5 145,-64.5 145,-64.5 150.5,-64.5 156,-70 156,-75.5 156,-75.5 156,-86.5 156,-86.5 156,-92 150.5,-97.5 145,-97.5 145,-97.5 24,-97.5 24,-97.5 18.5,-97.5 13,-92 13,-86.5 13,-86.5 13,-75.5 13,-75.5 13,-70 18.5,-64.5 24,-64.5" fill="none" stroke="#fff" />
+</g></a>
+
+<g id="contents--edge7" class="edge transition">
+<title>impl-&gt;check</title>
+<path d="M75.87,-197.11C56.77,-190.73 35.87,-179.96 24.5,-162 11.32,-141.18 14.86,-125.17 31.5,-107 31.92,-106.54 32.35,-106.09 32.79,-105.65" fill="none" stroke="#fff" />
+<polygon points="35.16,-108.23 40.59,-99.13 30.67,-102.85 35.16,-108.23" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="24.5" y="-141.5" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">功能候审   </text>
+</g>
+
+<g id="contents--node8" class="node state regular">
+<title>measure</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="153,-162 82,-162 82,-126 153,-126 153,-162" fill="#000" stroke="none" />
+<text text-anchor="start" x="93.5" y="-140.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">正式测量</text>
+<path stroke-width="2" d="M94,-127.5C94,-127.5 141,-127.5 141,-127.5 146.5,-127.5 152,-133 152,-138.5 152,-138.5 152,-149.5 152,-149.5 152,-155 146.5,-160.5 141,-160.5 141,-160.5 94,-160.5 94,-160.5 88.5,-160.5 83,-155 83,-149.5 83,-149.5 83,-138.5 83,-138.5 83,-133 88.5,-127.5 94,-127.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="contents--edge8" class="edge transition">
+<title>impl-&gt;measure</title>
+<path d="M117.5,-188.68C117.5,-183.62 117.5,-177.95 117.5,-172.42" fill="none" stroke="#fff" />
+<polygon points="121,-172.15 117.5,-162.15 114,-172.15 121,-172.15" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="117.5" y="-173" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">实验候审   </text>
+</g>
+
+<g id="contents--edge11" class="edge transition">
+<title>check-&gt;impl</title>
+<path d="M157.33,-94.65C168.57,-98.02 177.72,-102.12 181.5,-107 201.95,-133.39 188.95,-154.6 168.5,-181 167.92,-181.75 167.31,-182.48 166.67,-183.19" fill="none" stroke="#fff" />
+<polygon points="164.16,-180.74 159.03,-190.02 168.82,-185.96 164.16,-180.74" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="191.5" y="-141.5" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">返工   </text>
+</g>
+
+<g id="contents--edge10" class="edge transition">
+<title>check-&gt;measure</title>
+<path d="M100.3,-99.14C102.21,-101.67 104.01,-104.33 105.5,-107 107.14,-109.93 108.6,-113.12 109.9,-116.36" fill="none" stroke="#fff" />
+<polygon points="106.65,-117.68 113.26,-125.96 113.26,-115.36 106.65,-117.68" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="110.5" y="-110" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">首次要求测量   </text>
+</g>
+
+<g id="contents--node9" class="node state regular">
+<title>exit</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="112.5,-36 56.5,-36 56.5,0 112.5,0 112.5,-36" fill="#000" stroke="none" />
+<text text-anchor="start" x="72" y="-14.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">交接</text>
+<path stroke-width="2" d="M68.5,-1.5C68.5,-1.5 100.5,-1.5 100.5,-1.5 106,-1.5 111.5,-7 111.5,-12.5 111.5,-12.5 111.5,-23.5 111.5,-23.5 111.5,-29 106,-34.5 100.5,-34.5 100.5,-34.5 68.5,-34.5 68.5,-34.5 63,-34.5 57.5,-29 57.5,-23.5 57.5,-23.5 57.5,-12.5 57.5,-12.5 57.5,-7 63,-1.5 68.5,-1.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="contents--edge12" class="edge transition">
+<title>check-&gt;exit</title>
+<path d="M84.5,-62.68C84.5,-57.62 84.5,-51.95 84.5,-46.42" fill="none" stroke="#fff" />
+<polygon points="88,-46.15 84.5,-36.15 81,-46.15 88,-46.15" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="84.5" y="-47" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">两审通过   </text>
+</g>
+
+<g id="contents--edge9" class="edge transition">
+<title>measure-&gt;check</title>
+<path d="M81.83,-133.78C62.22,-128.36 41.31,-121.83 38.5,-118 35.6,-114.04 35.44,-110.29 37.09,-106.82" fill="none" stroke="#fff" />
+<polygon points="39.79,-109.05 43.77,-99.23 34.53,-104.42 39.79,-109.05" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="38.5" y="-110" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">从规格审重审   </text>
+</g>
+</g>
+</svg>
+          </div>
+        </figure>
+        <div class="explanation"><h2>章节目录</h2><div class="directory-window" role="region" aria-label="章节目录" tabindex="0"><div class="directory-groups"><div class="directory-group"><h3>沿主流程展开</h3><ul class="directory compact" role="list"><li><a href="#memory"><span><strong class="entry-title">#1 谁能改变事实和术语</strong><span class="entry-summary">输入与事实分开。任务书中的目标说明用户想改变什么；基线、定义和新观察须核查其来源与适用范围。</span></span></a></li><li><a href="#design"><span><strong class="entry-title">#2 谁来处理计划缺口</strong><span class="entry-summary">设计者决定方案，执行者在已批准步骤内选择实现。发现必须改计划时，把可复查的观察交还设计者。</span></span></a></li><li><a href="#review"><span><strong class="entry-title">#3 三种独立审核怎样得出交接结论</strong><span class="entry-summary">同一个审核器创建新会话、限定只读工具并核验回执。职责和证据随阶段变化。</span></span></a></li></ul></div></div></div></div>
+      </div>
+    </section>
+    <section class="slide chapter" id="memory" tabindex="-1" aria-labelledby="memory-title">
+      <header class="heading">
+        <div><h1 id="memory-title">#1 谁能改变事实和术语</h1></div>
+
+      </header>
+      <div class="spread">
+        <figure class="graph">
+          <div class="graph-window" tabindex="0" role="group" aria-label="状态机图" aria-description="用加减号缩放，Shift 加方向键平移，按 0 复位。">
+            <svg viewBox="-25.24 0.00 437.98 359.00" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" role="img" aria-label="① 解析目标、事实与变更、② 主会话查证、项目台账／Magpie 候选、③ 独立事实审核、用户裁决、④ 按版本记账、核对跨项目发布、进入设计">
+<g id="memory--graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 355)">
+<title>state transitions</title>
+
+<g id="memory--node1" class="node state regular">
+<title>parse</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="203.5,-351 53.5,-351 53.5,-315 203.5,-315 203.5,-351" fill="#000" stroke="none" />
+<text text-anchor="start" x="64.5" y="-329.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">① 解析目标、事实与变更</text>
+<path stroke-width="2" d="M65.5,-316.5C65.5,-316.5 191.5,-316.5 191.5,-316.5 197,-316.5 202.5,-322 202.5,-327.5 202.5,-327.5 202.5,-338.5 202.5,-338.5 202.5,-344 197,-349.5 191.5,-349.5 191.5,-349.5 65.5,-349.5 65.5,-349.5 60,-349.5 54.5,-344 54.5,-338.5 54.5,-338.5 54.5,-327.5 54.5,-327.5 54.5,-322 60,-316.5 65.5,-316.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="memory--node2" class="node state regular">
+<title>fetch</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="264,-288 167,-288 167,-252 264,-252 264,-288" fill="#000" stroke="none" />
+<text text-anchor="start" x="178.5" y="-266.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">② 主会话查证</text>
+<path stroke-width="2" d="M179,-253.5C179,-253.5 252,-253.5 252,-253.5 257.5,-253.5 263,-259 263,-264.5 263,-264.5 263,-275.5 263,-275.5 263,-281 257.5,-286.5 252,-286.5 252,-286.5 179,-286.5 179,-286.5 173.5,-286.5 168,-281 168,-275.5 168,-275.5 168,-264.5 168,-264.5 168,-259 173.5,-253.5 179,-253.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="memory--edge1" class="edge transition">
+<title>parse-&gt;fetch</title>
+<path d="M153.2,-314.68C162.37,-308.25 172.92,-300.86 182.7,-294" fill="none" stroke="#fff" />
+<polygon points="184.86,-296.76 191.04,-288.15 180.84,-291.02 184.86,-296.76" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="180.5" y="-299" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">    </text>
+</g>
+
+<g id="memory--node3" class="node state regular">
+<title>review</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="152,-225 43,-225 43,-189 152,-189 152,-225" fill="#000" stroke="none" />
+<text text-anchor="start" x="54.5" y="-203.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">③ 独立事实审核</text>
+<path stroke-width="2" d="M55,-190.5C55,-190.5 140,-190.5 140,-190.5 145.5,-190.5 151,-196 151,-201.5 151,-201.5 151,-212.5 151,-212.5 151,-218 145.5,-223.5 140,-223.5 140,-223.5 55,-223.5 55,-223.5 49.5,-223.5 44,-218 44,-212.5 44,-212.5 44,-201.5 44,-201.5 44,-196 49.5,-190.5 55,-190.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="memory--edge2" class="edge transition">
+<title>fetch-&gt;review</title>
+<path d="M166.97,-262.27C152.1,-258.58 136.29,-252.85 123.5,-244 119.36,-241.13 115.64,-237.39 112.39,-233.4" fill="none" stroke="#fff" />
+<polygon points="115.09,-231.15 106.42,-225.06 109.4,-235.23 115.09,-231.15" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="123.5" y="-236" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">主张与出处   </text>
+</g>
+
+<g id="memory--node4" class="node state regular">
+<title>user</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="244,-162 173,-162 173,-126 244,-126 244,-162" fill="#000" stroke="none" />
+<text text-anchor="start" x="184.5" y="-140.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">用户裁决</text>
+<path stroke-width="2" d="M185,-127.5C185,-127.5 232,-127.5 232,-127.5 237.5,-127.5 243,-133 243,-138.5 243,-138.5 243,-149.5 243,-149.5 243,-155 237.5,-160.5 232,-160.5 232,-160.5 185,-160.5 185,-160.5 179.5,-160.5 174,-155 174,-149.5 174,-149.5 174,-138.5 174,-138.5 174,-133 179.5,-127.5 185,-127.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="memory--edge3" class="edge transition">
+<title>fetch-&gt;user</title>
+<path d="M213.26,-251.8C212.97,-249.19 212.7,-246.53 212.5,-244 210.57,-219.84 209.55,-192.28 209.03,-172.39" fill="none" stroke="#fff" />
+<polygon points="212.52,-172.11 208.78,-162.19 205.52,-172.27 212.52,-172.11" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="211.5" y="-204.5" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">已发现事实冲突   </text>
+</g>
+
+<g id="memory--edge5" class="edge transition">
+<title>review-&gt;fetch</title>
+<path d="M152.05,-218.43C163.31,-221.99 174.71,-226.73 184.5,-233 189.07,-235.93 193.34,-239.73 197.16,-243.76" fill="none" stroke="#fff" />
+<polygon points="194.75,-246.33 203.92,-251.63 200.06,-241.77 194.75,-246.33" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="197.5" y="-236" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">要求补证   </text>
+</g>
+
+<g id="memory--edge6" class="edge transition">
+<title>review-&gt;user</title>
+<path d="M42.88,-196.9C22.78,-191.29 7.51,-182.68 19.5,-170 30.36,-158.52 146.02,-165.17 161.5,-162 161.97,-161.9 162.44,-161.81 162.91,-161.7" fill="none" stroke="#fff" />
+<polygon points="164.09,-165.01 172.88,-159.09 162.32,-158.24 164.09,-165.01" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="19.5" y="-173" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">与既有事实冲突   </text>
+</g>
+
+<g id="memory--node6" class="node state regular">
+<title>write</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="151,-162 54,-162 54,-126 151,-126 151,-162" fill="#000" stroke="none" />
+<text text-anchor="start" x="65.5" y="-140.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">④ 按版本记账</text>
+<path stroke-width="2" d="M66,-127.5C66,-127.5 139,-127.5 139,-127.5 144.5,-127.5 150,-133 150,-138.5 150,-138.5 150,-149.5 150,-149.5 150,-155 144.5,-160.5 139,-160.5 139,-160.5 66,-160.5 66,-160.5 60.5,-160.5 55,-155 55,-149.5 55,-149.5 55,-138.5 55,-138.5 55,-133 60.5,-127.5 66,-127.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="memory--edge7" class="edge transition">
+<title>review-&gt;write</title>
+<path d="M98.92,-188.68C99.33,-183.62 99.8,-177.95 100.25,-172.42" fill="none" stroke="#fff" />
+<polygon points="103.77,-172.4 101.09,-162.15 96.79,-171.83 103.77,-172.4" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="100.5" y="-173" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">逐项通过   </text>
+</g>
+
+<g id="memory--edge8" class="edge transition">
+<title>user-&gt;fetch</title>
+<path d="M244.06,-154.64C261.28,-161.3 280.38,-172.09 290.5,-189 298.71,-202.73 298.45,-211.12 290.5,-225 285.55,-233.65 278.16,-240.76 269.93,-246.55" fill="none" stroke="#fff" />
+<polygon points="268.05,-243.61 261.48,-251.92 271.8,-249.52 268.05,-243.61" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="296.5" y="-204.5" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">记录裁决并复核   </text>
+</g>
+
+<g id="memory--node5" class="node state regular">
+<title>read</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="379.5,-351 225.5,-351 225.5,-315 379.5,-315 379.5,-351" fill="#000" stroke="none" />
+<text text-anchor="start" x="236.5" y="-329.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">项目台账／Magpie 候选</text>
+<path stroke-width="2" d="M237.5,-316.5C237.5,-316.5 367.5,-316.5 367.5,-316.5 373,-316.5 378.5,-322 378.5,-327.5 378.5,-327.5 378.5,-338.5 378.5,-338.5 378.5,-344 373,-349.5 367.5,-349.5 367.5,-349.5 237.5,-349.5 237.5,-349.5 232,-349.5 226.5,-344 226.5,-338.5 226.5,-338.5 226.5,-327.5 226.5,-327.5 226.5,-322 232,-316.5 237.5,-316.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="memory--edge4" class="edge transition">
+<title>read-&gt;fetch</title>
+<path d="M277.8,-314.68C268.63,-308.25 258.08,-300.86 248.3,-294" fill="none" stroke="#fff" />
+<polygon points="250.16,-291.02 239.96,-288.15 246.14,-296.76 250.16,-291.02" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="266.5" y="-299" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">提供上下文   </text>
+</g>
+
+<g id="memory--node7" class="node state regular">
+<title>share</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="107,-99 0,-99 0,-63 107,-63 107,-99" fill="#000" stroke="none" />
+<text text-anchor="start" x="11.5" y="-77.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">核对跨项目发布</text>
+<path stroke-width="2" d="M12,-64.5C12,-64.5 95,-64.5 95,-64.5 100.5,-64.5 106,-70 106,-75.5 106,-75.5 106,-86.5 106,-86.5 106,-92 100.5,-97.5 95,-97.5 95,-97.5 12,-97.5 12,-97.5 6.5,-97.5 1,-92 1,-86.5 1,-86.5 1,-75.5 1,-75.5 1,-70 6.5,-64.5 12,-64.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="memory--edge9" class="edge transition">
+<title>write-&gt;share</title>
+<path d="M75.94,-125.78C73.23,-123.37 70.67,-120.77 68.5,-118 66.26,-115.14 64.3,-111.91 62.6,-108.57" fill="none" stroke="#fff" />
+<polygon points="65.69,-106.91 58.48,-99.15 59.28,-109.71 65.69,-106.91" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="68.5" y="-110" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">明确授权全局   </text>
+</g>
+
+<g id="memory--node8" class="node state regular">
+<title>design</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="138,-36 67,-36 67,0 138,0 138,-36" fill="#000" stroke="none" />
+<text text-anchor="start" x="78.5" y="-14.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">进入设计</text>
+<path stroke-width="2" d="M79,-1.5C79,-1.5 126,-1.5 126,-1.5 131.5,-1.5 137,-7 137,-12.5 137,-12.5 137,-23.5 137,-23.5 137,-29 131.5,-34.5 126,-34.5 126,-34.5 79,-34.5 79,-34.5 73.5,-34.5 68,-29 68,-23.5 68,-23.5 68,-12.5 68,-12.5 68,-7 73.5,-1.5 79,-1.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="memory--edge10" class="edge transition">
+<title>write-&gt;design</title>
+<path d="M130.01,-125.79C132.19,-123.43 134.09,-120.83 135.5,-118 142.23,-104.46 168.63,-117.81 132.69,-45.39" fill="none" stroke="#fff" />
+<polygon points="135.64,-43.46 128,-36.12 129.4,-46.62 135.64,-43.46" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="152.5" y="-78.5" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">项目内   </text>
+</g>
+
+<g id="memory--edge11" class="edge transition">
+<title>share-&gt;design</title>
+<path d="M67.41,-62.68C72,-56.97 77.21,-50.49 82.17,-44.3" fill="none" stroke="#fff" />
+<polygon points="85.19,-46.14 88.72,-36.15 79.73,-41.75 85.19,-46.14" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="82.5" y="-47" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">核对完成   </text>
+</g>
+</g>
+</svg>
+          </div>
+        </figure>
+        <div class="explanation"><h2>节点说明</h2><ol class="notes" role="list"><li><span class="note-key">1</span><span>① <a href="__ASSET_taskbook.ts__" download="taskbook.ts">readTaskbook</a> 读取新增／修复入口、目标、交付项和基线。新增项核对现状、目标差异；修复项先找能区分故障和正常行为的复现。参考 <a href="https://github.com/cursor/plugins/blob/e58dd043600587dbaf58ba315e7f2b38373eeb43/pstack/skills/poteto-mode/playbooks/feature.md" target="_blank" rel="noreferrer">PStack · Feature</a>、<a href="https://github.com/cursor/plugins/blob/e58dd043600587dbaf58ba315e7f2b38373eeb43/pstack/skills/poteto-mode/playbooks/bug-fix.md" target="_blank" rel="noreferrer">Bug Fix</a>。</span></li><li><span class="note-key">2</span><span>② 附加 <a href="https://github.com/cursor/plugins/blob/e58dd043600587dbaf58ba315e7f2b38373eeb43/pstack/skills/principle-prove-it-works/SKILL.md" target="_blank" rel="noreferrer">PStack · Prove It Works</a>。用仓库行号或本轮工具原始回执支持主张；<a href="https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/domain-modeling/SKILL.md" target="_blank" rel="noreferrer">Matt · Domain Modeling</a> 区分名称、定义与适用范围。Magpie 检索结果作为候选；审核者另查基线。</span></li><li><span class="note-key">3</span><span>③ 独立审核分别判定 P 项观察和 M 项变更。任务书可授权创建、改写或退休某一版事实／术语。未获授权的矛盾交给用户；/taskbook-decide 记录裁决后重新核查。</span></li><li><span class="note-key">4</span><span>④ <a href="__ASSET_project-memory.ts__" download="project-memory.ts">applyApprovedMemory</a> 用 Git 版本比较并写入共享台账，保留旧定义、删除理由及审核来源。<a href="__ASSET_SKILL.md__" download="SKILL.md">跨项目准入方法</a> 逐项判定授权与复用范围；通过后发布到 <a href="https://github.com/yetone/magpie/tree/aeca7ae07473e072d813a557f207b411ad1ea925" target="_blank" rel="noreferrer">Magpie Memory</a>。远端需改写或撤回时由用户核对；本地定义默认留在项目。</span></li></ol></div>
+      </div>
+    </section>
+    <section class="slide chapter" id="design" tabindex="-1" aria-labelledby="design-title">
+      <header class="heading">
+        <div><h1 id="design-title">#2 谁来处理计划缺口</h1></div>
+
+      </header>
+      <div class="spread">
+        <figure class="graph">
+          <div class="graph-window" tabindex="0" role="group" aria-label="状态机图" aria-description="用加减号缩放，Shift 加方向键平移，按 0 复位。">
+            <svg viewBox="0.00 0.00 627.50 296.00" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" role="img" aria-label="① 设计者、② 只读顾问、② 临时实验、③ 版本化计划、执行者、④ 报告计划缺口、用户裁决、提交候审材料">
+<g id="design--graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 292)">
+<title>state transitions</title>
+
+<g id="design--node1" class="node state regular">
+<title>d</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="337,-288 264,-288 264,-252 337,-252 337,-288" fill="#000" stroke="none" />
+<text text-anchor="start" x="275.5" y="-266.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">① 设计者</text>
+<path stroke-width="2" d="M276,-253.5C276,-253.5 325,-253.5 325,-253.5 330.5,-253.5 336,-259 336,-264.5 336,-264.5 336,-275.5 336,-275.5 336,-281 330.5,-286.5 325,-286.5 325,-286.5 276,-286.5 276,-286.5 270.5,-286.5 265,-281 265,-275.5 265,-275.5 265,-264.5 265,-264.5 265,-259 270.5,-253.5 276,-253.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="design--node2" class="node state regular">
+<title>consult</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="85,-225 0,-225 0,-189 85,-189 85,-225" fill="#000" stroke="none" />
+<text text-anchor="start" x="11.5" y="-203.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">② 只读顾问</text>
+<path stroke-width="2" d="M12,-190.5C12,-190.5 73,-190.5 73,-190.5 78.5,-190.5 84,-196 84,-201.5 84,-201.5 84,-212.5 84,-212.5 84,-218 78.5,-223.5 73,-223.5 73,-223.5 12,-223.5 12,-223.5 6.5,-223.5 1,-218 1,-212.5 1,-212.5 1,-201.5 1,-201.5 1,-196 6.5,-190.5 12,-190.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="design--edge1" class="edge transition">
+<title>d-&gt;consult</title>
+<path d="M263.61,-269.19C205.17,-268.83 94.64,-265.25 62.5,-244 58.64,-241.45 55.45,-237.88 52.84,-233.98" fill="none" stroke="#fff" />
+<polygon points="55.89,-232.26 48.02,-225.17 49.75,-235.62 55.89,-232.26" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="62.5" y="-236" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">缺判断依据   </text>
+</g>
+
+<g id="design--node3" class="node state regular">
+<title>probe</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="311,-225 226,-225 226,-189 311,-189 311,-225" fill="#000" stroke="none" />
+<text text-anchor="start" x="237.5" y="-203.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">② 临时实验</text>
+<path stroke-width="2" d="M238,-190.5C238,-190.5 299,-190.5 299,-190.5 304.5,-190.5 310,-196 310,-201.5 310,-201.5 310,-212.5 310,-212.5 310,-218 304.5,-223.5 299,-223.5 299,-223.5 238,-223.5 238,-223.5 232.5,-223.5 227,-218 227,-212.5 227,-212.5 227,-201.5 227,-201.5 227,-196 232.5,-190.5 238,-190.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="design--edge2" class="edge transition">
+<title>d-&gt;probe</title>
+<path d="M263.92,-269.16C217.98,-268.5 143.04,-264.23 125.5,-244 122.3,-240.31 122.2,-236.61 125.5,-233 132.2,-225.67 204.76,-226.95 214.5,-225 214.97,-224.91 215.44,-224.81 215.91,-224.71" fill="none" stroke="#fff" />
+<polygon points="217.06,-228.04 225.98,-222.32 215.44,-221.23 217.06,-228.04" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="125.5" y="-236" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">假设可试验   </text>
+</g>
+
+<g id="design--node4" class="node state regular">
+<title>plan</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="204,-225 107,-225 107,-189 204,-189 204,-225" fill="#000" stroke="none" />
+<text text-anchor="start" x="118.5" y="-203.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">③ 版本化计划</text>
+<path stroke-width="2" d="M119,-190.5C119,-190.5 192,-190.5 192,-190.5 197.5,-190.5 203,-196 203,-201.5 203,-201.5 203,-212.5 203,-212.5 203,-218 197.5,-223.5 192,-223.5 192,-223.5 119,-223.5 119,-223.5 113.5,-223.5 108,-218 108,-212.5 108,-212.5 108,-201.5 108,-201.5 108,-196 113.5,-190.5 119,-190.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="design--edge3" class="edge transition">
+<title>d-&gt;plan</title>
+<path d="M263.7,-261.94C246.47,-257.91 225.94,-252.02 208.5,-244 200.83,-240.47 193.04,-235.87 185.89,-231.14" fill="none" stroke="#fff" />
+<polygon points="187.43,-227.95 177.22,-225.15 183.46,-233.71 187.43,-227.95" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="208.5" y="-236" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">步骤与验收   </text>
+</g>
+
+<g id="design--node5" class="node state regular">
+<title>user</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="381,-36 310,-36 310,0 381,0 381,-36" fill="#000" stroke="none" />
+<text text-anchor="start" x="321.5" y="-14.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">用户裁决</text>
+<path stroke-width="2" d="M322,-1.5C322,-1.5 369,-1.5 369,-1.5 374.5,-1.5 380,-7 380,-12.5 380,-12.5 380,-23.5 380,-23.5 380,-29 374.5,-34.5 369,-34.5 369,-34.5 322,-34.5 322,-34.5 316.5,-34.5 311,-29 311,-23.5 311,-23.5 311,-12.5 311,-12.5 311,-7 316.5,-1.5 322,-1.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="design--edge4" class="edge transition">
+<title>d-&gt;user</title>
+<path d="M294.61,-251.96C293.46,-245.49 293.61,-238.39 297.5,-233 304.07,-223.88 313.02,-232.38 321.5,-225 339.64,-209.2 345.5,-200.55 345.5,-176.5 345.5,-176.5 345.5,-176.5 345.5,-80 345.5,-69 345.5,-56.88 345.5,-46.36" fill="none" stroke="#fff" />
+<polygon points="349,-46.09 345.5,-36.09 342,-46.09 349,-46.09" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="345.5" y="-141.5" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">越权或需用户决定   </text>
+</g>
+
+<g id="design--edge5" class="edge transition">
+<title>consult-&gt;d</title>
+<path d="M85.07,-222.72C88.57,-223.6 92.08,-224.38 95.5,-225 114.55,-228.43 252.1,-224.53 269.5,-233 274.78,-235.57 279.53,-239.5 283.62,-243.83" fill="none" stroke="#fff" />
+<polygon points="281.2,-246.39 290.27,-251.86 286.59,-241.92 281.2,-246.39" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="284.5" y="-236" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">意见与观察   </text>
+</g>
+
+<g id="design--edge6" class="edge transition">
+<title>probe-&gt;d</title>
+<path d="M311.01,-212.32C337.91,-216.03 369.12,-222.48 377.5,-233 389.39,-247.93 369.61,-256.96 347.12,-262.25" fill="none" stroke="#fff" />
+<polygon points="346.12,-258.88 337.05,-264.35 347.56,-265.73 346.12,-258.88" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="380.5" y="-236" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">实际结果   </text>
+</g>
+
+<g id="design--node6" class="node state regular">
+<title>work</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="185,-162 126,-162 126,-126 185,-126 185,-162" fill="#000" stroke="none" />
+<text text-anchor="start" x="137.5" y="-140.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">执行者</text>
+<path stroke-width="2" d="M138,-127.5C138,-127.5 173,-127.5 173,-127.5 178.5,-127.5 184,-133 184,-138.5 184,-138.5 184,-149.5 184,-149.5 184,-155 178.5,-160.5 173,-160.5 173,-160.5 138,-160.5 138,-160.5 132.5,-160.5 127,-155 127,-149.5 127,-149.5 127,-138.5 127,-138.5 127,-133 132.5,-127.5 138,-127.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="design--edge7" class="edge transition">
+<title>plan-&gt;work</title>
+<path d="M155.5,-188.68C155.5,-183.62 155.5,-177.95 155.5,-172.42" fill="none" stroke="#fff" />
+<polygon points="159,-172.15 155.5,-162.15 152,-172.15 159,-172.15" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="155.5" y="-173" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">绑定版本   </text>
+</g>
+
+<g id="design--edge12" class="edge transition">
+<title>user-&gt;d</title>
+<path d="M381.12,-21.16C445.25,-26.02 573.5,-40.66 573.5,-80 573.5,-208 573.5,-208 573.5,-208 573.5,-253.84 425.05,-265.24 347.09,-268.07" fill="none" stroke="#fff" />
+<polygon points="346.91,-264.58 337.03,-268.4 347.14,-271.57 346.91,-264.58" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="573.5" y="-141.5" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">记录决定   </text>
+</g>
+
+<g id="design--node7" class="node state regular">
+<title>review</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="162,-99 67,-99 67,-63 162,-63 162,-99" fill="#000" stroke="none" />
+<text text-anchor="start" x="78.5" y="-77.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">提交候审材料</text>
+<path stroke-width="2" d="M79,-64.5C79,-64.5 150,-64.5 150,-64.5 155.5,-64.5 161,-70 161,-75.5 161,-75.5 161,-86.5 161,-86.5 161,-92 155.5,-97.5 150,-97.5 150,-97.5 79,-97.5 79,-97.5 73.5,-97.5 68,-92 68,-86.5 68,-86.5 68,-75.5 68,-75.5 68,-70 73.5,-64.5 79,-64.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="design--edge8" class="edge transition">
+<title>work-&gt;review</title>
+<path d="M143.86,-125.68C140.11,-120.1 135.86,-113.78 131.79,-107.72" fill="none" stroke="#fff" />
+<polygon points="134.51,-105.5 126.03,-99.15 128.7,-109.4 134.51,-105.5" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="139.5" y="-110" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">提交候审   </text>
+</g>
+
+<g id="design--node8" class="node state regular">
+<title>gap</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="293,-99 184,-99 184,-63 293,-63 293,-99" fill="#000" stroke="none" />
+<text text-anchor="start" x="195.5" y="-77.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">④ 报告计划缺口</text>
+<path stroke-width="2" d="M196,-64.5C196,-64.5 281,-64.5 281,-64.5 286.5,-64.5 292,-70 292,-75.5 292,-75.5 292,-86.5 292,-86.5 292,-92 286.5,-97.5 281,-97.5 281,-97.5 196,-97.5 196,-97.5 190.5,-97.5 185,-92 185,-86.5 185,-86.5 185,-75.5 185,-75.5 185,-70 190.5,-64.5 196,-64.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="design--edge9" class="edge transition">
+<title>work-&gt;gap</title>
+<path d="M179.06,-125.68C187.72,-119.32 197.67,-112.01 206.92,-105.21" fill="none" stroke="#fff" />
+<polygon points="209.18,-107.89 215.17,-99.15 205.04,-102.25 209.18,-107.89" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="204.5" y="-110" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">缺步骤或前提失效   </text>
+</g>
+
+<g id="design--edge10" class="edge transition">
+<title>gap-&gt;d</title>
+<path d="M293.44,-86.69C345.4,-92.4 417.97,-104.12 435.5,-126 468.31,-166.95 465.92,-204.39 431.5,-244 420.52,-256.63 380.18,-262.97 347.13,-266.09" fill="none" stroke="#fff" />
+<polygon points="346.8,-262.61 337.15,-266.96 347.41,-269.58 346.8,-262.61" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="458.5" y="-173" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">不同模型、首次缺口   </text>
+</g>
+
+<g id="design--edge11" class="edge transition">
+<title>gap-&gt;user</title>
+<path d="M231.05,-62.78C229.46,-56.29 229.32,-49.22 233.5,-44 241.9,-33.52 272.5,-27.15 299.59,-23.46" fill="none" stroke="#fff" />
+<polygon points="300.27,-26.9 309.75,-22.18 299.39,-19.96 300.27,-26.9" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="233.5" y="-47" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">同模型或原缺口重现   </text>
+</g>
+</g>
+</svg>
+          </div>
+        </figure>
+        <div class="explanation"><h2>节点说明</h2><ol class="notes" role="list"><li><span class="note-key">1</span><span>① 参考 <a href="https://github.com/cursor/plugins/blob/e58dd043600587dbaf58ba315e7f2b38373eeb43/pstack/skills/architect/SKILL.md" target="_blank" rel="noreferrer">PStack · Architect</a>、<a href="https://github.com/cursor/plugins/blob/e58dd043600587dbaf58ba315e7f2b38373eeb43/pstack/skills/poteto-mode/playbooks/feature.md" target="_blank" rel="noreferrer">Feature</a>、<a href="https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/prototype/SKILL.md" target="_blank" rel="noreferrer">Matt · Prototype</a>。设计者先用现有证据收敛问题。方法目录提供适用条件和来源，按任务选择设计、诊断与实验方法。</span></li><li><span class="note-key">2</span><span>② 设计与执行由主线程切换模型。taskbook_consult 另起无父对话的只读会话，带入明确问题、任务约束和固定提交。taskbook_probe 由子进程在临时检出运行，记录假设、判断条件、命令、退出码及输出。设计者决定观察能否支撑方案。</span></li><li><span class="note-key">3</span><span>③ <a href="__ASSET_design-worker.ts__" download="design-worker.ts">acceptPlan</a> 要求每步有标识、行动、验收方式和目标引用，全部目标与交付项均须覆盖。附加 <a href="https://github.com/cursor/plugins/blob/e58dd043600587dbaf58ba315e7f2b38373eeb43/pstack/skills/principle-sequence-verifiable-units/SKILL.md" target="_blank" rel="noreferrer">PStack · Sequence Verifiable Units</a>，执行报告绑定计划版本。目标、事实、授权以内的实现细节由执行者决定。</span></li><li><span class="note-key">4</span><span>④ 执行者提交 plan-gap、步骤、观察与问题。设计者用新计划版本继续；若缺用户授权则经 /taskbook-answer 回到设计。设计与执行共用模型，或同一步骤、观察和问题再次出现，直接交用户。<a href="__ASSET_index.ts__" download="index.ts">查看 Pi 的分派与恢复代码</a>。</span></li></ol></div>
+      </div>
+    </section>
+    <section class="slide chapter" id="review" tabindex="-1" aria-labelledby="review-title">
+      <header class="heading">
+        <div><h1 id="review-title">#3 三种独立审核怎样得出交接结论</h1></div>
+
+      </header>
+      <div class="spread">
+        <figure class="graph">
+          <div class="graph-window" tabindex="0" role="group" aria-label="状态机图" aria-description="用加减号缩放，Shift 加方向键平移，按 0 复位。">
+            <svg viewBox="0.00 0.00 375.00 233.00" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" role="img" aria-label="① 组装独立审核上下文、② 事实审、② 规格审、② 质量审、③ 校验逐项回执、补证／返工／测量、事实冲突交用户、④ 推进或交接">
+<g id="review--graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 229)">
+<title>state transitions</title>
+
+<g id="review--node1" class="node state regular">
+<title>engine</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="267,-225 122,-225 122,-189 267,-189 267,-225" fill="#000" stroke="none" />
+<text text-anchor="start" x="133.5" y="-203.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">① 组装独立审核上下文</text>
+<path stroke-width="2" d="M134,-190.5C134,-190.5 255,-190.5 255,-190.5 260.5,-190.5 266,-196 266,-201.5 266,-201.5 266,-212.5 266,-212.5 266,-218 260.5,-223.5 255,-223.5 255,-223.5 134,-223.5 134,-223.5 128.5,-223.5 123,-218 123,-212.5 123,-212.5 123,-201.5 123,-201.5 123,-196 128.5,-190.5 134,-190.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="review--node2" class="node state regular">
+<title>fact</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="132,-162 59,-162 59,-126 132,-126 132,-162" fill="#000" stroke="none" />
+<text text-anchor="start" x="70.5" y="-140.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">② 事实审</text>
+<path stroke-width="2" d="M71,-127.5C71,-127.5 120,-127.5 120,-127.5 125.5,-127.5 131,-133 131,-138.5 131,-138.5 131,-149.5 131,-149.5 131,-155 125.5,-160.5 120,-160.5 120,-160.5 71,-160.5 71,-160.5 65.5,-160.5 60,-155 60,-149.5 60,-149.5 60,-138.5 60,-138.5 60,-133 65.5,-127.5 71,-127.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="review--edge1" class="edge transition">
+<title>engine-&gt;fact</title>
+<path d="M124.84,-188.85C120.8,-186.55 116.98,-183.95 113.5,-181 110.35,-178.33 107.7,-174.98 105.48,-171.4" fill="none" stroke="#fff" />
+<polygon points="108.49,-169.6 100.82,-162.29 102.26,-172.79 108.49,-169.6" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="113.5" y="-173" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">基线与记忆变更   </text>
+</g>
+
+<g id="review--node3" class="node state regular">
+<title>spec</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="231,-162 158,-162 158,-126 231,-126 231,-162" fill="#000" stroke="none" />
+<text text-anchor="start" x="169.5" y="-140.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">② 规格审</text>
+<path stroke-width="2" d="M170,-127.5C170,-127.5 219,-127.5 219,-127.5 224.5,-127.5 230,-133 230,-138.5 230,-138.5 230,-149.5 230,-149.5 230,-155 224.5,-160.5 219,-160.5 219,-160.5 170,-160.5 170,-160.5 164.5,-160.5 159,-155 159,-149.5 159,-149.5 159,-138.5 159,-138.5 159,-133 164.5,-127.5 170,-127.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="review--edge2" class="edge transition">
+<title>engine-&gt;spec</title>
+<path d="M194.5,-188.68C194.5,-183.62 194.5,-177.95 194.5,-172.42" fill="none" stroke="#fff" />
+<polygon points="198,-172.15 194.5,-162.15 191,-172.15 198,-172.15" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="194.5" y="-173" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">候审提交与目标   </text>
+</g>
+
+<g id="review--node4" class="node state regular">
+<title>quality</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="330,-162 257,-162 257,-126 330,-126 330,-162" fill="#000" stroke="none" />
+<text text-anchor="start" x="268.5" y="-140.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">② 质量审</text>
+<path stroke-width="2" d="M269,-127.5C269,-127.5 318,-127.5 318,-127.5 323.5,-127.5 329,-133 329,-138.5 329,-138.5 329,-149.5 329,-149.5 329,-155 323.5,-160.5 318,-160.5 318,-160.5 269,-160.5 269,-160.5 263.5,-160.5 258,-155 258,-149.5 258,-149.5 258,-138.5 258,-138.5 258,-133 263.5,-127.5 269,-127.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="review--edge3" class="edge transition">
+<title>engine-&gt;quality</title>
+<path d="M259.32,-188.88C263.64,-186.58 267.75,-183.96 271.5,-181 274.99,-178.24 278.07,-174.77 280.72,-171.07" fill="none" stroke="#fff" />
+<polygon points="283.88,-172.62 286.17,-162.27 277.93,-168.93 283.88,-172.62" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="280.5" y="-173" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">规格通过后   </text>
+</g>
+
+<g id="review--node5" class="node state regular">
+<title>judge</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="249,-99 140,-99 140,-63 249,-63 249,-99" fill="#000" stroke="none" />
+<text text-anchor="start" x="151.5" y="-77.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">③ 校验逐项回执</text>
+<path stroke-width="2" d="M152,-64.5C152,-64.5 237,-64.5 237,-64.5 242.5,-64.5 248,-70 248,-75.5 248,-75.5 248,-86.5 248,-86.5 248,-92 242.5,-97.5 237,-97.5 237,-97.5 152,-97.5 152,-97.5 146.5,-97.5 141,-92 141,-86.5 141,-86.5 141,-75.5 141,-75.5 141,-70 146.5,-64.5 152,-64.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="review--edge4" class="edge transition">
+<title>fact-&gt;judge</title>
+<path d="M123.34,-125.85C134.19,-119.16 146.76,-111.41 158.3,-104.31" fill="none" stroke="#fff" />
+<polygon points="160.19,-107.25 166.87,-99.03 156.52,-101.29 160.19,-107.25" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="153.5" y="-110" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">    </text>
+</g>
+
+<g id="review--edge5" class="edge transition">
+<title>spec-&gt;judge</title>
+<path d="M194.5,-125.68C194.5,-120.62 194.5,-114.95 194.5,-109.42" fill="none" stroke="#fff" />
+<polygon points="198,-109.15 194.5,-99.15 191,-109.15 198,-109.15" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="194.5" y="-110" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">    </text>
+</g>
+
+<g id="review--edge6" class="edge transition">
+<title>quality-&gt;judge</title>
+<path d="M265.66,-125.85C254.81,-119.16 242.24,-111.41 230.7,-104.31" fill="none" stroke="#fff" />
+<polygon points="232.48,-101.29 222.13,-99.03 228.81,-107.25 232.48,-101.29" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="252.5" y="-110" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">    </text>
+</g>
+
+<g id="review--node6" class="node state regular">
+<title>return</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="119,-36 0,-36 0,0 119,0 119,-36" fill="#000" stroke="none" />
+<text text-anchor="start" x="11.5" y="-14.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">补证／返工／测量</text>
+<path stroke-width="2" d="M12,-1.5C12,-1.5 107,-1.5 107,-1.5 112.5,-1.5 118,-7 118,-12.5 118,-12.5 118,-23.5 118,-23.5 118,-29 112.5,-34.5 107,-34.5 107,-34.5 12,-34.5 12,-34.5 6.5,-34.5 1,-29 1,-23.5 1,-23.5 1,-12.5 1,-12.5 1,-7 6.5,-1.5 12,-1.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="review--edge7" class="edge transition">
+<title>judge-&gt;return</title>
+<path d="M156.54,-62.85C141.02,-55.83 122.91,-47.65 106.57,-40.27" fill="none" stroke="#fff" />
+<polygon points="107.73,-36.95 97.18,-36.03 104.85,-43.33 107.73,-36.95" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="138.5" y="-47" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">可补缺项   </text>
+</g>
+
+<g id="review--node7" class="node state regular">
+<title>user</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="248,-36 141,-36 141,0 248,0 248,-36" fill="#000" stroke="none" />
+<text text-anchor="start" x="152.5" y="-14.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">事实冲突交用户</text>
+<path stroke-width="2" d="M153,-1.5C153,-1.5 236,-1.5 236,-1.5 241.5,-1.5 247,-7 247,-12.5 247,-12.5 247,-23.5 247,-23.5 247,-29 241.5,-34.5 236,-34.5 236,-34.5 153,-34.5 153,-34.5 147.5,-34.5 142,-29 142,-23.5 142,-23.5 142,-12.5 142,-12.5 142,-7 147.5,-1.5 153,-1.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="review--edge8" class="edge transition">
+<title>judge-&gt;user</title>
+<path d="M194.5,-62.68C194.5,-57.62 194.5,-51.95 194.5,-46.42" fill="none" stroke="#fff" />
+<polygon points="198,-46.15 194.5,-36.15 191,-46.15 198,-46.15" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="194.5" y="-47" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">事实冲突   </text>
+</g>
+
+<g id="review--node8" class="node state regular">
+<title>next</title>
+<polygon fill-opacity="0.003922" stroke-width="2" points="367,-36 270,-36 270,0 367,0 367,-36" fill="#000" stroke="none" />
+<text text-anchor="start" x="281.5" y="-14.4" font-family="Helvetica,sans-Serif" font-size="12.00" fill="#fff">④ 推进或交接</text>
+<path stroke-width="2" d="M282,-1.5C282,-1.5 355,-1.5 355,-1.5 360.5,-1.5 366,-7 366,-12.5 366,-12.5 366,-23.5 366,-23.5 366,-29 360.5,-34.5 355,-34.5 355,-34.5 282,-34.5 282,-34.5 276.5,-34.5 271,-29 271,-23.5 271,-23.5 271,-12.5 271,-12.5 271,-7 276.5,-1.5 282,-1.5" fill="none" stroke="#fff" />
+</g>
+
+<g id="review--edge9" class="edge transition">
+<title>judge-&gt;next</title>
+<path d="M229.35,-62.93C234.76,-60.28 240.28,-57.57 245.5,-55 255.01,-50.32 265.22,-45.29 274.9,-40.52" fill="none" stroke="#fff" />
+<polygon points="276.55,-43.61 283.97,-36.05 273.46,-37.33 276.55,-43.61" fill="#fff" stroke="#fff" />
+<text text-anchor="start" x="267.5" y="-47" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#fff">本职责通过   </text>
+</g>
+</g>
+</svg>
+          </div>
+        </figure>
+        <div class="explanation"><h2>节点说明</h2><ol class="notes" role="list"><li><span class="note-key">1</span><span>① <a href="__ASSET_reviewer.ts__" download="reviewer.ts">runIndependentReview</a> 每轮新建 SDK 会话。上下文含任务书、适用事实、该角色的检查项和候审证据；通过 inspect_revision 自行读取固定 Git 内容。三个角色均可独立配置模型。</span></li><li><span class="note-key">2</span><span>② 事实审对每条主张和记忆变更出结论。规格审对目标、交付项、用户对待决问题的原始答复及每条计划判据举证。质量审独立检查候审变动、边界和维护代价。参考并按角色附加 <a href="https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/code-review/SKILL.md" target="_blank" rel="noreferrer">Matt · Code Review</a> 与 <a href="https://github.com/cursor/plugins/blob/e58dd043600587dbaf58ba315e7f2b38373eeb43/pstack/skills/principle-prove-it-works/SKILL.md" target="_blank" rel="noreferrer">PStack · Prove It Works</a> 的方法。</span></li><li><span class="note-key">3</span><span>③ 代码检查必审项覆盖、观察编号、候审提交和版本。交付缺项退执行者，方案本身有问题走 #2。实验任务由主会话先测量；功能任务可由交付审核要求测量，测后从规格审重过两审。同一候审已测量仍被要求测量，或同一提交和证据反复被退回，均退出并说明阻塞。</span></li><li><span class="note-key">4</span><span>④ 规格与质量都通过才标为可交接。保留 <a href="https://github.com/cursor/plugins/blob/e58dd043600587dbaf58ba315e7f2b38373eeb43/pstack/skills/poteto-mode/playbooks/shipping.md" target="_blank" rel="noreferrer">PStack · Shipping</a> 的独立验证，将自动合并停在用户授权边界。每项方法、原文定位、改写与未采用部分见 <a href="__ASSET_pi-skill-catalog.html__" download="pi-skill-catalog.html">完整技能目录（离线网页）</a>。</span></li></ol></div>
+      </div>
+    </section>
+  </main>
+  <nav class="controls" aria-label="放映控制" hidden>
+    <button class="contents" type="button" aria-haspopup="dialog" aria-controls="directory-dialog">目录</button>
+    <div class="pager">
+      <button class="previous" type="button">上一页</button>
+      <button class="next" type="button">下一页</button>
+    </div>
+  </nav>
+  <dialog id="directory-dialog" class="directory-dialog wide" aria-labelledby="directory-title">
+    <header class="directory-header">
+      <h2 id="directory-title">章节目录</h2>
+      <button type="button" class="directory-close">关闭</button>
+    </header>
+    <div class="directory-body"><div class="directory-groups"><div class="directory-group"><h3>沿主流程展开</h3><ul class="directory compact" role="list"><li><a href="#memory"><span><strong class="entry-title">#1 谁能改变事实和术语</strong><span class="entry-summary">输入与事实分开。任务书中的目标说明用户想改变什么；基线、定义和新观察须核查其来源与适用范围。</span></span></a></li><li><a href="#design"><span><strong class="entry-title">#2 谁来处理计划缺口</strong><span class="entry-summary">设计者决定方案，执行者在已批准步骤内选择实现。发现必须改计划时，把可复查的观察交还设计者。</span></span></a></li><li><a href="#review"><span><strong class="entry-title">#3 三种独立审核怎样得出交接结论</strong><span class="entry-summary">同一个审核器创建新会话、限定只读工具并核验回执。职责和证据随阶段变化。</span></span></a></li></ul></div><div class="directory-group"><ul class="directory compact" role="list"><li><a href="#contents"><span><strong class="entry-title">Pi 如何执行一份任务书</strong><span class="entry-summary">从任务书到候审提交；点击节点或目录展开。</span></span></a></li></ul></div></div></div>
+  </dialog>
+  <script>
+    const stage = document.querySelector('.stage');
+    const slides = [...document.querySelectorAll('.slide')];
+    const controls = document.querySelector('.controls');
+    const contents = controls.querySelector('.contents');
+    const directory = document.querySelector('.directory-dialog');
+    const closeDirectory = directory.querySelector('.directory-close');
+    const entries = [...directory.querySelectorAll('.directory a')];
+    const previous = controls.querySelector('.previous');
+    const next = controls.querySelector('.next');
+    let active = 0;
+    let focusSlide = false;
+
+    function fit() {
+      const scale = Math.min(stage.clientWidth / 1600, stage.clientHeight / 900);
+      stage.style.setProperty('--scale', scale);
+    }
+
+    function show() {
+      const index = slides.findIndex(slide => '#' + slide.id === location.hash);
+      active = Math.max(index, 0);
+      slides.forEach((slide, i) => { slide.hidden = i !== active; });
+      entries.forEach(entry => {
+        if (entry.hash === '#' + slides[active].id) entry.setAttribute('aria-current', 'page');
+        else entry.removeAttribute('aria-current');
+      });
+      previous.disabled = active === 0;
+      next.disabled = active === slides.length - 1;
+      if (focusSlide) slides[active].focus({ preventScroll: true });
+      focusSlide = false;
+    }
+
+    function go(index) {
+      if (index < 0 || index >= slides.length || index === active) return;
+      focusSlide = true;
+      location.hash = slides[index].id;
+    }
+
+    contents.addEventListener('click', () => {
+      directory.showModal();
+      directory.querySelector('[aria-current="page"]')?.focus();
+    });
+    closeDirectory.addEventListener('click', () => directory.close());
+
+    function followDirectoryEntry(event) {
+      const entry = event.target.closest('.directory a');
+      if (!entry || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      if (directory.open) directory.close();
+      go(slides.findIndex(slide => '#' + slide.id === entry.hash));
+    }
+
+    stage.addEventListener('click', followDirectoryEntry);
+    directory.addEventListener('click', event => {
+      if (event.target === directory) directory.close();
+      else followDirectoryEntry(event);
+    });
+    previous.addEventListener('click', () => go(active - 1));
+    next.addEventListener('click', () => go(active + 1));
+    window.addEventListener('hashchange', show);
+    document.addEventListener('keydown', event => {
+      if (directory.open || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+      const region = event.target.closest('.directory-window');
+      if (region && region.scrollHeight > region.clientHeight &&
+          ['PageUp', 'PageDown', 'Home', 'End'].includes(event.key)) return;
+      const destinations = {
+        ArrowLeft: active - 1, PageUp: active - 1, ArrowRight: active + 1, PageDown: active + 1,
+        Home: 0, End: slides.length - 1,
+      };
+      if (Object.hasOwn(destinations, event.key)) {
+        event.preventDefault();
+        go(destinations[event.key]);
+      }
+    });
+
+    function enableGraphInteraction(viewport) {
+      const svg = viewport.querySelector('svg');
+      const pointers = new Map();
+      let zoom = 1;
+      let x = 0;
+      let y = 0;
+
+      const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
+      const limitZoom = value => clamp(value, 0.65, 5);
+
+      function localPoint(event) {
+        const bounds = viewport.getBoundingClientRect();
+        return {
+          x: (event.clientX - bounds.left) * viewport.clientWidth / bounds.width,
+          y: (event.clientY - bounds.top) * viewport.clientHeight / bounds.height,
+        };
+      }
+
+      function limitOffset(offset, length) {
+        const edge = length * (1 - zoom);
+        const margin = length * 0.18;
+        return clamp(offset, Math.min(0, edge) - margin, Math.max(0, edge) + margin);
+      }
+
+      function update(nextZoom, nextX, nextY) {
+        zoom = nextZoom;
+        x = limitOffset(nextX, viewport.clientWidth);
+        y = limitOffset(nextY, viewport.clientHeight);
+        svg.style.transform = `translate(${x}px, ${y}px) scale(${zoom})`;
+      }
+
+      function moveBetween(before, after, factor) {
+        const nextZoom = limitZoom(zoom * factor);
+        const ratio = nextZoom / zoom;
+        update(nextZoom, after.x - (before.x - x) * ratio, after.y - (before.y - y) * ratio);
+      }
+
+      function gesture() {
+        const [first, second] = pointers.values();
+        if (!second) return { ...first, span: 0 };
+        return {
+          x: (first.x + second.x) / 2,
+          y: (first.y + second.y) / 2,
+          span: Math.hypot(first.x - second.x, first.y - second.y),
+        };
+      }
+
+      viewport.addEventListener('pointerdown', event => {
+        if (event.target.closest('a[href]')) return;
+        if (event.button !== 0 || pointers.size === 2) return;
+        viewport.focus({ preventScroll: true });
+        viewport.setPointerCapture(event.pointerId);
+        pointers.set(event.pointerId, localPoint(event));
+        viewport.classList.add('dragging');
+      });
+
+      viewport.addEventListener('pointermove', event => {
+        if (!pointers.has(event.pointerId) || !viewport.clientWidth) return;
+        const before = gesture();
+        pointers.set(event.pointerId, localPoint(event));
+        const after = gesture();
+        moveBetween(before, after, before.span ? after.span / before.span : 1);
+      });
+
+      for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+        viewport.addEventListener(type, event => {
+          pointers.delete(event.pointerId);
+          if (!pointers.size) viewport.classList.remove('dragging');
+        });
+      }
+
+      viewport.addEventListener('wheel', event => {
+        event.preventDefault();
+        const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.clientHeight : 1;
+        const anchor = localPoint(event);
+        moveBetween(anchor, anchor, Math.exp(-event.deltaY * unit * 0.002));
+      }, { passive: false });
+
+      viewport.addEventListener('dblclick', () => update(1, 0, 0));
+      viewport.addEventListener('keydown', event => {
+        if (event.altKey || event.ctrlKey || event.metaKey) return;
+        const arrows = { ArrowLeft: [-42, 0], ArrowRight: [42, 0], ArrowUp: [0, -42], ArrowDown: [0, 42] };
+        if (event.shiftKey && Object.hasOwn(arrows, event.key)) {
+          const [dx, dy] = arrows[event.key];
+          update(zoom, x + dx, y + dy);
+        } else if (event.key === '0') {
+          update(1, 0, 0);
+        } else if (['+', '=', '-'].includes(event.key)) {
+          const center = { x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 };
+          moveBetween(center, center, event.key === '-' ? 0.8 : 1.25);
+        } else {
+          return;
+        }
+        event.preventDefault();
+      });
+    }
+
+    document.querySelectorAll('.graph-window').forEach(enableGraphInteraction);
+    document.body.classList.add('presenting');
+    controls.hidden = false;
+    show();
+    fit();
+    new ResizeObserver(fit).observe(stage);
+  </script>
+</body>
+</html>

@@ -16,7 +16,7 @@ export type ReviewInput = {
   methods: { source: string; text: string }[];
 };
 type Verdict = "pass" | "rework" | "blocked" | "measure" | "fact-conflict";
-type ReviewItem = { id: string; status: "pass" | "gap" | "blocked" | "fact-conflict"; reason: string; evidence: string; runEvidence?: string[] };
+type ReviewItem = { id: string; status: "pass" | "gap" | "blocked" | "fact-conflict"; reason: string; evidence: string; memoryUse?: "independent" | "change-evidence"; runEvidence?: string[] };
 type Conflict = { factId: string; observation: string };
 type Inspection = { id: string; view: string; path?: string; start: number; digest: string; characters: number };
 type RunSource = { id: string; phase: string; revision: string; toolCallId: string; digest: string };
@@ -25,6 +25,7 @@ export type ReviewResult = {
   verdict: Verdict; summary: string; items: ReviewItem[]; conflicts: Conflict[]; observations: Inspection[]; runSources: RunSource[];
 };
 
+const designConsultInstruction = readFileSync(new URL("./prompts/design-consult.md", import.meta.url), "utf8");
 const instruction = readFileSync(new URL("./prompts/independent-review.md", import.meta.url), "utf8");
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 const parameters = Type.Object({
@@ -33,7 +34,7 @@ const parameters = Type.Object({
   start: Type.Optional(Type.Integer({ minimum: 1, description: "首行，从 1 计数" })),
 }, { additionalProperties: false });
 
-function inspectionTool(input: ReviewInput, observations: Inspection[]): ToolDefinition<typeof parameters> {
+function inspectionTool(input: Pick<ReviewInput,"root"|"base"|"revision">, observations: Inspection[]): ToolDefinition<typeof parameters> {
   return {
     name: "inspect_revision", label: "检查固定 Git 提交", description: "changes 列出改变的路径。base 和 candidate 读取指定版本文件。diff 读取两版差异，允许按文件过滤。响应带观察编号和分页位置。",
     parameters,
@@ -85,7 +86,7 @@ function runSourcesFor(input: ReviewInput): RunSource[] {
   return sources;
 }
 
-function parseVerdict(text: string, required: string[], facts: TaskItem[], role: Role, observations: Inspection[], runSources: RunSource[]) {
+function parseVerdict(text: string, required: string[], facts: TaskItem[], role: Role, observations: Inspection[], runSources: RunSource[], classifyFactChecks: boolean) {
   const response: unknown = JSON.parse(text);
   if (!record(response) || !string(response.summary) || !Array.isArray(response.items) || !Array.isArray(response.conflicts)) {
     throw new Error("独立审核报告缺少结论或逐项检查结果。");
@@ -102,9 +103,16 @@ function parseVerdict(text: string, required: string[], facts: TaskItem[], role:
       || runEvidence.some(id => !runSources.some(source => source.id === id)))) {
       throw new Error("运行依据必须引用本次候审提交包中的观测。");
     }
+    let memoryUse: ReviewItem["memoryUse"];
+    if (classifyFactChecks && role === "fact-review" && /^P\d+$/.test(item.id) && item.status === "pass") {
+      if (item.memoryUse !== "independent" && item.memoryUse !== "change-evidence") {
+        throw new Error("含记忆变更的审核需要说明每个 P 项的 memoryUse。");
+      }
+      memoryUse = item.memoryUse;
+    }
     seen.add(item.id);
     return { id: item.id, status: item.status as ReviewItem["status"], reason: item.reason, evidence: item.evidence,
-      ...(Array.isArray(runEvidence) ? { runEvidence: runEvidence as string[] } : {}) };
+      ...(memoryUse ? {memoryUse} : {}), ...(Array.isArray(runEvidence) ? { runEvidence: runEvidence as string[] } : {}) };
   });
   if (required.length !== seen.size || !observations.length) throw new Error("独立审核未完成逐项取证。");
   const conflicts: Conflict[] = response.conflicts.map(conflict => {
@@ -132,8 +140,8 @@ function parseVerdict(text: string, required: string[], facts: TaskItem[], role:
   return { verdict: verdict as Verdict, summary: response.summary, items, conflicts };
 }
 
-export async function runIndependentReview(ctx: ExtensionContext, input: ReviewInput, signal?: AbortSignal): Promise<ReviewResult> {
-  if (!ctx.model) throw new Error("独立审核需要已选定的 Pi 模型。");
+export async function runIndependentReview(ctx: ExtensionContext, input: ReviewInput, signal?: AbortSignal, model = ctx.model): Promise<ReviewResult> {
+  if (!model) throw new Error("独立审核需要已选定的 Pi 模型。");
   if (![input.base, input.revision].every(value => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(value))) {
     throw new Error("审核需要固定的基线和候审提交。");
   }
@@ -143,6 +151,27 @@ export async function runIndependentReview(ctx: ExtensionContext, input: ReviewI
   const runSources = runSourcesFor(input);
   const packet = JSON.stringify({ ...data, requiredIds, runSources });
   const system = [instruction, ...methods.map(method => "## " + method.source + "\n" + method.text)].join("\n\n");
+  const reply = await readOnlySession(ctx, input, model, system, packet, signal);
+  const result = parseVerdict(reply.text, requiredIds, input.facts, input.role, reply.observations, runSources,
+    record(input.evidence) && input.evidence.classifyFactChecks === true);
+  return { ...result, revision: input.revision, role: input.role, runSources, observations: reply.observations,
+    contextDigest: reply.contextDigest, model: reply.model, sessionId: reply.sessionId };
+}
+
+export async function consultDesign(ctx: ExtensionContext, input: Omit<ReviewInput,"role">, question: string,
+  model: NonNullable<ExtensionContext["model"]>, signal?: AbortSignal) {
+  const system = [designConsultInstruction,
+    ...input.methods.map(method => "## " + method.source + "\n" + method.text)].join("\n\n");
+  const {root: _root, methods: _methods, ...data} = input;
+  const packet = JSON.stringify({...data, role:"design-consult", question});
+  const reply = await readOnlySession(ctx, input, model, system, packet, signal);
+  return {answer: reply.text, model: reply.model, sessionId: reply.sessionId, observations: reply.observations,
+    contextDigest: reply.contextDigest, revision: input.revision};
+}
+
+async function readOnlySession(ctx: ExtensionContext, input: Pick<ReviewInput,"root"|"base"|"revision">, model: NonNullable<ExtensionContext["model"]>,
+  system: string, packet: string, signal?: AbortSignal) {
+  const {root} = input;
   const observations: Inspection[] = [];
   const agentDir = getAgentDir();
   const settingsManager = SettingsManager.inMemory();
@@ -153,7 +182,7 @@ export async function runIndependentReview(ctx: ExtensionContext, input: ReviewI
   await resourceLoader.reload();
   signal?.throwIfAborted();
   const { session } = await createAgentSession({
-    cwd: root, agentDir, model: ctx.model, thinkingLevel: ctx.thinkingLevel,
+    cwd: root, agentDir, model, thinkingLevel: ctx.thinkingLevel,
     sessionManager: SessionManager.inMemory(root), resourceLoader, settingsManager,
     customTools: [inspectionTool(input, observations)], tools: ["inspect_revision"],
   });
@@ -171,9 +200,8 @@ export async function runIndependentReview(ctx: ExtensionContext, input: ReviewI
     if (last?.role !== "assistant" || last.stopReason !== "stop") throw new Error("独立审核未正常完成，保留检查点。");
     const reply = session.getLastAssistantText();
     if (!reply) throw new Error("独立审核会话结束但未交回报告。");
-    const result = parseVerdict(reply, requiredIds, input.facts, input.role, observations, runSources);
-    return { ...result, sessionId: session.sessionId, model: ctx.model.provider + "/" + ctx.model.id,
-      revision: input.revision, role: input.role, contextDigest: digest(JSON.stringify([system, packet])), observations, runSources };
+    return {text: reply, sessionId: session.sessionId, model: model.provider + "/" + model.id,
+      contextDigest: digest(JSON.stringify([system, packet])), observations};
   } finally {
     signal?.removeEventListener("abort", abort);
     session.dispose();

@@ -1,0 +1,897 @@
+{
+  "repo": "https://github.com/mattpocock/skills",
+  "commit": "5863806dd4e15c63174bee4e7515a4256792ecfa",
+  "license": "MIT License\n\nCopyright (c) 2026 Matt Pocock\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n",
+  "skills": [
+    {
+      "name": "ask-matt",
+      "path": "skills/engineering/ask-matt/SKILL.md",
+      "kind": "workflow",
+      "stage": [
+        "design"
+      ],
+      "status": "partial",
+      "applies": "进入设计时",
+      "reason": "原入口能分清需要明确的问题、需要实际观察的问题与可立即拆解的工作。",
+      "adaptation": "适用条件为「进入设计时」。读已解析的目标、约束、证据与未决项。给每个未决项标明最短的解决方式，能读出答案就给出处，只有运行才能回答就提出一个可证伪实验，属于价值取舍或事实冲突就写明须由谁决定。未决项清空时给出可验证的实现计划。",
+      "omissions": "原入口、交互命令、按项目规模选择其它调度器不迁移。",
+      "distribution": "engineering",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/ask-matt/SKILL.md",
+      "references": [
+        "skills/engineering/ask-matt/PHASE-BOUNDARIES.md"
+      ]
+    },
+    {
+      "name": "code-review",
+      "path": "skills/engineering/code-review/SKILL.md",
+      "kind": "mixed",
+      "stage": [
+        "review"
+      ],
+      "status": "partial",
+      "applies": "交付候选版本已固定",
+      "reason": "原审查把规格吻合度和仓库规范分开，两位评审使用相同版本的独立上下文。",
+      "adaptation": "适用条件为「交付候选版本已固定」。\n\n采用控制器交付的同一基线和候选快照，确认差异涉及的路径、对应任务书版本和可以复查的运行记录。固定版本缺失、工作树变动尚未进入候选或找不到任务书时，指出无法审查的范围。\n\n规格轴将变更与用户条款双向核对。沿每条条款追到真实行为，识别未做、仅部分完成或理解错误的部分；再从每一个新增行为反查用户授权，找出偏离范围的内容。规范轴独立读取仓库实际生效的标准与约定，注明哪一项是硬规则，哪一项仅为维护性判断。\n\n分别输出两轴结论。每条发现附目标或规范原文位置、对应候选位置、实际影响和证据。只在同一轴内归并重复观察，保留严重性最高的那项及未能验证的部分。规格上的通过与规范上的失败可以同时成立。",
+      "omissions": "原 issue tracker 发现与设置流程不迁移。",
+      "distribution": "engineering",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/code-review/SKILL.md",
+      "references": [],
+      "roleAdaptations": {
+        "correctness": "仅审核任务书与实现是否吻合。固定审查对象。读取任务书、目标清单、已批准事实与候选修订，确认当前查看的是控制器提供的差异。以需求原文的行为、适用对象、输入与失败条件为审查尺度。所需材料缺失时，记录具体缺口及影响的目标。\n\n从条款向实现走一遍。逐条跟踪正常入口，核查正常、边界、失败和恢复情形中的承诺。区分完全遗漏、只能处理部分情形、表面有代码但其语义错误。再从差异向条款反查，发现新增默认值、副作用、删除或替换既有行为时，找到对应授权。\n\n对每个问题给出条款及位置、候选行为、会暴露差异的具体输入、独立打开的证据。需要运行才能判断时，再引本版本的原始运行观察。如果看似实现但没有足够证据，就报告仍缺哪次观察，逐目标返回规格侧判断。",
+        "quality": "仅审核候选版本是否符合项目规范及能否持续维护。在固定修订中定位本项目的贡献规范、编码标准和适用子目录约定。针对每一处有意义的差异读取上下文。成文标准的违反须给出文件与规则，仓库明确允许的写法优先。已由可靠工具实际覆盖的机械项只引用结果。\n\n对维护性问题做有证据的判断。含糊名称会隐藏职责，重复逻辑或反复出现的同类条件会使修改分叉，成组参数或无区别字符串可能在暗示未表达的领域概念。检查某个方法是否主要依赖另一对象的数据、一项修改是否横跨多处、一个模块是否因互不相关的原因变化。用实际调用者说明其中哪种问题已经发生。\n\n再查为假想需要添加的参数或接口、连续访问链、纯转发层、忽略父契约的大部分实现。每项须引相关差异和可能造成的维护后果，在有实际益处时给最小改进方案。区分明确违反与判断性建议，分别列覆盖过的规范和依据不足的地方，独立返回质量结论。"
+      },
+      "sourceSections": [
+        {
+          "label": "规范来源与十二类异味",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/code-review/SKILL.md#3-identify-the-standards-sources"
+        },
+        {
+          "label": "原两种评审委托",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/code-review/SKILL.md#4-spawn-both-sub-agents-in-parallel"
+        },
+        {
+          "label": "保持两轴结论独立",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/code-review/SKILL.md#5-aggregate"
+        }
+      ]
+    },
+    {
+      "name": "codebase-design",
+      "path": "skills/engineering/codebase-design/SKILL.md",
+      "kind": "method",
+      "stage": [
+        "design"
+      ],
+      "status": "integrated",
+      "applies": "设计涉及多个组件间的接口或持久边界",
+      "reason": "原方法用调用者的使用成本和变更的局部性判断模块有无深度。",
+      "adaptation": "适用条件为「设计涉及多个组件间的接口或持久边界」。\n\n从真实调用者的使用示例画出接口。除参数和返回值，还包括调用顺序、不变量、错误、配置和调用者需理解的性能特性。用删除试验判断它的深度：去掉该模块后，若复杂性消失，它可能只是转发；若同一套规则会重新散落在几个调用方，该边界正在隐藏有价值的行为。\n\n按依赖选择验证方式。进程内纯逻辑可直接经公开入口测；有可信本地替代的持久服务，用本地实例测试整体行为。远端但由项目掌握的服务，可以按真实传输和本地测试的双重需求划定接口。不可控第三方才用窄的外部替身。没有实际第二种实现或变化需求时，把多一层间接性的费用写清。\n\n当边界值得比较时，分别草拟明显不同的接口：最少公共概念、最常见调用者最简路径，或围绕实际外部依赖变化。每种均提交调用示例、必须知道的前提、隐藏了什么、错误与依赖如何观察。以调用者负担、修改局部性和测试观察面的差异选出一个方案；替换旧测试之前先证明其行为已由新入口覆盖。",
+      "omissions": "",
+      "distribution": "engineering",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/codebase-design/SKILL.md",
+      "references": [
+        "skills/engineering/codebase-design/DEEPENING.md",
+        "skills/engineering/codebase-design/DESIGN-IT-TWICE.md"
+      ],
+      "sourceSections": [
+        {
+          "label": "删除试验与公共测试表面",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/codebase-design/SKILL.md#principles"
+        },
+        {
+          "label": "四种依赖的处理",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/codebase-design/DEEPENING.md#dependency-categories"
+        },
+        {
+          "label": "移动测试入口",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/codebase-design/DEEPENING.md#testing-strategy-replace-dont-layer"
+        },
+        {
+          "label": "独立设计和比较维度",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/codebase-design/DESIGN-IT-TWICE.md#3-present-and-compare"
+        }
+      ]
+    },
+    {
+      "name": "diagnosing-bugs",
+      "path": "skills/engineering/diagnosing-bugs/SKILL.md",
+      "kind": "mixed",
+      "stage": [
+        "fact",
+        "experiment",
+        "implement"
+      ],
+      "status": "partial",
+      "applies": "修复入口或有可观察的异常",
+      "reason": "原方法先取得能暴露同一症状的反馈回路，再用有区别力的实验筛选解释。",
+      "adaptation": "适用条件为「修复入口或有可观察的异常」。\n\n先识别用户能观察到的确切症状，脱敏输入、输出、日志及重放材料。依次考虑现有测试、公开接口调用、带固定样本的命令、事件重放、隔离小程序或与已知正常版本的差分检查。至少运行一次，记录能让这一症状变红的命令和结果。降低初始化成本，固定时间、种子、文件或网络条件。间歇问题记录样本数和失败数，调整触发条件以提高复现率。始终没有能辨认该症状的信号时，交出已试方法和所缺材料。\n\n在同一反馈回路逐项删除输入、数据、调用者与配置，每删一项即重放，直到剩下的部分都有理由保留。明确这是原报告的失败。然后列出约三至五个有竞争力的根因假说，逐个写成可推翻的预测，优先做能分开两种解释的观察。每轮只动一个变量。检查断点或少量带标记的探针；性能异常应先测基线，再用测量定位分界。\n\n把最小复现放在能涵盖真实调用链的入口，先看回归检查以原因为红，再在计划范围内修复。相同样本转绿后重跑未经缩减的原场景。缺少真实观察面时记录该限制。移除所有临时探针、样本副作用，返回原症状、排除过的解释、最终证据和仍有的不确定性。",
+      "omissions": "敏感运行数据只传递经脱敏的引用。",
+      "distribution": "engineering",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/diagnosing-bugs/SKILL.md",
+      "references": [],
+      "roleAdaptations": {
+        "fact-check": "先把报告写成可判定的失败：哪个调用者、在哪个版本、给什么输入、预期和实测各是什么。调用凭据保留在既有受保护环境，工件仅保留必要脱敏信号。选择现有测试、公开接口、固定输入命令、捕获事件重放或差分对照之一，执行并记录真实失败输出。\n\n每次缩减一个输入、调用者或配置，重放确认同一症状仍成立。间歇性结果给出固定条件下的试验次数和失败比率，记录哪些条件会改变比率。交付最小复现、原始场景、环境版本与观测编号。如果真实环境不可读，列出尝试过的入口和缺失的最小输入。\n\n只有拿到可区分目标症状的反馈信号后才列根因候选。对候选分别写改变哪个条件会出现什么差异，注明目前是哪条观察支持它、还有什么反例。未经验证的根因进入设计或实验，不得记为项目事实。",
+        "implement": "读取已冻结的原因、允许修改的范围、最小复现以及原始场景。先在真实调用位置运行会红的回归检查。若症状依赖多调用者或特定顺序，保留这些条件；浅层单元测试无法覆盖时，记录需要的正确观察面。故意调整夹具制造红色时，对照原夹具确认调整确实生效。\n\n在计划授权内改动造成失败的原因。每个探针对应一项已列预测，每次只动一个变量；修复后对同一最小输入观察转绿，再运行未经裁剪的报告场景与受影响相邻路径。清理带标记的日志和临时工件，记录失败、通过与恢复后的证据。\n\n出现不能用冻结计划解释的新反例时，保留现场与独立可重放步骤，返回计划缺口；不能通过改写原任务的成功标准来让当前修复过关。"
+      },
+      "sourceSections": [
+        {
+          "label": "十种反馈回路及红色信号",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/diagnosing-bugs/SKILL.md#phase-1-build-a-feedback-loop"
+        },
+        {
+          "label": "逐步缩小同一症状",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/diagnosing-bugs/SKILL.md#phase-2-reproduce--minimise"
+        },
+        {
+          "label": "有预测的竞争假说",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/diagnosing-bugs/SKILL.md#phase-3-hypothesise"
+        },
+        {
+          "label": "回归验证与原始场景",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/diagnosing-bugs/SKILL.md#phase-5-fix--regression-test"
+        }
+      ]
+    },
+    {
+      "name": "domain-modeling",
+      "path": "skills/engineering/domain-modeling/SKILL.md",
+      "kind": "method",
+      "stage": [
+        "fact",
+        "memory"
+      ],
+      "status": "integrated",
+      "applies": "遇到领域名词、别称、跨语境重名或重要取舍",
+      "reason": "词和决策有适用范围及历史，发现差异就覆盖会污染后续任务。",
+      "adaptation": "适用条件为「遇到领域名词、别称、跨语境重名或重要取舍」。\n\n先确定这一句话属于哪个业务语境。查适用的词条、决策及其版本；一个项目内不同语境可对同一词有不同解释。让每个词回到实际场景，给出一个肯定例和一个最容易混淆的反例。特别检查原话、代码的真实行为、现有任务书是否给出了不同边界。\n\n形成术语提案时选择一个规范名称，用一至两句话定义它指什么，列易混别称和适用范围。只收这一项目语境特有的概念。一般编程技巧、实现方式和一次性操作记录归入它们各自的工件。若要改变旧定义，应列明旧事实、版本、受影响的条款和改动理由。\n\n记录设计决定须同时满足三个条件：日后反转有实际代价、未来读者无法从代码猜出缘由、确有过可以采用的不同方案。用短段写情境、选择及原因；被放弃的备选和后果只有在解释决定时才加。给每项提案附证据和操作类型，让控制器处理授权与提交，保存旧记录的继承关系。",
+      "omissions": "直接写 GLOSSARY 或 ADR 改为受审计事实提案。",
+      "distribution": "engineering",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/domain-modeling/SKILL.md",
+      "references": [
+        "skills/engineering/domain-modeling/ADR-FORMAT.md",
+        "skills/engineering/domain-modeling/GLOSSARY-FORMAT.md"
+      ],
+      "roleAdaptations": {
+        "fact-review": "先按语境和版本读取候选主张、旧词条以及可复查的一手资料。区分同一概念的别称、不同语境的重名、与一个旧概念实质不同的新概念。对新定义造一个边界例，检查两位读者能否据此得出同一判定。\n\n逐字比较会改变旧定义或决策的内容。发现在新定义下旧验收例不再成立，指出目标、旧条目、证据与具体冲突；别名重排若会改变调用者理解，也要说明其影响。决策记录核查可逆性、备选与理由三方面。只在读取到的证据范围内返回结论，批准权由控制器保留。"
+      },
+      "sourceSections": [
+        {
+          "label": "用真实场景与代码核查语义",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/domain-modeling/SKILL.md#during-the-session"
+        },
+        {
+          "label": "规范名称、短定义及避免用语",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/domain-modeling/GLOSSARY-FORMAT.md#rules"
+        },
+        {
+          "label": "多语境术语",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/domain-modeling/GLOSSARY-FORMAT.md#single-vs-multi-context-repos"
+        },
+        {
+          "label": "保留决策的三个条件",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/domain-modeling/ADR-FORMAT.md#when-to-offer-an-adr"
+        }
+      ]
+    },
+    {
+      "name": "grill-with-docs",
+      "path": "skills/engineering/grill-with-docs/SKILL.md",
+      "kind": "workflow",
+      "stage": [
+        "fact",
+        "design"
+      ],
+      "status": "partial",
+      "applies": "设计未决项涉及项目语言或既有决定",
+      "reason": "原组合先用追问澄清含义，再与项目词汇和历史决定对照。",
+      "adaptation": "适用条件为「设计未决项涉及项目语言或既有决定」。从一个未决行为追到使用者及其业务名词。查术语和决策的原始出处，把能由材料回答的部分先填好。碰到反例、词义分歧或旧决定限制设计，把两种解释和各自证据并列，记录明确后会改变哪个验收场景。可确定的解释进入设计，涉及改写旧事实的解释交由裁决。",
+      "omissions": "插件组合本地方法，原 Skill 工具与直接落盘不迁移。",
+      "distribution": "engineering",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/grill-with-docs/SKILL.md",
+      "references": []
+    },
+    {
+      "name": "implement-spec",
+      "path": "skills/engineering/implement-spec/SKILL.md",
+      "kind": "workflow",
+      "stage": [
+        "design",
+        "implement"
+      ],
+      "status": "partial",
+      "applies": "执行方案含多个依赖单元",
+      "reason": "保留依赖前沿与短交接，执行身份和调度由 Pi 持有。",
+      "adaptation": "适用条件为「执行方案含多个依赖单元」。把每个可验收单元关联到规格条款、前置单元和证据。仅选择前置已满足的单元，为执行者提供该单元的计划、代码版本、允许写入的范围和必要引用。返回结果要能与单元及版本对应。若两个单元会写同一状态，标明合并前必须验证的共同约束。实现者无法按契约推进时返回阻塞原因，后续决策交回设计。",
+      "omissions": "不承接上游独立 worktree、自动合并、issue 关闭和草稿 PR 的调度。",
+      "distribution": "engineering",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/implement-spec/SKILL.md",
+      "references": []
+    },
+    {
+      "name": "implement",
+      "path": "skills/engineering/implement/SKILL.md",
+      "kind": "mixed",
+      "stage": [
+        "implement"
+      ],
+      "status": "partial",
+      "applies": "收到冻结的执行单元",
+      "reason": "原方法在约定观察面用短反馈循环实现，再以全套检查收尾。",
+      "adaptation": "适用条件为「收到冻结的执行单元」。\n\n读取当前执行单元的完整规格、引用工件及既有验收面。用自己的话写出本单元要让调用者观察到的结果，以及计划限制的接口、数据、权限和退出条件。检查眼前代码和版本是否真的与计划前提相符；引用含糊或观察面不能承载目标时，保留现场返回计划缺口。\n\n在已授权范围内自行选择最小可行实现。优先沿真实调用入口做一个纵向切片，先执行最短的失败或基线检查，再改动并用同一输入验证。用适合本仓库的局部检查及类型/静态检查取得短反馈，避免为后续猜想扩展范围。每个单元完成时将实际运行与具体目标关联。\n\n收尾运行受影响的整套检查，标出命令、版本、输出、已知环境限制及触及的既有行为。依赖结果未出现、计划要求互相矛盾或需要新的事实授权时，交出可复现反例与已完成部分。报告送到独立评审，执行者对自己的评价不能替代评审证据。",
+      "omissions": "自行启动评审、自动提交由 Pi 的边界取代。",
+      "distribution": "engineering",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/implement/SKILL.md",
+      "references": []
+    },
+    {
+      "name": "improve-codebase-architecture",
+      "path": "skills/engineering/improve-codebase-architecture/SKILL.md",
+      "kind": "mixed",
+      "stage": [
+        "design"
+      ],
+      "status": "partial",
+      "applies": "任务要求改善结构，或现有边界阻碍已授权目标",
+      "reason": "先定位迫使一次变更散落各处的结构原因，才值得考虑重组。",
+      "adaptation": "适用条件为「任务要求改善结构，或现有边界阻碍已授权目标」。\n\n从目标行为的真实入口走到实现和调用者，记录具体路径。留意为理解一个概念必须来回翻许多文件、多个薄层互相转发、同一知识散落各处，以及测试离真实调用方式很远的地方。没有实例的架构偏好暂留在候选之外。\n\n对每个值得追踪的候选，写明位置、当前摩擦、想隐藏的复杂性、调用者会省掉什么、最有风险的依赖。用删除试验检验边界能否减少而非搬移成本，必要时并列现状与改变后的最小调用图。评估可信度、影响范围和最有意义的验证入口，再按这次目标挑一个首选。保留可能改变排名的反例，超出任务授权的重组只作建议。",
+      "omissions": "HTML 报告和自动开票省略。",
+      "distribution": "engineering",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/improve-codebase-architecture/SKILL.md",
+      "references": [
+        "skills/engineering/improve-codebase-architecture/HTML-REPORT.md"
+      ],
+      "sourceSections": [
+        {
+          "label": "沿实际使用寻找候选",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/improve-codebase-architecture/SKILL.md#1-explore"
+        },
+        {
+          "label": "候选的实质内容",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/improve-codebase-architecture/HTML-REPORT.md#candidate-card"
+        },
+        {
+          "label": "说明首选与代价",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/improve-codebase-architecture/HTML-REPORT.md#top-recommendation-section"
+        }
+      ]
+    },
+    {
+      "name": "pr",
+      "path": "skills/engineering/pr/SKILL.md",
+      "kind": "method",
+      "stage": [
+        "exit"
+      ],
+      "status": "integrated",
+      "applies": "汇总可交付的变更与影响",
+      "reason": "原交付模板要求在相同观察面比较改前改后，并说明合并后果。",
+      "adaptation": "适用条件为「汇总可交付的变更与影响」。\n\n从已验证的交付中选最小的表达形式。改变控制流就给调用次序，改变数据形状就给一个前后实例，改变可见行为就给能复现该差异的输入。沿用本项目术语，先说明接手者将能观察到什么。\n\n把每项重要变化同改前、改后两份证据配对。尽可能固定输入、环境与观察面。若只有改后记录，说明基线证据缺口，避免用计划写法补成一次实测。链接到具体工件或版本，再简述读者应看到什么。\n\n分析变更是否能直接撤回。注意持久数据、已经发送的外部动作、旧版本读者和在途任务；对受影响的对象及恢复前提给出具体判断。输出交付摘要，不代用户进行外部发布。",
+      "omissions": "形成交付摘要，发布外部 PR 不属于该方法。",
+      "distribution": "engineering",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/pr/SKILL.md",
+      "references": [
+        "skills/engineering/pr/CREDITS.md"
+      ],
+      "sourceSections": [
+        {
+          "label": "选择最小可读的概要",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/pr/SKILL.md#summary"
+        },
+        {
+          "label": "前后证据",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/pr/SKILL.md#evidence"
+        },
+        {
+          "label": "可逆性及影响范围",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/pr/SKILL.md#merge-danger"
+        }
+      ]
+    },
+    {
+      "name": "prototype",
+      "path": "skills/engineering/prototype/SKILL.md",
+      "kind": "mixed",
+      "stage": [
+        "experiment"
+      ],
+      "status": "partial",
+      "applies": "有一项通过阅读仍无法消除的设计不确定性",
+      "reason": "用可抛弃的最小原型回答一个问题，避免把探索仓促固化。",
+      "adaptation": "适用条件为「有一项通过阅读仍无法消除的设计不确定性」。\n\n先把设计问题写成一个可被推翻的判断，说明看到什么结果会选择另一方案。若关注状态或逻辑，列典型路径、异常、重复操作与恢复；若关注两种可行设计，选取同一组角色、输入和目标作为比较尺度。任务假设过于含糊时，写清当前采用的解释和影响。\n\n造出回答该问题所需的最小可运行物。入口应能用一次明确操作启动，把每次动作后的相关状态或输出显示出来。默认使用隔离、可重置的数据；只有持久性本身受测时才添加临时持久层。让读者能重放引导样例，也能更换一个输入或次序观察相反结果。实现停在足以判定的精度，不把原型中的速写当生产变更。\n\n回交最初问题、运行方式、输入与状态轨迹、观察、判定以及无法据此推出的结论。留下能复查的工件或摘要引用。设计阶段只吸收被验证的决定，若试验仍分不出两案，要给出下一项具有判别力的观察。",
+      "omissions": "固定 HTML 界面、前端切换条和外部发布省略。",
+      "distribution": "engineering",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/prototype/SKILL.md",
+      "references": [
+        "skills/engineering/prototype/LOGIC.md",
+        "skills/engineering/prototype/UI.md"
+      ],
+      "sourceSections": [
+        {
+          "label": "通用原型的范围与取证",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/prototype/SKILL.md#rules-that-apply-to-both"
+        },
+        {
+          "label": "逻辑试验与可操作的状态展示",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/prototype/LOGIC.md#process"
+        },
+        {
+          "label": "比较方案时保持一致的试验入口",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/prototype/UI.md#process"
+        }
+      ]
+    },
+    {
+      "name": "research",
+      "path": "skills/engineering/research/SKILL.md",
+      "kind": "mixed",
+      "stage": [
+        "fact",
+        "experiment"
+      ],
+      "status": "partial",
+      "applies": "关键主张需要仓库或外部一手证据",
+      "reason": "原法把独立检索与后续推断分开，并要求每一条可追溯。",
+      "adaptation": "适用条件为「关键主张需要仓库或外部一手证据」。\n\n把委托缩成一个可判定问题，指出待证陈述、目标版本和会被答案改变的决定。查看谁拥有这项事实：项目行为读相关版本实现，协议或 API 读约束它的规范或官方资料，某次运行读该次原始输出。\n\n每项发现分别记录原始位置、版本或日期、实际看见的依据和适用范围。二手材料可用于找到一手来源，沿引用追到源头后才据以判断。两个来源不同意时，检查是否针对不同版本、环境或职责，仍相冲突时并列保存两份证据。\n\n返回可重新打开的研究笔记指针和未解决问题。标明哪些结论由材料直接给出、哪些是从材料推导、哪些只是假说。研究发现须经后续核查才能成为持久事实。",
+      "omissions": "保留独立取证方法，是否派发后台会话由 Pi 判定。",
+      "distribution": "engineering",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/research/SKILL.md",
+      "references": [],
+      "roleAdaptations": {
+        "fact-review": "从待审条目提取可核实的最小陈述，定位谁有权定义该事实及它对应的版本。独立打开提供的源码、规范或原始输出，用自己的观察记录逐项对照。作者和执行者对材料的复述仅可帮助定位。\n\n检查主张是否把局部例子放大为普遍结论，或把另一版本的规则挪到本次快照。证据互相冲突时并列出处和差异，读不到的一手来源记明缺口。以观察编号报告直接支持、部分支持、矛盾或待证；只读角色不写事实库。"
+      }
+    },
+    {
+      "name": "retro",
+      "path": "skills/engineering/retro/SKILL.md",
+      "kind": "method",
+      "stage": [
+        "memory",
+        "exit"
+      ],
+      "status": "integrated",
+      "applies": "出现重复返工、误判或关键约束险些遗漏",
+      "reason": "区分信息缺失、存在但不可发现、应机械校验及需要判断的规则。",
+      "adaptation": "适用条件为「出现重复返工、误判或关键约束险些遗漏」。\n\n选定本次运行或一次具体误判，直接读取当时的会话记录、仓库工件及检查输出。说明执行者当时能看见什么、选了哪条路径、额外付出了什么成本。先检查是否已经有动作能发现此错误，它有没有被正常接入、能否实际报错。\n\n按原因提出改进。入口藏得太深就提供指向原资料的条件化入口；固定可判定模式就提出可运行的检查；跨文件取舍等需要判断的约定交给审核角色。重复且对行为没有影响的常驻指令可列为删减项；缺少信息时说明所需的最小可见性。不要因一次失败就把所有提示词拉长。\n\n对每个候选给一条原始证据、触发条件、拟议改变和如何证明下次有效。按影响与可信度排序，区分个案观察、项目惯例与跨项目结论，走对应事实提议入口。",
+      "omissions": "不自动修改项目规范或发布复盘。",
+      "distribution": "engineering",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/retro/SKILL.md",
+      "references": []
+    },
+    {
+      "name": "setup-matt-pocock-skills",
+      "path": "skills/engineering/setup-matt-pocock-skills/SKILL.md",
+      "kind": "workflow",
+      "stage": [
+        "intake"
+      ],
+      "status": "excluded",
+      "applies": "不触发",
+      "reason": "核心交付为安装 Matt 的追踪器配置、标签和目录体系，与使用自有 Pi 调度的授权边界冲突。",
+      "adaptation": "无运行时指令。",
+      "omissions": "完整原始流程留在来源索引。",
+      "distribution": "engineering",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/setup-matt-pocock-skills/SKILL.md",
+      "references": [
+        "skills/engineering/setup-matt-pocock-skills/domain.md",
+        "skills/engineering/setup-matt-pocock-skills/issue-tracker-github.md",
+        "skills/engineering/setup-matt-pocock-skills/issue-tracker-gitlab.md",
+        "skills/engineering/setup-matt-pocock-skills/issue-tracker-local.md",
+        "skills/engineering/setup-matt-pocock-skills/triage-labels.md"
+      ]
+    },
+    {
+      "name": "tdd",
+      "path": "skills/engineering/tdd/SKILL.md",
+      "kind": "method",
+      "stage": [
+        "implement",
+        "review"
+      ],
+      "status": "integrated",
+      "applies": "能在公共接口观察目标行为并控制输入",
+      "reason": "纵向切片从一个能失败的真实行为出发，降低测到实现细节的风险。",
+      "adaptation": "适用条件为「能在公共接口观察目标行为并控制输入」。\n\n先读当前计划中约定的观察面、项目术语及相关决策。对每个准备测试的公开入口写一句它能发现什么、会漏掉什么，先选择能从真实调用者角度穿过最关键路径的一个。必须改变计划中约定的观察面才能测到行为时，带解释退回设计。\n\n每轮只穿透一条行为。用领域术语命名例子，给出一个可以独立求得的预期，例如任务书中的手算例、已知常量或外部规范。先执行并亲眼看到它因为目标行为缺失而失败，留下红色输出。完成能使这一例成立的最小修改，运行同一输入，再跑已有的相关检查。根据本轮结果挑下一例。把相关结构改进留给审核记录，避免在红绿循环中顺手改变其它行为。\n\n断言应经过与调用者相同的接口。测试“创建后能按标识取回”，就用公开的创建和读取操作验证返回内容。用数据库内部行数推测成功、核对私有方法调用顺序，都会让实现细节替用户行为作证。检验预期值是否重复了受测算法，否则算法和断言可以一同犯错。\n\n优先使用真实内部协作者。可控的外部存储优先用测试实例；不可控的外部服务、时钟、随机源或文件边界才使用可替换依赖。给外部操作一个窄而明确的接口，避免在万能替身中重演整个分派逻辑。交付该轮的公开入口、输入、独立预期、失败原因与通过证据。",
+      "omissions": "",
+      "distribution": "engineering",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/tdd/SKILL.md",
+      "references": [
+        "skills/engineering/tdd/mocking.md",
+        "skills/engineering/tdd/tests.md"
+      ],
+      "roleAdaptations": {
+        "correctness": "从任务书和批准方案找本次应保证的行为及已约定的观察入口。在候选快照打开测试，顺着真实使用者的调用方式检查断言。标出以直接读取内部表、私有方法、调用次数或顺序代替可见结果的例子。\n\n先独立推导预期值，再与候选测试作比较。若预期照抄实现、快照取自同一错误计算或样例不能识别一个故意写错的实现，记录具体漏检。核对改前失败、改后成功是否使用同一症状和同一输入，运行资料必须属于被审核版本。逐目标返回支持它的观察号，缺少哪段证据就精确指出。",
+        "quality": "选取改动触及的关键测试，记录每个测试能用一句领域语言说明的外部行为。检查测试是否经过调用者的公开入口，是否会因为不改变该行为的内部重组而失败。报告具体测试、导致脆弱的依赖和对维护的影响。\n\n跟踪替身所处边界。真实外部服务、非确定时间和随机性有合理替换理由。内部协作者若全部替换，检查测试是否只在证明脚本按预设顺序调用。若数据库能以实际测试实例覆盖关键语义，指出替身漏掉的具体语义。只有落实到代码位置、项目约定或可呈现反例的发现才列为问题。"
+      },
+      "sourceSections": [
+        {
+          "label": "选择测试入口",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/tdd/SKILL.md#seams-where-tests-go"
+        },
+        {
+          "label": "红绿循环与审核边界",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/tdd/SKILL.md#rules-of-the-loop"
+        },
+        {
+          "label": "实现耦合与同义反复的测试",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/tdd/tests.md#bad-tests"
+        },
+        {
+          "label": "外部依赖的替代原则",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/tdd/mocking.md#designing-for-mockability"
+        }
+      ]
+    },
+    {
+      "name": "to-spec",
+      "path": "skills/engineering/to-spec/SKILL.md",
+      "kind": "mixed",
+      "stage": [
+        "design"
+      ],
+      "status": "partial",
+      "applies": "事实核查通过后合成内部方案",
+      "reason": "复用现有讨论与工程观察，不用新的访谈重做任务书。",
+      "adaptation": "适用条件为「事实核查通过后合成内部方案」。\n\n根据已核查的讨论和真实仓库行为合成内部规格。先写使用者遇到的问题及结果，再按角色、目标和行为列出应能观察到的故事。先检查已有术语、决定和可复用的逻辑；未谈过的关键条件标出来源缺口，避免借“补全”改变原目标。\n\n设计部分明确接口和数据的约束、应有的错误语义、实现必须保留的既有行为、真正重要的备选。实现者仍可自行决定不影响这些保证的细节。选择已有且尽可能靠近使用者的测试入口，逐一写出能覆盖的场景、看不到的场景，以及独立评审可复用的样例。\n\n最后把每个目标连到一项可执行判定。单列明确的非目标、未解决的授权问题和采用替代方案会影响的条款。检查仅依赖本工件与附带指针，新会话是否能说明何时交付；规格供 Pi 持有并版本化。",
+      "omissions": "不发布规格、打外部标签或强制每个测试边界由用户批准。",
+      "distribution": "engineering",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/to-spec/SKILL.md",
+      "references": []
+    },
+    {
+      "name": "to-tickets",
+      "path": "skills/engineering/to-tickets/SKILL.md",
+      "kind": "mixed",
+      "stage": [
+        "design"
+      ],
+      "status": "partial",
+      "applies": "计划须拆成可独立实现和验收的单元",
+      "reason": "按端到端行为切分，显式表示依赖与必须由人完成的步骤。",
+      "adaptation": "适用条件为「计划须拆成可独立实现和验收的单元」。\n\n先读完整任务、已批准方案及依赖材料。选择一个能从真实入口走到可见结果的最窄切片，每个单元大小以一个新会话能完整理解与验证为限。若已有结构阻碍实现，先拆出可独立验证的前置整理。\n\n写出每个单元交付的行为、负责的目标、受约束的接口、具体的完成判据，以及阻止它开工的单元。不要把“做数据层”“做展示层”当作可独立交付。若一次机械改动会同时破坏许多调用方，采用先兼容新旧形式、分组迁移调用者、证明旧形式已无使用者、最后再收缩的顺序。\n\n检查依赖无环，能开工的单元具备全部输入。描述面向行为而非易过时的具体代码，只有可精确冻结关键语义的状态图或类型片段值得收入。把需要人工授权的动作与执行实现分开，检查所有任务书目标都有归属。",
+      "omissions": "输出内部计划，不创建或更新外部工单。",
+      "distribution": "engineering",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/to-tickets/SKILL.md",
+      "references": [],
+      "sourceSections": [
+        {
+          "label": "纵向切片与扩大后收缩",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/to-tickets/SKILL.md#3-draft-vertical-slices"
+        },
+        {
+          "label": "验证范围、阻塞和形状",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/to-tickets/SKILL.md#4-quiz-the-user"
+        }
+      ]
+    },
+    {
+      "name": "triage",
+      "path": "skills/engineering/triage/SKILL.md",
+      "kind": "mixed",
+      "stage": [
+        "intake",
+        "fact"
+      ],
+      "status": "partial",
+      "applies": "接收任务并需验证是否可落实",
+      "reason": "上游分类、去重、追既有决定的方法适合两个明确入口共用。",
+      "adaptation": "适用条件为「接收任务并需验证是否可落实」。\n\n沿用任务书已经选择的入口。先检查原始报告、项目现状、术语与相应历史决定，分别找到能支持用户描述的证据以及可能的反例。修复请求追到实际症状，新增请求核实现有能力边界。附带代码只作为一项待评价的证据。\n\n追查相似、已处理或以前明确判为范围外的工作。记录旧决定的理由和适用范围，看看新请求是否真的相同，是否给出足以重新审视的材料。需要更多事实时先查可读取的来源，将仍缺的产品决定与可自行查明的问题分开。\n\n为下游写可经受实现细节变化的简报。指明预期行为、明确排除的范围、可验收输入和输出、来源与未解决的问题。决定是否足以进入设计，若依据不足，注明补哪一项材料可继续。",
+      "omissions": "不根据文字重新选入口，不维护上游标签或工单。",
+      "distribution": "engineering",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/triage/SKILL.md",
+      "references": [
+        "skills/engineering/triage/AGENT-BRIEF.md",
+        "skills/engineering/triage/OUT-OF-SCOPE.md"
+      ],
+      "sourceSections": [
+        {
+          "label": "分类与就绪状态",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/triage/SKILL.md#roles"
+        },
+        {
+          "label": "行为化的完整验收",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/triage/AGENT-BRIEF.md#complete-acceptance-criteria"
+        },
+        {
+          "label": "保留旧范围决定的依据",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/triage/OUT-OF-SCOPE.md#writing-the-reason"
+        }
+      ]
+    },
+    {
+      "name": "wayfinder",
+      "path": "skills/engineering/wayfinder/SKILL.md",
+      "kind": "workflow",
+      "stage": [
+        "design"
+      ],
+      "status": "partial",
+      "applies": "设计有多个相依的未决问题",
+      "reason": "原方法先拆决定的依赖关系，再沿可回答的问题推进。",
+      "adaptation": "适用条件为「设计有多个相依的未决问题」。用验收语言定义终点。把未知项写成能获得答案的决策问题，标明每个答案会解开什么后继选择。先处理无前置且会排除最多歧义的一个，优先检索材料或做可判定的实验。更新已知、剩余和被排除的路线。达到能产出可执行方案的粒度后停止扩展问题。",
+      "omissions": "不启用原交互调度器。",
+      "distribution": "engineering",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/wayfinder/SKILL.md",
+      "references": []
+    },
+    {
+      "name": "wizard",
+      "path": "skills/engineering/wizard/SKILL.md",
+      "kind": "mixed",
+      "stage": [
+        "escalate"
+      ],
+      "status": "partial",
+      "applies": "阻塞来自只有特定人能完成的操作",
+      "reason": "保留手工步骤的依赖和结果校验，适用于各类真实的人为阻塞。",
+      "adaptation": "适用条件为「阻塞来自只有特定人能完成的操作」。\n\n仅处理真实需要个人身份、权限、设备或现场动作的阻塞。先查项目配置、正式说明、当前状态和目标状态，列清机器已经完成的部分，以及还需人工完成的动作及依赖。每一步注明产生什么结果、放在哪里、是公开值还是秘密。\n\n对每个手工动作查证实际入口，写明如何抵达、怎样判断完成、重复执行会发生什么。缺少可靠的界面路径就明确缺口，避免猜测按钮或要求对方反复试错。敏感值直接进入指定的安全渠道，退出包只请求配置完成的回执。不可逆步骤标出影响与必要授权。\n\n交付按依赖排序的最短操作清单和每步的可观察结果。核对所有需要消费这些值的地方都有对应来源，控制器能借哪一项回执重新开始。只有任务本身要求可重复运行的向导时，才把生成脚本当成交付物。",
+      "omissions": "通用退出说明不自动生成 Bash 脚本，不收集或上传密钥。",
+      "distribution": "engineering",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/wizard/SKILL.md",
+      "references": [
+        "skills/engineering/wizard/template.sh"
+      ]
+    },
+    {
+      "name": "chief-of-staff",
+      "path": "skills/in-progress/chief-of-staff/SKILL.md",
+      "kind": "mixed",
+      "stage": [
+        "memory"
+      ],
+      "status": "partial",
+      "applies": "处理跨会话知识、历史修订或独立角色交接",
+      "reason": "源方法要求新上下文、以引用传递知识，并给历史判断加日期和版本。",
+      "adaptation": "适用条件为「处理跨会话知识、历史修订或独立角色交接」。\n\n先查询与待决问题有关的历史记录、原始纠正与版本指针。交接给下一角色时传它要解决的问题、可读材料和必要的版本引用。将长期信息保存在可以复查的项目记录中，避免只存在于一段会话的总结里。\n\n处理新观察时先找它会改变的现有记录和关联条目。逐项注明日期、适用提交和原始出处，记录何人何时作过哪项决定。发现过期内容时提议新增继承记录、标明被替代项，保留历史。跨项目规则还需说明哪些项目、条件和证据支持扩大适用范围。\n\n检查断链、互相矛盾的陈述、孤立条目及随版本失效的结论。把发现整理为带动作、证据和影响范围的事实提案；需要用户裁决的项留在退出材料。任何长期计划或周期运行须另有授权。",
+      "omissions": "常驻总管、周期任务、自行更新 wiki、对执行者的全面接管不迁移。",
+      "distribution": "in-progress",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/in-progress/chief-of-staff/SKILL.md",
+      "references": []
+    },
+    {
+      "name": "claude-handoff",
+      "path": "skills/in-progress/claude-handoff/SKILL.md",
+      "kind": "workflow",
+      "stage": [
+        "escalate"
+      ],
+      "status": "excluded",
+      "applies": "不触发",
+      "reason": "上游特有的增量是调用 Claude CLI 提交下一段提示并再启动会话。Pi 采用自己的派发，通用交接已由 handoff 提供。",
+      "adaptation": "无运行时指令。",
+      "omissions": "完整原始流程留在来源索引。",
+      "distribution": "in-progress",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/in-progress/claude-handoff/SKILL.md",
+      "references": []
+    },
+    {
+      "name": "loop-me",
+      "path": "skills/in-progress/loop-me/SKILL.md",
+      "kind": "mixed",
+      "stage": [
+        "design",
+        "escalate"
+      ],
+      "status": "partial",
+      "applies": "设计的对象是可多次运行的流程",
+      "reason": "具体词汇能迫使设计说明何时启动、何时需要人以及人要决定什么。",
+      "adaptation": "适用条件为「设计的对象是可多次运行的流程」。\n\n只在当前设计的对象确实是重复发生的活动时，引入流程术语。写出启动一次运行的具体事件或时间条件、它试图实现的结果、下一次运行怎样辨别前一次已经完成。优先采用已经存在的可观察触发信号。\n\n逐个审视人工节点。先执行能确定的准备工作，只有持有特定知识或权限的人能决定的部分才构成人工检查点。准备简短的决定材料，说明已经产出什么、依据是什么、待决定什么，并保留向下追到证据的引用。收到授权前停在那个边界。\n\n从实施者角度读回流程。确认进入和退出条件、需要重入的位置、上次结果在哪里。没有周期任务、AI 或人工检查需求的流程保持简单；记录未决点由谁回答以及答案会改变的分支。",
+      "omissions": "不建私有 workflows 目录，不自动变更事实或规格。",
+      "distribution": "in-progress",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/in-progress/loop-me/SKILL.md",
+      "references": []
+    },
+    {
+      "name": "setup-ts-deep-modules",
+      "path": "skills/in-progress/setup-ts-deep-modules/SKILL.md",
+      "kind": "mixed",
+      "stage": [
+        "review"
+      ],
+      "status": "partial",
+      "applies": "项目明确规定模块公共界面或请求边界约束",
+      "reason": "原设置中可迁移的部分是用正反例证明边界约束实际生效。",
+      "adaptation": "适用条件为「项目明确规定模块公共界面或请求边界约束」。\n\n先识别项目已经承诺的公开入口与内部实现，查现有边界规则并标出真正消费这些入口的代码。一个模块可以有多个小入口。选取实际用例说明哪些行为对外可见，哪些只供模块内协作。\n\n检验四类案例：外部调用经过公开接口、内部协作可自由组合、行为测试只通过调用者也能访问的入口、项目声明禁止的依赖环被识别。具体语言或目录布局由项目决定。构造一项合法访问与一项明确越界的访问比较结果，必要时加入本模块测试夹具的合法例外。\n\n在隔离试样中确认真正的检查入口能接受合法用法并拒绝越界。清理试样后再跑当前版本检查，给出涉及的边界、命令和证据。若任务只要求审核，就核验已有候选输出，并明确缺失的观察。",
+      "omissions": "不安装 TS 分析器，不把包目录或层级方案强加给项目。",
+      "distribution": "in-progress",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/in-progress/setup-ts-deep-modules/SKILL.md",
+      "references": [
+        "skills/in-progress/setup-ts-deep-modules/dependency-cruiser.config.cjs"
+      ],
+      "roleAdaptations": {
+        "quality": "只有存在明文边界约束时才检查。读取固定版本的公开入口、内部依赖、模块间调用及行为测试。分别挑一个外界消费入口、模块内部调用和测试使用入口的例子，说明项目实际规则允许或禁止什么。\n\n核对候选证据是否展示合法路径通过、明确定义的非法访问被拒，要求无环时是否还有相应反例。若只是配置文本或静态推断，标明未证实真实检查入口生效。报告具体边界、候选位置和证据缺口，只读取材料。"
+      }
+    },
+    {
+      "name": "software-factory",
+      "path": "skills/in-progress/software-factory/SKILL.md",
+      "kind": "mixed",
+      "stage": [
+        "design"
+      ],
+      "status": "partial",
+      "applies": "任务涉及自动化的多角色运行或状态机",
+      "reason": "源方法从实际积压的问题出发，按触发、单次运行及它产生的后果确定流程。",
+      "adaptation": "适用条件为「任务涉及自动化的多角色运行或状态机」。\n\n从实际等待处理的问题倒推一项有价值的任务。先写触发条件和一次运行应交付的观察结果，核查数据和权限现在由谁持有。需要哪些服务就列哪些，明确有意留空的角色；选择当前最小可工作的闭环。\n\n为每种运行说明谁触发、输入状态来自哪里、这一轮允许读写什么、哪项持久结果会触发什么后继。解释重复事件、失败及已完成记录如何判断。日志只能用于检查过程，影响后续决定的结果需要写到明确的受控状态。\n\n为失败写不同的终点。可修正的工作交给限定范围的返工，重复失败设有限出口；需要权限或用户作决定时结束这次运行，下一次带新授权重入。用一条真实任务追过整个链，确认没有依靠同一执行者给自己的结论放行。",
+      "omissions": "不指定工单服务、Git 托管平台或远端部署，亦不强制改项目术语。",
+      "distribution": "in-progress",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/in-progress/software-factory/SKILL.md",
+      "references": [
+        "skills/in-progress/software-factory/EXAMPLE-TASKS.md",
+        "skills/in-progress/software-factory/GIT-HOSTS.md",
+        "skills/in-progress/software-factory/OBSERVABILITY-PLATFORMS.md",
+        "skills/in-progress/software-factory/RUNNERS.md",
+        "skills/in-progress/software-factory/TICKET-TRACKERS.md"
+      ],
+      "sourceSections": [
+        {
+          "label": "逐个说明触发、行为和后继",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/in-progress/software-factory/SKILL.md#question-every-task"
+        },
+        {
+          "label": "返工与停止",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/in-progress/software-factory/EXAMPLE-TASKS.md#failed-automated-reviews-sit-unfixed"
+        },
+        {
+          "label": "自动修复避免自循环",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/in-progress/software-factory/EXAMPLE-TASKS.md#the-factorys-own-runs-fail"
+        }
+      ]
+    },
+    {
+      "name": "writing-beats",
+      "path": "skills/in-progress/writing-beats/SKILL.md",
+      "kind": "mixed",
+      "stage": [
+        "implement"
+      ],
+      "status": "partial",
+      "applies": "执行单元明确要求向人解释一个流程、制作教程或演示",
+      "reason": "叙述可以像状态机一样用当前读者已掌握的概念约束下一步。",
+      "adaptation": "适用条件为「执行单元明确要求向人解释一个流程、制作教程或演示」。\n\n从固定素材与交付目标出发，先列目标读者进入时已经理解的概念。提出两三种可从这些概念出发的开头，各附它将建立的新概念与随后能回答的问题。用任务目的选一条开头；材料不足时先标记缺口。\n\n每次推进一个有独立作用的小段。先重读当前文稿，检查用户可能加入的改动，再考虑从已有概念能走到哪几种不同后继。每段说明它依赖什么、给读者建立什么；专有名词和它代表的概念应在此建立联系。\n\n当读者已经能解释目标过程或作出要求的判断，即可结束。回查段落之间是否使用尚未建立的想法，有无只为消耗素材而加入的段落。剩余片段可留在原料中。",
+      "omissions": "人逐段确认的写作模式替换为授权范围内自主选择。",
+      "distribution": "in-progress",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/in-progress/writing-beats/SKILL.md",
+      "references": []
+    },
+    {
+      "name": "writing-fragments",
+      "path": "skills/in-progress/writing-fragments/SKILL.md",
+      "kind": "method",
+      "stage": [
+        "design"
+      ],
+      "status": "integrated",
+      "applies": "任务要求写作或演示，原始素材尚未整理",
+      "reason": "原流程保留原话、反例和不完整观察，避免过早用提纲筛掉材料。",
+      "adaptation": "适用条件为「任务要求写作或演示，原始素材尚未整理」。\n\n从任务原话和现有材料开始收集能独立使用的片段，一条只记录一个鲜明的说法、例子、反常观察、问题或仍未成形的想法。尽早保存原始表达，附能够找回它的出处，保留原作者实际语气与不确定性。\n\n探索时扩大材料范围，追问具体场景、能反驳这一主张的例子以及为什么值得告诉目标读者。避免边采集边把它强塞进一个预设提纲。若一个片段同时混入多种主张，将它分开并保留相互关系。\n\n素材有新增、修订或合并时先读当前内容，按资源已约定的位置更新草稿，保留原材料与后续成品的界限。事实性主张须另经核查，只有作者立场或假设的片段要带相应标记。",
+      "omissions": "不主动发起写作访谈。",
+      "distribution": "in-progress",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/in-progress/writing-fragments/SKILL.md",
+      "references": []
+    },
+    {
+      "name": "writing-shape",
+      "path": "skills/in-progress/writing-shape/SKILL.md",
+      "kind": "mixed",
+      "stage": [
+        "implement"
+      ],
+      "status": "partial",
+      "applies": "执行单元明确需要面向读者组织完整的文稿",
+      "reason": "从固定原材料组织叙述，保留材料和成品之间的审计边界。",
+      "adaptation": "适用条件为「执行单元明确需要面向读者组织完整的文稿」。\n\n完整阅读固定的素材集合，将其保留为只读输入。确认读者已经知道哪些概念、最终要理解或决定什么，再提出能把读者带到那个结果的结构。全文依赖的概念要么来自先验，要么在用到它之前有一个具体片段建立它。\n\n每个段落从原料取出具体观察或例证，决定使用叙述、对照、步骤或示意中的哪一种最合适。若一处缺口需要新事实，标出它的作用和待核查事项。不要借写作之便将猜测写成已知事实。\n\n在独立成稿位置逐段形成文稿。再写一段前重读成品，保留用户修订；单段需要返工时只改该段及确实受影响的联系。最后查每段的实际贡献、术语第一次出现的位置和证据归属，交付保留素材指针的成品。",
+      "omissions": "改用执行单元既定输出位置；不要求用户逐段选稿。",
+      "distribution": "in-progress",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/in-progress/writing-shape/SKILL.md",
+      "references": []
+    },
+    {
+      "name": "git-guardrails-claude-code",
+      "path": "skills/misc/git-guardrails-claude-code/SKILL.md",
+      "kind": "workflow",
+      "stage": [
+        "implement"
+      ],
+      "status": "excluded",
+      "applies": "不触发",
+      "reason": "上游的保证来自 Claude 的工具调用前钩子和拒绝命令的脚本。仅给执行者提示无法兑现同一保证。",
+      "adaptation": "无运行时指令。",
+      "omissions": "完整原始流程留在来源索引。",
+      "distribution": "misc",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/misc/git-guardrails-claude-code/SKILL.md",
+      "references": []
+    },
+    {
+      "name": "migrate-to-shoehorn",
+      "path": "skills/misc/migrate-to-shoehorn/SKILL.md",
+      "kind": "method",
+      "stage": [
+        "implement"
+      ],
+      "status": "excluded",
+      "applies": "不触发",
+      "reason": "唯一交付是把 TypeScript 中的特定测试断言迁移至指定库。去掉指定语言及目标库，会改变任务本身。",
+      "adaptation": "无运行时指令。",
+      "omissions": "完整原始流程留在来源索引。",
+      "distribution": "misc",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/misc/migrate-to-shoehorn/SKILL.md",
+      "references": []
+    },
+    {
+      "name": "scaffold-exercises",
+      "path": "skills/misc/scaffold-exercises/SKILL.md",
+      "kind": "workflow",
+      "stage": [
+        "implement"
+      ],
+      "status": "excluded",
+      "applies": "不触发",
+      "reason": "核心交付为课程练习目录、规范化题号及教学模板；缺少通用工程任务触发条件。",
+      "adaptation": "无运行时指令。",
+      "omissions": "完整原始流程留在来源索引。",
+      "distribution": "misc",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/misc/scaffold-exercises/SKILL.md",
+      "references": []
+    },
+    {
+      "name": "setup-pre-commit",
+      "path": "skills/misc/setup-pre-commit/SKILL.md",
+      "kind": "mixed",
+      "stage": [
+        "review"
+      ],
+      "status": "partial",
+      "applies": "任务明确要求设置或核实现有的提交前自动检查",
+      "reason": "保留验证门禁已接入真实入口的方法，删除工具链默认值。",
+      "adaptation": "适用条件为「任务明确要求设置或核实现有的提交前自动检查」。\n\n只有任务书要求提交前检查时才使用。识别仓库实际采用的工具、已有钩子和已有检查入口，确定哪些规则针对暂存文件，哪些规则需要整项目上下文。检查现有配置能否复用，避免以一套新工具替换项目约定。\n\n沿真实提交路径核对钩子是否可触发、任务的执行顺序、选中文件的范围及退出码的传播。对于用户声称能阻止提交的规则，找一个应被拒的最小试样和一个应该通过的试样；核实修复或格式化不会顺手带入未暂存的工作。\n\n返回触发方式、运行的检查、失败或通过的输出和恢复后的状态。只读审核只能核查已有试样与运行回执，缺少真实触发证据时就说清所缺。是否安装新钩子由任务书授权。",
+      "omissions": "不自动安装钩子或引入新的格式化依赖。",
+      "distribution": "misc",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/misc/setup-pre-commit/SKILL.md",
+      "references": [],
+      "roleAdaptations": {
+        "quality": "先读候选修订和项目既有设置，说明改变了哪一个真实提交入口，哪些检查仅作用于暂存文件、哪些必须检查全项目。核实配置可由实际运行入口到达，正常和失败的返回码对提交有何影响。\n\n读取该版本等价的正常样例及故意失败样例的运行观察。区分手动执行一个检查成功、提交入口真正触发检查、检查报错真的阻止提交这三件事；没有据以证明其中一环的材料就定位缺口。报告范围和副作用时只引自己的只读观察与候选运行证据。"
+      }
+    },
+    {
+      "name": "grill-me",
+      "path": "skills/productivity/grill-me/SKILL.md",
+      "kind": "workflow",
+      "stage": [
+        "design"
+      ],
+      "status": "partial",
+      "applies": "需要对一个决定做无持久副作用的追问",
+      "reason": "源文件是 grilling 的别名，保留可追溯来源。",
+      "adaptation": "适用条件为「需要对一个决定做无持久副作用的追问」。此入口的完整方法由 grilling 承担。同一次派发只使用一份追问指令。",
+      "omissions": "原交互入口省略，此条不另计作一种独立方法。",
+      "distribution": "productivity",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/productivity/grill-me/SKILL.md",
+      "references": []
+    },
+    {
+      "name": "grilling",
+      "path": "skills/productivity/grilling/SKILL.md",
+      "kind": "mixed",
+      "stage": [
+        "design",
+        "escalate"
+      ],
+      "status": "partial",
+      "applies": "存在真正影响设计的多义选择",
+      "reason": "原方法先求已满足前置的问题，只把需要权威决定的取舍留给人。",
+      "adaptation": "适用条件为「存在真正影响设计的多义选择」。\n\n把未决设计写成一棵决定树。先找哪些决定会改变后续问题，再找所有前置条件已经成立的分支。将需要环境事实的问题交给可验证的资料或取证任务，保留只有偏好、授权或已存事实冲突才能决定的部分。\n\n一轮只处理已经可回答的问题。用独立的问题编号，分别写清一个具体决定、可行的选项、推荐项和理由。一个选项的答案会影响另一个问题时，将后者放到下一轮。事实调查未结束只阻塞它自己的后继，互不依赖的决定仍能继续。\n\n普通可逆的实现细节在既定授权内自由选择。用户独有的取舍写成足以直接裁决的退出包。得到决定后重新计算仍有效的前沿，记录被排除的分支及原因；检查不存在继续实现时必须猜测的前提。",
+      "omissions": "取消每次都要求用户确认共同理解的原交互模式。",
+      "distribution": "productivity",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/productivity/grilling/SKILL.md",
+      "references": []
+    },
+    {
+      "name": "handoff",
+      "path": "skills/productivity/handoff/SKILL.md",
+      "kind": "method",
+      "stage": [
+        "escalate",
+        "exit"
+      ],
+      "status": "integrated",
+      "applies": "工作要由新角色接手或已退出等待裁决",
+      "reason": "交接只传下一位能据此行动的目标、证据及上下文指针。",
+      "adaptation": "适用条件为「工作要由新角色接手或已退出等待裁决」。\n\n先写新角色的任务、读取的起点、权限与必须返回的结果。选择能帮助它独立启动的上下文，给现存任务书、计划、事实版本、相关差异、运行证据及研究笔记指针。保留未解阻塞与已尝试的手段；不要展开无助于这一任务的整段对话。\n\n交接给执行或设计者时，说明当前进度、最后已证实的状态和接下来的决定。交接给独立审核者时，给同一基线、候选、用户条款与原始观察，避免把实施者自评或另一审核者的裁决预塞为答案。\n\n检查所有指针在接手者权限范围内可读，标出必要材料的版本及用途。去除凭据与不必要的个人数据，只保留恢复条件和可复核的引用。下一角色不足以开工时，明列缺失输入。",
+      "omissions": "后续工具与技能由 Pi 选择。",
+      "distribution": "productivity",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/productivity/handoff/SKILL.md",
+      "references": []
+    },
+    {
+      "name": "teach",
+      "path": "skills/productivity/teach/SKILL.md",
+      "kind": "workflow",
+      "stage": [
+        "design"
+      ],
+      "status": "excluded",
+      "applies": "不触发",
+      "reason": "目标是跨会话教授一项技能，需要课程、检索练习以及长期学习记录。两种工程任务入口均未承诺教学服务。",
+      "adaptation": "无运行时指令。",
+      "omissions": "完整原始流程留在来源索引。",
+      "distribution": "productivity",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/productivity/teach/SKILL.md",
+      "references": [
+        "skills/productivity/teach/GLOSSARY-FORMAT.md",
+        "skills/productivity/teach/LEARNING-RECORD-FORMAT.md",
+        "skills/productivity/teach/MISSION-FORMAT.md",
+        "skills/productivity/teach/RESOURCES-FORMAT.md"
+      ]
+    },
+    {
+      "name": "to-questionnaire",
+      "path": "skills/productivity/to-questionnaire/SKILL.md",
+      "kind": "method",
+      "stage": [
+        "escalate"
+      ],
+      "status": "integrated",
+      "applies": "缺少不属于本项目且只能由特定人提供的知识",
+      "reason": "原提示词从接收者掌握的知识与决策缺口反推最短问题集。",
+      "adaptation": "适用条件为「缺少不属于本项目且只能由特定人提供的知识」。\n\n先从“把问题给谁”确定对方掌握而用户暂缺的知识。写出需要从对方得到的事实或决定，以及答案将如何解除阻塞。能在已有资料中查证的部分先解决，避免转嫁调查工作。\n\n用对方不在当前会话里也能理解的一段背景开头。按重要性列问题，一题只问一件事；问题多时按主题组织，每题容许回答“不知道”并提出原始材料。问法和细节随接收者职责调整，相关性不明显时再补一句为什么需要它。\n\n回查每个阻塞决定是否有对应问题，给出允许部分作答的方式、最小可用回执和任意补充位置。提供用户可转交的草案，控制器结束本轮并等待带答案的新输入。",
+      "omissions": "不代用户对外发问。",
+      "distribution": "productivity",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/productivity/to-questionnaire/SKILL.md",
+      "references": []
+    },
+    {
+      "name": "wait-what",
+      "path": "skills/productivity/wait-what/SKILL.md",
+      "kind": "method",
+      "stage": [
+        "escalate",
+        "exit"
+      ],
+      "status": "integrated",
+      "applies": "需要向用户解释模糊的当前状态或待定选择",
+      "reason": "用局部背景和项目自身术语复述，可让人无需翻整段历史就能决定。",
+      "adaptation": "适用条件为「需要向用户解释模糊的当前状态或待定选择」。\n\n先定位接收者刚才没能理解的那项判断。回到能由双方承认的最后一步，用一两句交代原任务的目标及目前可观察到的状态，使用该语境中已批准的名称；一个句子只表达一个动作或判断。\n\n把难点改写成一个具体实例：输入是什么，出现了什么结果，哪个条件因此满足或尚缺。若仍需要选择，说明由谁决定以及不同选择会怎样改变交付。不引入旁支概念，让对方能够直接指出自己对哪一步持不同意见。",
+      "omissions": "",
+      "distribution": "productivity",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/productivity/wait-what/SKILL.md",
+      "references": []
+    },
+    {
+      "name": "writing-for-agents",
+      "path": "skills/productivity/writing-for-agents/SKILL.md",
+      "kind": "method",
+      "stage": [
+        "design",
+        "escalate"
+      ],
+      "status": "integrated",
+      "applies": "产物是执行计划、评审委托或供另一角色消费的指令",
+      "reason": "原方法用明确的分支触发、上下文指针和逐步完成条件降低结果波动。",
+      "adaptation": "适用条件为「产物是执行计划、评审委托或供另一角色消费的指令」。\n\n先分清供代理执行的有序步骤与按条件查询的资料。常驻内容只保留每次都需要的约束和下一步；每个外部引用都写明触发它的具体分支和它能回答的事。合并只是在重述同一触发条件的同义句，保留不同失败情形之间真正有影响的差异。\n\n将一个概念的定义、规则和例外放在一起。在当前阶段必须用到的决策信息直接给出，少数分支才需要的标准和例子通过带条件的指针读取。若指针常被错过，先改它的触发措辞，只有仍不可靠才考虑把大段资料提前装入。\n\n每步以可检查且覆盖该步全部对象的完成条件收尾，说明返回哪些工件、观察或未决项。先把条件说清，仍存在过早跳向下一步的真实问题才在角色交接处拆分上下文。按角色隔离执行与独立审核，保留同一证据和授权事实的稳定引用。",
+      "omissions": "",
+      "distribution": "productivity",
+      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/productivity/writing-for-agents/SKILL.md",
+      "references": [
+        "skills/productivity/writing-for-agents/SKILL-MECHANICS.md"
+      ],
+      "sourceSections": [
+        {
+          "label": "引用与触发条件",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/productivity/writing-for-agents/SKILL.md#context-pointers"
+        },
+        {
+          "label": "步骤与延迟加载材料",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/productivity/writing-for-agents/SKILL.md#information-hierarchy"
+        },
+        {
+          "label": "可判别的完成条件",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/productivity/writing-for-agents/SKILL.md#steps-and-completion-criteria"
+        },
+        {
+          "label": "调用方式与提示词边界",
+          "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/productivity/writing-for-agents/SKILL-MECHANICS.md#skill-mechanics"
+        }
+      ]
+    }
+  ]
+}

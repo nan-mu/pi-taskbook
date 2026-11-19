@@ -3,7 +3,7 @@ import type { CheckedFact } from "./fact-check.ts";
 import type { Phase } from "./workflow.ts";
 
 export type TaskItem = { id: string; text: string; userDecision?: FactDecision };
-export type FactConflict = { factId: string; observation: string };
+export type FactConflict = { factId: string; observation: string; projectVersion?: number };
 export type FactDecision = { factId: string; action: "keep" | "replace"; text: string };
 
 function linesOutsideFences(markdown: string) {

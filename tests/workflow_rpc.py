@@ -41,17 +41,24 @@ def review_turn(packet, messages, body):
     transcript = json.dumps(messages, ensure_ascii=False)
     assert private_memory not in transcript
     assert "prior_reviewer_private_marker" not in transcript
-    assert "UNUSED ROUTER" not in str(messages[0]["content"])
+    assert "UNTRUSTED CHECKOUT CONTENT" not in transcript
     spec = role == "correctness"
     if role == "fact-review":
         assert packet["revision"] == packet["base"]
-        assert "PSTACK METHOD PROVE IT WORKS" in str(messages[0]["content"])
-        assert "1. Investigate the question against" in str(messages[0]["content"])
-        assert "MATT METHOD DIAGNOSIS" not in str(messages[0]["content"])
+        assert "通用方法 pstack:principle-prove-it-works" in str(messages[0]["content"])
+        assert "通用方法 matt:domain-modeling" in str(messages[0]["content"])
     else:
-        assert ("SPEC INPUT ONLY" if spec else "STANDARDS INPUT ONLY") in str(messages[0]["content"])
-        assert ("STANDARDS INPUT ONLY" if spec else "SPEC INPUT ONLY") not in str(messages[0]["content"])
+        focus, other = ("仅审核任务书与实现是否吻合", "仅审核候选版本是否符合项目规范")
+        assert (focus if spec else other) in str(messages[0]["content"])
+        assert (other if spec else focus) not in str(messages[0]["content"])
     book = str(packet["taskbook"])
+    if any(task in book for task in route_tasks):
+        assert body["model"] == ("quality-review" if role == "quality" else "review"), body["model"]
+        if spec:
+            assert any(i["id"] == "PLAN1" for i in packet["objectives"]), packet["objectives"]
+    if "design-question" in book and spec:
+        assert any(item["answer"] == user_answer for item in packet["evidence"]["userAnswers"])
+        assert any(i["id"] == "ANSWER1" and user_answer in i["text"] for i in packet["objectives"])
     scenario = "LayoutReview" in book
     conflict_case = "ConflictReview" in book
     if messages[-1]["role"] != "tool":
@@ -91,6 +98,9 @@ def review_turn(packet, messages, body):
             status = "fact-conflict"
         reason = summary if status != "pass" else "Confirmed against the inspected candidate."
         item = {"id": ident, "status": status, "reason": reason, "evidence": receipt[1]}
+        if (role == "fact-review" and status == "pass" and re.fullmatch(r"P[0-9]+", ident)
+                and packet["evidence"].get("classifyFactChecks")):
+            item["memoryUse"] = "change-evidence" if ident == "P2" and "design-route" in book else "independent"
         if scenario and ident == "G2" and spec:
             runs = packet["runSources"]
             assert runs and all(run["revision"] == packet["revision"] for run in runs)
@@ -145,10 +155,118 @@ def layout_implementation(state, messages):
     if turn == 3:
         ident, sampled = seen_receipts[attempt]
         return tool_call("taskbook_report", {
-            "attempt": attempt, "outcome": "pass", "summary": "Prepared the requested build layout.",
+            "attempt": attempt, "outcome": "pass", "summary": "Prepared the requested build layout.", "planVersion": state["plan"]["version"],
             "evidence": ["build_method.py"], "observedRuns": [{"receipt": ident, "observed": sampled}],
         })
     return {"role": "assistant", "content": "Submitted the revision."}
+
+
+design_calls = []
+route_tasks = {"design-route", "design-question"}
+plan_gap = "The old plan assumes measurements always have a numeric value."
+user_question = "Should missing values produce a distinct output?"
+user_answer = "Use an explicit no-value marker in measurement output."
+
+
+def design_plan(state, revised=False):
+    action = "Measure values using a separate no-value marker." if revised else "Measure the numeric value."
+    return {"steps": [{"id": "measure", "action": action,
+                       "checks": "Run measure.py with and without an input.",
+                       "targets": [item["id"] for item in state["goals"] + state["delivery"]]}]}
+
+
+def design_branch_turn(state, messages, body):
+    phase = state["phase"]
+    phase_tools = {t["function"]["name"] for t in body["tools"]}
+    turn = attempts.get(state["attempt"], 0)
+    attempts[state["attempt"]] = turn + 1
+    task = state["task"]
+    last = str(messages[-1]["content"])
+    initial_design = phase == "design" and not state.get("planGap") and not state.get("userAnswers")
+    if phase == "design":
+        assert body["model"] == ("fixture" if task == "same-model" else "design"), body["model"]
+        assert {"taskbook_consult", "taskbook_probe"}.issubset(phase_tools)
+        if task == "design-route":
+            independent = [json.loads(item["text"])["statement"] for item in state["facts"]
+                           if item["id"].startswith("project:fact:observation-")]
+            assert measurement_prefix in independent and missing_input_evidence not in independent, independent
+        if initial_design and task == "design-question":
+            report = {"attempt":state["attempt"], "outcome":"pass", "summary":"Proposed plan", "evidence":["measure.py"]}
+            if turn == 0:
+                return tool_call("taskbook_report", report)
+            if turn == 1:
+                assert "plan.steps" in last, last
+                report["plan"] = design_plan(state)
+                report["plan"]["steps"][0]["targets"] = [state["goals"][0]["id"]]
+                return tool_call("taskbook_report", report)
+            if turn == 2:
+                assert "未覆盖" in last, last
+            if turn > 2:
+                return {"role":"assistant","content":"Initial plan accepted."}
+        elif initial_design and task == "design-route":
+            if turn == 0:
+                return tool_call("taskbook_consult", {"attempt": state["attempt"], "question": "What is the measurement input contract?"})
+            if turn == 1:
+                assert "Consulted the baseline" in last, last
+                return tool_call("taskbook_probe", {"attempt": state["attempt"],
+                    "hypothesis": "The baseline accepts an integer input.",
+                    "criterion": "The command prints measurement=7 and exits successfully.",
+                    "argv": ["python3", "-c",
+                             "from pathlib import Path; import subprocess,sys; "
+                             "Path('probe-only.txt').write_text('experiment'); "
+                             "subprocess.run([sys.executable, 'measure.py', '7'], check=True)"]})
+            if turn == 2:
+                assert "measurement=7" in last, last
+                return tool_call("taskbook_method", {"name": "matt:codebase-design"})
+            if turn == 3:
+                assert ":skills/engineering/codebase-design/SKILL.md" in last and "调用" in last, last
+                return tool_call("taskbook_method", {"name": "matt:tdd"})
+            if turn == 4:
+                assert "当前阶段没有" in last, last
+            if turn > 4:
+                return {"role": "assistant", "content": "Initial investigation is complete."}
+        elif turn:
+            return {"role": "assistant", "content": "The design request is recorded."}
+        if task == "design-question" and not initial_design and not state.get("userAnswers"):
+            return tool_call("taskbook_report", {"attempt": state["attempt"], "outcome": "needs-user",
+                "summary": user_question, "evidence": [plan_gap]})
+        if not initial_design and not state.get("userAnswers"):
+            assert plan_gap in str(state["planGap"]), state
+        if state.get("userAnswers"):
+            assert user_answer in str(state["userAnswers"])
+        plan = design_plan(state, revised=not initial_design)
+        return tool_call("taskbook_report", {"attempt": state["attempt"], "outcome": "pass",
+            "summary": "Internal implementation plan", "evidence": ["measure.py"], "plan": plan})
+
+    assert phase == "implement" and body["model"] == ("fixture" if task == "same-model" else "worker")
+    assert not {"taskbook_consult","taskbook_probe"}.intersection(phase_tools)
+    version = state["plan"]["version"]
+    report = {"attempt": state["attempt"], "outcome": "pass", "summary": "Implemented the revised plan.",
+              "evidence": ["measure.py"], "planVersion": version}
+    if version == 1 and not turn:
+        report.update(outcome="plan-gap", summary=plan_gap,
+            gap={"stepId": "measure", "observation": plan_gap, "question": "How should a missing value be represented?"})
+    elif version == 2 and turn == 0:
+        assert "no-value" in str(state["plan"]["steps"])
+        report["planVersion"] = 1
+    elif version == 2 and turn == 1:
+        assert "planVersion" in last and "已登记" not in last, last
+    else:
+        assert "已登记" in last, last
+        return {"role":"assistant","content":"Report accepted."}
+    return tool_call("taskbook_report", report)
+
+
+def consult_turn(messages, body):
+    assert body["model"] == "design", body["model"]
+    assert [t["function"]["name"] for t in body["tools"]] == ["inspect_revision"]
+    assert private_memory not in json.dumps(messages)
+    if messages[-1]["role"] == "tool":
+        assert "missing measurement" in str(messages[-1]["content"])
+        return {"role":"assistant","content":"Consulted the baseline: measure.py exits 4 if no value is supplied."}
+    assert all(m["role"] not in ("assistant","tool") for m in messages)
+    design_calls.append(body["model"])
+    return tool_call("inspect_revision", {"view":"candidate","path":"measure.py"})
 
 
 requests = []
@@ -171,7 +289,19 @@ if len(sys.argv) == 1:
 print("measurement=" + sys.argv[1])
 """
 
+measurement_prefix = "A successful measurement prefixes the supplied value with measurement=."
+missing_input_evidence = "The observed no-input branch exits with status 4."
+
+
 def fact_report(state):
+    if state["task"] == "design-route":
+        return dict(attempt=state["attempt"], outcome="pass", summary="Verified success output and the no-input contract.",
+                    evidence=[], factChecks=[
+                        dict(claim=measurement_prefix, observed='print("measurement=" + sys.argv[1])',
+                             source=dict(kind="git", path="measure.py", line=6)),
+                        dict(claim=missing_input_evidence, observed="raise SystemExit(4)",
+                             source=dict(kind="git", path="measure.py", line=5)),
+                    ])
     if state["task"] in ("layout-review", "conflict-review"):
         return dict(attempt=state["attempt"], outcome="pass", summary="Confirmed the override contract at the fixed baseline.",
                     evidence=[],factChecks=[dict(claim="An explicit output path takes precedence.",
@@ -189,6 +319,14 @@ def test_fact_turn(state, messages):
     last = str(messages[-1]["content"])
     report = fact_report(state)
     if task == "retry":
+        if turn == 0:
+            return tool_call("bash", {"command": "printf temporary > fact-receipt.tmp && printf created-for-fact-test"})
+        if turn == 1:
+            assert "created-for-fact-test" in last and "事实核查回执" not in last, last
+            return tool_call("bash", {"command": "rm -- fact-receipt.tmp && printf cleaned-for-fact-test"})
+        if turn == 2:
+            assert "cleaned-for-fact-test" in last and "事实核查回执" not in last, last
+        turn -= 2
         if turn == 0:
             return tool_call("read", {"path": "measure.py"})
         if turn == 1:
@@ -272,6 +410,9 @@ class Provider(http.server.BaseHTTPRequestHandler):
                 packet = json.loads(user_message)
                 delta = review_turn(packet, messages, body)
                 finish = "tool_calls" if "tool_calls" in delta else "stop"
+            elif "PI_TASKBOOK_DESIGN_CONSULT" in system:
+                delta = consult_turn(messages, body)
+                finish = "tool_calls" if "tool_calls" in delta else "stop"
             else:
                 reports = re.findall(r"## 当前运行数据\n\n(\{.*?\})\n\n## 任务书原文", system, re.S)
                 assert reports, system[-1200:]
@@ -279,28 +420,18 @@ class Provider(http.server.BaseHTTPRequestHandler):
                 phase = state["phase"]
                 task = state["task"]
                 kind = state["type"]
-                assert "PSTACK CONTROLLER FEATURE" not in system
+                assert "UNTRUSTED CHECKOUT CONTENT" not in system
                 if phase == "fact-check":
-                    assert "PSTACK METHOD PROVE IT WORKS" in system
-                    assert "1. Investigate the question against" in system
-                    assert "2. Write the findings" not in system
-                if phase == "fact-check" and kind.startswith("new-"):
-                    assert kind.startswith("new-") and "MATT METHOD DIAGNOSIS CONTINUATION" not in system
-                if phase == "fact-check" and kind.startswith("fix-"):
-                    assert kind.startswith("fix-") and "## Phase 2: minimize" in system and "MATT METHOD DIAGNOSIS CONTINUATION" not in system
+                    assert "通用方法 pstack:principle-prove-it-works" in system and "通用方法 matt:research" in system
+                    assert ("通用方法 matt:diagnosing-bugs" in system) == kind.startswith("fix-")
                 if phase == "implement" and kind.startswith("fix-"):
-                    assert kind.startswith("fix-") and "MATT METHOD DIAGNOSIS CONTINUATION" in system and "MATT METHOD TDD" not in system
+                    assert "通用方法 matt:diagnosing-bugs" in system and "通用方法 matt:tdd" not in system
                 if phase == "implement" and kind == "new-feature":
-                    assert "MATT METHOD TDD" in system
+                    assert "通用方法 matt:tdd" in system
                 if phase == "implement" and kind == "new-experiment":
-                    assert "PSTACK METHOD BENCHMARK CHECKLIST" in system and "MATT METHOD TDD" not in system
+                    assert "通用方法 pstack:benchmark-checklist" in system and "通用方法 matt:tdd" not in system
                 if phase == "design":
-                    assert "PSTACK METHOD MODEL THE DOMAIN" in system and "MATT METHOD CODEBASE DESIGN" in system, system
-                    assert "UNPINNED CHANGE" not in system, system
-                if phase == "correctness":
-                    assert "SPEC INPUT ONLY" in system and "STANDARDS INPUT ONLY" not in system and "UNUSED ROUTER" not in system
-                if phase == "quality":
-                    assert "SMELL BASELINE" in system and "STANDARDS INPUT ONLY" in system and "SPEC INPUT ONLY" not in system and "UNUSED ROUTER" not in system
+                    assert "通用方法 pstack:principle-model-the-domain" in system and "通用方法 matt:codebase-design" in system
                 if task == "cancel" and phase == "fact-check":
                     cancel_started.set()
                     cancel_end.wait(8)
@@ -310,7 +441,10 @@ class Provider(http.server.BaseHTTPRequestHandler):
                 if task == "conflict-review" and state.get("decisions"):
                     assert next(f for f in state["facts"] if f["id"] == "F1")["text"] == correct_baseline
                 requests.append((task, phase, seen_tool, len(reports)))
-                if phase == "performance":
+                if phase in ("design", "implement") and (task in route_tasks or task == "same-model"):
+                    delta = design_branch_turn(state, messages, body)
+                    finish = "tool_calls" if "tool_calls" in delta else "stop"
+                elif phase == "performance":
                     turn = attempts.get(state["attempt"], 0)
                     attempts[state["attempt"]] = turn + 1
                     if turn == 0:
@@ -342,6 +476,10 @@ class Provider(http.server.BaseHTTPRequestHandler):
                                   summary="测试替身阶段结果 " + phase, evidence=["fixture observation"])
                     if phase == "fact-check" and result["outcome"] == "pass":
                         result = fact_report(state)
+                    if phase == "design":
+                        result["plan"] = design_plan(state)
+                    if phase == "implement":
+                        result["planVersion"] = state["plan"]["version"]
                     assert phase not in ("correctness", "quality"), "Leader was asked to approve its own work."
                     delta = tool_call("taskbook_report", result)
                     finish = "tool_calls"
@@ -508,66 +646,26 @@ with tempfile.TemporaryDirectory(prefix="pi-taskbook-rpc-") as tmp:
     threading.Thread(target=server.serve_forever, daemon=True).start()
     (config / "models.json").write_text(json.dumps({"providers": {"fixture": {
         "baseUrl": f"http://127.0.0.1:{server.server_port}/v1", "api": "openai-completions",
-        "apiKey": "fixture", "models": [{"id": "fixture"}]}}}))
+        "apiKey": "fixture", "models": [{"id": "fixture"}, {"id": "design"}, {"id": "worker"}, {"id":"review"}, {"id":"quality-review"}]}}}))
 
+    # Legacy checkout settings can point to a different HEAD. Only package-owned methods may enter a prompt.
     roots = {}
-    for source, fixtures in {
-        "PSTACK": {
-            f"pstack/skills/{name}/SKILL.md": "PSTACK METHOD " + name.removeprefix("principle-").replace("-", " ").upper() + "\n"
-            for name in ("principle-prove-it-works", "principle-model-the-domain",
-                         "principle-sequence-verifiable-units", "principle-minimize-reader-load", "benchmark-checklist")
-        },
-        "MATT": {
-            "skills/engineering/research/SKILL.md": "1. Investigate the question against the repository.\n2. Write the findings into an issue.\n",
-            "skills/engineering/codebase-design/SKILL.md": "MATT METHOD CODEBASE DESIGN\n",
-            "skills/engineering/tdd/SKILL.md": "MATT METHOD TDD\n",
-            "skills/engineering/tdd/tests.md": "MATT TEST GUIDANCE\n",
-            "skills/engineering/tdd/mocking.md": "MATT MOCK GUIDANCE\n",
-            "skills/engineering/diagnosing-bugs/SKILL.md": "## Redact\nREDACT SENSITIVE VALUES\n## Phase 1: loop\nred\n## Phase 2: minimize\nminimal\n## Phase 3: hypotheses\nMATT METHOD DIAGNOSIS CONTINUATION\n",
-            "skills/engineering/code-review/SKILL.md": "UNUSED ROUTER\n### 3. Identify the standards sources\nSMELL BASELINE\n### 4. Dispatch\n**Standards sub-agent prompt** should include:\nSTANDARDS INPUT ONLY\n**Spec sub-agent prompt** should include:\nSPEC INPUT ONLY\n### 5. Aggregate\n",
-        },
-    }.items():
-        checkout = d / source.lower()
-        checkout.mkdir()
+    for owner, source in [("PSTACK", "pstack/skills/principle-prove-it-works/SKILL.md"),
+                          ("MATT", "skills/engineering/codebase-design/SKILL.md")]:
+        checkout = d / owner.lower()
+        target = checkout / source
+        target.parent.mkdir(parents=True)
+        target.write_text("UNTRUSTED CHECKOUT CONTENT\n")
         git(checkout, "init", "-b", "main")
-        for name, content in fixtures.items():
-            target = checkout / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content)
         git(checkout, "add", ".")
-        git(checkout, "commit", "-m", "Pinned prompt inputs")
-        roots[f"PI_TASKBOOK_{source}_ROOT"] = str(checkout)
-    feature = d / "pstack/pstack/skills/poteto-mode/playbooks/feature.md"
-    feature.parent.mkdir(parents=True)
-    feature.write_text("PSTACK CONTROLLER FEATURE\n")
-    git(d / "pstack", "add", ".")
-    git(d / "pstack", "commit", "-m", "Reference only controller")
+        git(checkout, "commit", "-m", "Unrelated local checkout")
+        roots["PI_TASKBOOK_" + owner + "_ROOT"] = str(checkout)
     worktree_root = d / "task-worktrees"
     worktree_root.mkdir()
     t3env = {
         **roots, "PI_TASKBOOK_WORKTREE_ROOT": str(worktree_root),
         "T3_MCP_URL": f"http://127.0.0.1:{server.server_port}/mcp", "T3_MCP_BEARER_TOKEN": "fixture-token",
     }
-
-    incomplete = d / "incomplete-matt"
-    git(d, "clone", roots["PI_TASKBOOK_MATT_ROOT"], str(incomplete))
-    research_file = "skills/engineering/research/SKILL.md"
-    git(incomplete, "rm", research_file)
-    git(incomplete, "commit", "-m", "Missing mandatory fact-check prompt")
-    for command, root, overrides, expected in [
-        ("taskbook", work, {}, "PI_TASKBOOK_MATT_ROOT"),
-        ("taskbook-new", main, {**t3env, "PI_TASKBOOK_MATT_ROOT": ""}, "PI_TASKBOOK_MATT_ROOT"),
-        ("taskbook-new", main, {**t3env, "PI_TASKBOOK_MATT_ROOT": str(incomplete)}, research_file),
-    ]:
-        rejected = Client(root, config, str(uuid.uuid4()), overrides)
-        try:
-            submit(rejected, taskfile(d, "missing-upstream"), command)
-            rejected.notify(expected)
-            assert not requests and not launches
-            assert not list(worktree_root.iterdir())
-            assert not list((work / ".audit/pi-taskbook").glob("*/state.json"))
-        finally:
-            rejected.close()
 
     session = str(uuid.uuid4())
     client = Client(main, config, session, t3env)
@@ -614,7 +712,7 @@ Complete the shared stages.
 
     message = launches[0]["message"]
     assert message.startswith("/taskbook --prepared ")
-    child = Client(created, config, str(uuid.uuid4()), roots)
+    child = Client(created, config, str(uuid.uuid4()))
     try:
         result = child.command(type="prompt", message=message)
         assert result["success"] and result["data"]["disposition"] == "handled"
@@ -675,24 +773,27 @@ Complete the shared stages.
     finally:
         client.close()
 
-    unconfigured = Client(work, config, session)
-    try:
-        prior = state_path.read_bytes()
-        before = len(requests)
-        submit(unconfigured, resume_path)
-        unconfigured.notify("PI_TASKBOOK_MATT_ROOT")
-        assert state_path.read_bytes() == prior and len(requests) == before
-    finally:
-        unconfigured.close()
-
-    client = Client(work, config, session, roots)
+    client = Client(work, config, session)
     try:
         submit(client, resume_path)
         client.notify("可交接")
         s = state_for(work, "resume")
         assert s["exit"] == "ready"
-        assert [r["phase"] for r in s["reports"]] == ["fact-check", "fact-review", "design", "implement", "correctness", "quality"], s
-        assert all(s["upstream"][key]["commit"] for key in ("matt", "pstack"))
+        assert [r["phase"] for r in s["reports"]] == ["fact-check", "fact-review", "design"] + [
+            "fact-check", "fact-review", "design", "implement", "correctness", "quality"], s
+        for owner in ("matt", "pstack"):
+            content = (repo / "methods" / (owner + ".json")).read_bytes()
+            pin = s["upstream"][owner]
+            assert pin["commit"] == json.loads(content)["commit"] and pin["digest"] == hashlib.sha256(content).hexdigest()
+        previous = len(s["reports"])
+        s["upstream"]["matt"]["digest"] = "0" * 64
+        state_path.write_text(json.dumps(s))
+        submit(client, resume_path)
+        client.notify("可交接")
+        refreshed = state_for(work, "resume")
+        assert [r["phase"] for r in refreshed["reports"][previous:]] == [
+            "fact-check", "fact-review", "design", "implement", "correctness", "quality"]
+        assert refreshed["candidateId"] != s["candidateId"]
         invalid = taskfile(d, "invalid-review")
         submit(client, invalid)
         client.notify("退出（可恢复）")
@@ -742,9 +843,82 @@ Complete the shared stages.
         cancel_end.set()
     finally:
         client.close()
+
+    routed_models = {**roots, "PI_TASKBOOK_DESIGN_MODEL":"fixture/design", "PI_TASKBOOK_IMPLEMENT_MODEL":"fixture/worker",
+                     "PI_TASKBOOK_REVIEW_MODEL":"fixture/review", "PI_TASKBOOK_QUALITY_MODEL":"fixture/quality-review"}
+    router = Client(work, config, str(uuid.uuid4()), routed_models)
+    try:
+        changes = "## Project memory\n\n- create term endpoint @0 | project | Missing-input endpoint behavior is an exit status of 4.\n"
+        route = taskfile(d, "design-route")
+        route.write_text(route.read_text() + "\n" + changes)
+        submit(router, route)
+        router.notify("可交接")
+        routed = state_for(work, "design-route")
+        assert design_calls == ["design"] and not (work / "probe-only.txt").exists()
+        assert [r["phase"] for r in routed["reports"]] == [
+            "fact-check","fact-review","design","implement","design","implement","correctness","quality"]
+        assert [r["outcome"] for r in routed["reports"] if r["phase"] == "implement"] == ["plan-gap","pass"]
+        assert routed["plan"]["version"] == 2
+        assert "measurement=7" in str(routed["designActions"])
+        assert "Consulted the baseline" in str(routed["designActions"])
+        fact_approval = routed["reports"][1]["review"]
+        assert "M1" in [i["id"] for i in fact_approval["items"]]
+        memory_head = git(work, "rev-parse", "refs/pi-taskbook/project-memory")
+        snapshot = json.loads(git(main, "show", memory_head + ":memory.json"))
+        term = snapshot["records"]["project:term:endpoint"]
+        assert term["version"] == 1 and term["source"]["reviewSession"] == fact_approval["sessionId"]
+        classified = {i["id"]: i["memoryUse"] for i in fact_approval["items"] if "memoryUse" in i}
+        assert classified == {"P1":"independent", "P2":"change-evidence"}
+        recorded = [entry["text"] for key, entry in snapshot["records"].items() if key.startswith("project:fact:observation-")]
+        assert measurement_prefix in recorded and missing_input_evidence not in recorded
+        stale = taskfile(d, "memory-stale")
+        stale.write_text(stale.read_text() + "\n" + changes.replace("create term endpoint @0", "update term endpoint @9"))
+        submit(router, stale)
+        router.notify("当前版本 @1")
+        held = state_for(work, "memory-stale")
+        assert held["phase"] == "fact-review" and [r["phase"] for r in held["reports"]] == ["fact-check"]
+        assert git(work, "rev-parse", "refs/pi-taskbook/project-memory") == memory_head
+        assert not any(task == "memory-stale" and phase == "design" for task, phase, *_ in requests)
+
+        question = taskfile(d, "design-question")
+        submit(router, question)
+        router.notify(user_question)
+        waiting = state_for(work, "design-question")
+        assert waiting["pendingQuestion"]["question"] == user_question, waiting
+        before = len(requests)
+        submit(router, question)
+        router.notify(user_question)
+        assert len(requests) == before, "Resubmission bypassed the user's pending decision."
+        answer = router.command(type="prompt", message="/taskbook-answer " + user_answer)
+        assert answer["success"] and answer["data"]["disposition"] == "handled", answer
+        router.notify("可交接")
+        answered = state_for(work, "design-question")
+        assert answered["plan"]["version"] == 2 and not answered.get("pendingQuestion")
+        assert user_answer in str(answered["userAnswers"])
+    finally:
+        router.close()
+
+    single = Client(work, config, str(uuid.uuid4()))
+    try:
+        same = taskfile(d, "same-model")
+        submit(single, same)
+        single.notify("未指定不同的设计模型")
+        paused = state_for(work, "same-model")
+        assert [r["phase"] for r in paused["reports"]] == ["fact-check", "fact-review", "design", "implement"]
+        assert paused["reports"][-1]["outcome"] == "plan-gap" and paused.get("pendingQuestion")
+        before = len(requests)
+        submit(single, same)
+        single.notify("未指定不同的设计模型")
+        assert len(requests) == before
+        single.command(type="prompt", message="/taskbook-answer " + user_answer)
+        single.notify("可交接")
+        assert state_for(work, "same-model")["plan"]["version"] == 2
+    finally:
+        single.close()
         server.shutdown()
 
 assert not list(errors.queue), list(errors.queue)
 assert max(item[3] for item in requests) == 1, requests
 print("Pi RPC passed: independent reviewer tools, fact acceptance, objective coverage, fresh review on rework, "
-      "protected facts pending user decision, commit-bound observations, handoff, migration and exit.")
+      "protected facts pending user decision, commit-bound observations, handoff, migration and exit; "
+      "offline methods, project terms, isolated design consultation and experiments, plan versions and escalation.")
