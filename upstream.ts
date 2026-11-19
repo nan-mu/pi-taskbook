@@ -32,6 +32,8 @@ function matt(name: string, from?: string, until?: string, file = "SKILL.md"): I
 
 export function phaseSources(phase: Phase, type: Taskbook["type"]): Input[] {
   switch (phase) {
+    case "fact-review":
+      return [pstack("principle-prove-it-works"), matt("research", "1. Investigate the question against", "2. Write the findings")];
     case "fact-check": {
       const sources = [
         pstack("principle-prove-it-works"),

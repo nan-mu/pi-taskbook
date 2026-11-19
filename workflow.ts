@@ -1,16 +1,17 @@
 import type { Taskbook } from "./taskbook.ts";
 
-export const stages = ["fact-check", "design", "implement", "correctness", "quality", "performance"] as const;
+export const stages = ["fact-check", "fact-review", "design", "implement", "correctness", "quality", "performance"] as const;
 export type Phase = typeof stages[number];
-export type Outcome = "pass" | "blocked" | "measure";
+export type Outcome = "pass" | "blocked" | "measure" | "rework" | "fact-conflict";
 export type TaskType = Taskbook["type"];
 
 export const titles: Record<Phase, string> = {
   "fact-check": "核查任务依据",
+  "fact-review": "独立审核新增事实",
   design: "澄清与设计",
   implement: "实施并取证",
-  correctness: "规格审核",
-  quality: "质量审核",
+  correctness: "独立规格审核",
+  quality: "独立质量审核",
   performance: "性能验证",
 };
 
@@ -23,12 +24,20 @@ export function restorePhase(type: TaskType, savedPhase: string): Phase {
   return phase;
 }
 
-export function nextPhase(type: TaskType, phase: Phase, outcome: Outcome): Phase | "ready" | "blocked" {
+export function nextPhase(type: TaskType, phase: Phase, outcome: Outcome, measured = false): Phase | "ready" | "blocked" {
   if (outcome === "blocked") return "blocked";
-  if (outcome === "measure" && phase !== "quality") throw new Error("只有质量审核阶段可决定进入性能验证。");
-  if (phase === "quality") {
-    const experiment = type === "new-experiment" || type === "fix-experiment";
-    return outcome === "measure" || experiment ? "performance" : "ready";
+  if (outcome === "fact-conflict") return phase;
+  if (outcome === "rework") {
+    if (phase === "fact-review") return "fact-check";
+    if (phase === "correctness" || phase === "quality") return "implement";
+    throw new Error("返工须由独立审核提出。");
   }
-  return stages[stages.indexOf(phase) + 1] ?? "ready";
+  if (outcome === "measure") {
+    if (phase !== "correctness" && phase !== "quality") throw new Error("正式测量须由独立交付审核提出。");
+    return measured ? "blocked" : "performance";
+  }
+  if (phase === "implement" && type.endsWith("-experiment")) return "performance";
+  if (phase === "quality") return "ready";
+  if (phase === "performance") return "correctness";
+  return stages[stages.indexOf(phase) + 1]!;
 }

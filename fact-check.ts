@@ -20,8 +20,8 @@ export const factChecksParameter = Type.Array(Type.Object({
 }, { additionalProperties: false }), { minItems: 1, maxItems: 20 });
 
 type FactCheck = Static<typeof factChecksParameter>[number];
-export type Observation = { toolName: string; toolCallId: string; isError: boolean; text: string[] };
-export type CheckedFact = FactCheck & { origin: string; toolError?: boolean };
+export type Observation = { toolName: string; toolCallId: string; isError: boolean; input?: unknown; head?: string; text: string[] };
+export type CheckedFact = FactCheck & { origin: string; toolError?: boolean; toolInput?: unknown; observedHead?: string };
 
 export function checkFacts(root: string, base: string, checks: FactCheck[], receipts: Map<string, Observation>): CheckedFact[] {
   return checks.map(check => {
@@ -31,7 +31,7 @@ export function checkFacts(root: string, base: string, checks: FactCheck[], rece
       const result = receipts.get(source.receipt);
       if (!result) throw new Error("工具回执不属于本次事实核查。");
       if (!result.text.some(text => text.includes(observed))) throw new Error("摘录与工具返回的文本不符。");
-      return { ...check, origin: result.toolName + " " + result.toolCallId, toolError: result.isError };
+      return { ...check, origin: result.toolName + " " + result.toolCallId, toolError: result.isError, toolInput: result.input, observedHead: result.head };
     }
     const path = source.path;
     if (posix.isAbsolute(path) || posix.normalize(path) !== path || path.startsWith("../") || path === "..") {
