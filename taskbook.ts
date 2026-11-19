@@ -9,8 +9,8 @@ type GoalType = typeof goalTypes[number];
 export type Taskbook = {
   id: string;
   repository: string;
-  branch: string;
-  baseBranch: string;
+  branch?: string;
+  baseBranch?: string;
   baseCommit?: string;
   type: GoalType;
   markdown: string;
@@ -38,26 +38,30 @@ export function readTaskbook(cwd: string, argument: string): Taskbook {
     throw new Error("任务书需要 Goal 和 Delivery 标题。");
   }
   const header = markdown.slice(0, goal.index);
-  function field(key: string, section = header, required = true) {
-    const matches = [...section.matchAll(new RegExp("^" + key + ":[ \\t]*([^\\r\\n]+)$", "gm"))];
+  function field(key: string, section = header) {
+    const prefix = `(?:${key}:[ \\t]*|\\*\\*${key}:?\\*\\*:?[ \\t]+)`;
+    const matches = [...section.matchAll(new RegExp(`^${prefix}([^\\r\\n]+)$`, "gm"))];
     if (matches.length > 1) throw new Error("任务书字段重复：" + key);
     const value = matches[0]?.[1].trim().replace(/^`([^`]+)`$/, "$1") ?? "";
-    if (required && !value) throw new Error("任务书缺少字段：" + key);
     return value;
   }
   const id = field("Taskbook ID");
   const repository = field("Repository");
-  const branch = field("Work branch");
-  const baseBranch = field("Base branch");
-  const baseCommit = field("Base commit", header, false) || undefined;
-  const type = goalTypes.find(type => type === field("Type", goal[1]));
-  if (!type || !/^[\w-][\w.-]{0,95}$/.test(id) || !/^[\w.-]+\/[\w.-]+$/.test(repository)) {
-    throw new Error("任务书标识、仓库或目标类型的格式不正确。");
+  const branch = field("Work branch") || undefined;
+  const baseBranch = field("Base branch") || undefined;
+  const baseCommit = field("Base commit") || undefined;
+  const labels = [field("Entry"), field("Type", goal[1])].filter(Boolean)
+    .map(label => label.toLowerCase().replace(/[ \t]+/g, "-"));
+  const type = goalTypes.find(type => labels.length > 0 && labels.every(label => label === type));
+  if (!type) throw new Error("任务书需要有效且一致的 Entry 或 Goal 下的 Type。");
+  if ((id && !/^[\w-][\w.-]{0,95}$/.test(id)) || !/^[\w.-]+\/[\w.-]+$/.test(repository)) {
+    throw new Error("任务书标识或仓库的格式不正确。");
   }
+  if (!baseCommit && !baseBranch) throw new Error("任务书需要 Base commit 或 Base branch。");
   if (baseCommit && !/^(?:[\da-f]{40}|[\da-f]{64})$/i.test(baseCommit)) {
     throw new Error("Base commit 需要完整的 Git 提交 ID。");
   }
-  const factsPath = field("Facts", header, false);
+  const factsPath = field("Facts");
   let facts: string | undefined;
   if (factsPath) {
     const directory = dirname(path);
@@ -68,7 +72,8 @@ export function readTaskbook(cwd: string, argument: string): Taskbook {
     facts = document(factFile);
   }
   const digest = createHash("sha256").update(JSON.stringify([markdown, facts])).digest("hex");
-  return { id, repository, branch, baseBranch, baseCommit, type, markdown, facts, digest, sourcePath: path };
+  return { id: id || "task-" + digest.slice(0, 12), repository, branch, baseBranch, baseCommit, type, markdown, facts,
+    digest, sourcePath: path };
 }
 
 export function git(cwd: string, ...args: string[]) {
@@ -81,8 +86,7 @@ export function gitOk(cwd: string, ...args: string[]) {
 
 export function taskRepository(cwd: string, task: Taskbook) {
   const root = git(cwd, "rev-parse", "--show-toplevel");
-  if (!gitOk(root, "check-ref-format", "refs/heads/" + task.branch) ||
-      !gitOk(root, "check-ref-format", "refs/heads/" + task.baseBranch)) {
+  if ([task.branch, task.baseBranch].some(branch => branch && !gitOk(root, "check-ref-format", "refs/heads/" + branch))) {
     throw new Error("任务书中的 Git 分支名无效。");
   }
   const origin = git(root, "remote", "get-url", "origin");
@@ -92,22 +96,25 @@ export function taskRepository(cwd: string, task: Taskbook) {
 }
 
 export function resolveBase(root: string, task: Taskbook, requireBranch: boolean) {
-  const baseRef = ["refs/heads/", "refs/remotes/origin/"].map(prefix => prefix + task.baseBranch)
+  const baseRef = task.baseBranch && ["refs/heads/", "refs/remotes/origin/"].map(prefix => prefix + task.baseBranch)
     .find(ref => gitOk(root, "show-ref", "--verify", "--quiet", ref));
-  if (!baseRef && (requireBranch || !task.baseCommit)) throw new Error("本地找不到任务书的基线分支。");
+  if (!baseRef && (!task.baseCommit || (requireBranch && task.baseBranch))) throw new Error("本地找不到任务书的基线分支。");
   if (task.baseCommit && baseRef && !gitOk(root, "merge-base", "--is-ancestor", task.baseCommit, baseRef)) {
     throw new Error("Base commit 不在指定基线分支的本地历史中。");
   }
   return task.baseCommit ?? (requireBranch ? git(root, "rev-parse", baseRef!) : git(root, "merge-base", "HEAD", baseRef!));
 }
 
-export function workspace(cwd: string, task: Taskbook, pinnedBase?: string) {
+export function workspace(cwd: string, task: Taskbook, pinnedBase?: string, pinnedBranch?: string) {
   const root = taskRepository(cwd, task);
   const dir = git(root, "rev-parse", "--absolute-git-dir");
   const common = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir");
   if (realpathSync(dir) === realpathSync(common)) throw new Error("当前是主 checkout，既有工作区入口要求 linked worktree。");
   const branch = git(root, "branch", "--show-current");
-  if (branch !== task.branch) throw new Error("当前分支是 " + (branch || "detached HEAD") + "，任务书要求 " + task.branch + "。");
+  if (!branch) throw new Error("当前 worktree 是 detached HEAD，需要使用命名分支。");
+  if ((task.branch && task.branch !== branch) || (pinnedBranch && pinnedBranch !== branch)) {
+    throw new Error("当前工作分支与任务书或审计记录不一致。");
+  }
   const base = pinnedBase ?? resolveBase(root, task, false);
   if (!gitOk(root, "merge-base", "--is-ancestor", base, "HEAD")) throw new Error("当前 HEAD 未包含任务书的固定基线。");
   return { root, branch, base };

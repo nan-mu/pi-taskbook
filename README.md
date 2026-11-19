@@ -1,15 +1,12 @@
 # pi-taskbook
 
-Pi 按任务书的 `Goal.Type` 进入不同执行流程。当前版本是可运行的原型，目标运行环境为 Pi 1.5.2。
+Pi 使用一条有状态的执行流程处理任务书。当前版本是可运行的原型，目标运行环境为 Pi 1.5.2。
 
-## 两个任务入口
+## 任务类型与共用流程
 
-| 任务类型 | 阶段路径 |
-| --- | --- |
-| `new-feature`、`new-experiment` | 核查新增前提 → 设计新增目标及验收 → 实现新增目标并取证 → 公共审核 |
-| `fix-feature`、`fix-experiment` | 复现或核实原缺陷 → 设计修复和复验 → 修复已确认缺陷并复验 → 公共审核 |
+页首的 `Entry` 给出任务类型。例如 `**Entry** New feature` 解析为 `new-feature`。旧任务书可继续用 `Goal` 下的 `Type`。两处同时出现时须一致。
 
-`taskFlow` 按任务类型确定起点，`nextPhase` 按相同类型推进。修复实验的设计与取证阶段明确受影响数据、重跑范围及仍有效的结果。
+所有类型使用同一套阶段状态。核查任务依据 → 澄清与设计 → 实施并取证 → 规格审核 → 质量审核。实验类或质量阶段要求测量时进入性能验证。类型用于选择阶段提示词。例如核查修复类任务时，Pi 要求复现或核实原缺陷。修复实验的设计与取证还要明确受影响数据、重跑范围及仍有效的结果。
 
 ## 安装与使用
 
@@ -17,10 +14,10 @@ Pi 按任务书的 `Goal.Type` 进入不同执行流程。当前版本是可运�
 
 | 工作区准备方式 | Pi 执行 |
 | --- | --- |
-| `/taskbook-new <任务书路径>` | 在当前项目解析固定基线，用 Git 建立任务书指定的新分支和 linked worktree，再直接调用 T3 MCP 的 `t3_thread_launch`。新 thread 在已创建的 worktree 上接收一条内部 `/taskbook` 命令。 |
+| `/taskbook-new <任务书路径>` | 在当前项目解析固定基线，用 Git 建立新分支和 linked worktree。任务书有 Work branch 时采用该名字。随后直接调用 T3 MCP 的 `t3_thread_launch`。新 thread 在已创建的 worktree 上接收一条内部 `/taskbook` 命令。 |
 | `/taskbook <任务书路径>` | 在当前持久会话内核对 GitHub origin、工作分支、linked worktree 和基线，通过后建立审计记录并开始事实核查。重交同一任务书可从检查点恢复。 |
 
-自动准备 worktree 需要 T3 为 Pi 注入本地 MCP 端点，以及 `PI_TASKBOOK_WORKTREE_ROOT` 指向已有的专用目录。接收端复核实际目录、任务书和事实摘要以及固定基线。新分支从 `Base commit` 或本地基线分支解析的提交创建。既有 worktree 的无显式 SHA 基线取其 HEAD 与基线分支的 merge-base。两种工作区准备方式汇入同一接收处理代码。工作区通过校验后，由任务书类型决定执行哪条流程。MCP 回执缺失时，检查原 thread 是否已建立，保留已创建的 worktree 供核对。
+自动准备 worktree 需要 T3 为 Pi 注入本地 MCP 端点，以及 `PI_TASKBOOK_WORKTREE_ROOT` 指向已有的专用目录。接收端复核实际目录、任务书和事实摘要以及固定基线。新分支从 `Base commit` 或本地基线分支解析的提交创建。既有 worktree 的无显式 SHA 基线取其 HEAD 与基线分支的 merge-base。两种工作区准备方式汇入同一接收处理代码。工作区通过校验后进入共用事实核查阶段。任务书未指定 Work branch 时，已有 worktree 使用其当前命名分支，新建命令使用 `agent/<任务标识>`。Taskbook ID 缺省时使用由内容摘要派生的标识。MCP 回执缺失时，检查原 thread 是否已建立，保留已创建的 worktree 供核对。
 
 `/taskbook-exit` 主动取消当前运行。没有有效阶段报告或模型被中断时，本轮退出并保留检查点。审计记录保存已通过验收的阶段事实和候审提交。
 
@@ -31,42 +28,41 @@ Pi 按任务书的 `Goal.Type` 进入不同执行流程。当前版本是可运�
 ```markdown
 # 修正报告生成行为
 
-Taskbook ID: demo-01
-Repository: owner/demo
-Base branch: main
-Work branch: agent/report
-Facts: ./demo.facts.md
+**Repository** `owner/demo`
+**Base commit** `0123456789012345678901234567890123456789`
+**Entry** Fix feature
 
 ## Goal
 
-Type: fix-feature
-
 通过正常入口生成报告时，即使数据为空也应输出一份表头完整的报告。
+
+## Facts
+
+1. 项目的公共入口负责生成报告。
 
 ## Delivery
 
 给出实现、本地交付提交及可复跑的验收证据。
 ```
 
-目标类型包括 `new-feature`、`fix-feature`、`new-experiment` 和 `fix-experiment`。可用 `Base commit` 固定完整提交 ID。若当前 GitHub origin 使用了 SSH Host 别名，需要先调整本地仓库校验规则或使用标准 GitHub origin。
+Entry 可写 `New feature`、`Fix feature`、`New experiment` 或 `Fix experiment`。需给出 Base commit 或 Base branch。若当前 GitHub origin 使用 SSH Host 别名，需对应调整本地仓库校验规则或使用标准 GitHub origin。
 
-## 阶段驱动与原文输入
+## 阶段驱动与附加提示词
 
 `startPhase` 从审计状态取阶段，用 `buildPhaseInput` 组装当地规则、任务书、事实、前序报告及该阶段的上游方法，仅启动一次当前阶段的模型轮次。`taskbook_report` 复核阶段执行标识、报告和 Git 快照。`nextPhase` 只依据类型、当前阶段和经过校验的结果决定迁移。
 
 同时设置 `PI_TASKBOOK_PSTACK_ROOT` 与 `PI_TASKBOOK_MATT_ROOT` 后，插件可从两份本地 Git checkout 读取原文。首次接收时固定两个 commit。已有记录恢复时沿用原有版本。两者都未配置时可运行原型自带的本地提示词。
 
-| 阶段 | 选择的上游方法 |
+| 阶段 | 配置上游后附加的内容 |
 | --- | --- |
-| 核查新增前提 | PStack Prove It Works。 |
-| 复现或核实缺陷 | PStack Prove It Works 和 Matt diagnosing-bugs Phase 1–2。 |
-| 澄清与设计 | PStack Model the Domain 和 Matt codebase-design。 |
-| 实现新增目标并取证 | PStack Sequence Work into Verifiable Units。新增功能加 Matt tdd 及附文，新增实验加 benchmark-checklist。 |
-| 修复已确认缺陷并复验 | PStack Sequence Work into Verifiable Units 和 Matt diagnosing-bugs Phase 3 及之后。 |
-| 规格与质量审核 | 分别取 Matt code-review 的 Spec 和 Standards 执行部分，并搭配相应的 PStack 原则。 |
-| 性能验证 | PStack benchmark-checklist。实验类型必经，其他任务由质量阶段报告测量需要后进入。 |
+| 核查任务依据 | 附加 `pstack:principle-prove-it-works`。修复类额外附加 `matt:diagnosing-bugs` 第 1–2 阶段。 |
+| 澄清与设计 | 附加 `pstack:principle-model-the-domain` 和 `matt:codebase-design`。 |
+| 实施并取证 | 附加 `pstack:principle-sequence-verifiable-units`。新增功能额外附加 `matt:tdd` 和两份附文，新增实验额外附加 `pstack:benchmark-checklist`，修复类额外附加 `matt:diagnosing-bugs` 第 3 阶段及以后。 |
+| 规格审核 | 附加 `matt:code-review` 的 Spec 段和 `pstack:principle-prove-it-works`。 |
+| 质量审核 | 附加 `matt:code-review` 的 Standards 段和 `pstack:principle-minimize-reader-load`。 |
+| 性能验证 | 附加 `pstack:benchmark-checklist`。实验类型必经，功能任务在质量阶段报告测量需要时进入。 |
 
-`phaseSources` 固定可加载的路径与必要原文章节。运行阶段由插件自身维护，可重用上游方法而无需运行上游入口。
+`phaseSources` 按类型和阶段选择补充提示词。`workflow.ts` 维护状态和迁移。设计参考 `pstack:poteto-mode:Feature` 的先追踪受影响系统、再设计的顺序。
 
 当前原型在规格和质量阶段依次接收报告。插件校验审核标识非空、两次标识不同以及候审 SHA 相同。T3 子会话由现有阶段提示词请求，报告标识仍由模型提供。程序化委派并校验子会话回执属于后续接入。性能阶段目前在审核之后运行，测量需要的改动前基线应由任务准备阶段先提供。
 

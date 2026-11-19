@@ -33,18 +33,18 @@ function matt(name: string, from?: string, until?: string, file = "SKILL.md"): I
 
 export function phaseSources(phase: Phase, type: Taskbook["type"]): Input[] {
   switch (phase) {
-    case "confirm-premises":
-      return [pstack("principle-prove-it-works")];
-    case "reproduce-defect":
-      return [pstack("principle-prove-it-works"), matt("diagnosing-bugs", "## Phase 1:", "## Phase 3:")];
+    case "fact-check":
+      return [pstack("principle-prove-it-works"), ...(type.startsWith("fix-")
+        ? [matt("diagnosing-bugs", "## Phase 1:", "## Phase 3:")]
+        : [])];
     case "design":
       return [pstack("principle-model-the-domain"), matt("codebase-design")];
-    case "implement-new":
-      return [pstack("principle-sequence-verifiable-units"), ...(type === "new-experiment"
-        ? [pstack("benchmark-checklist")]
-        : [matt("tdd"), matt("tdd", undefined, undefined, "tests.md"), matt("tdd", undefined, undefined, "mocking.md")])];
-    case "implement-fix":
-      return [pstack("principle-sequence-verifiable-units"), matt("diagnosing-bugs", "## Phase 3:")];
+    case "implement": {
+      const standard = pstack("principle-sequence-verifiable-units");
+      if (type.startsWith("fix-")) return [standard, matt("diagnosing-bugs", "## Phase 3:")];
+      if (type === "new-experiment") return [standard, pstack("benchmark-checklist")];
+      return [standard, matt("tdd"), matt("tdd", undefined, undefined, "tests.md"), matt("tdd", undefined, undefined, "mocking.md")];
+    }
     case "correctness":
       return [pstack("principle-prove-it-works"),
         matt("code-review", "Spec sub-agent prompt should include:", "### 5.")];

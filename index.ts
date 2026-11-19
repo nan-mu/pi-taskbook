@@ -5,7 +5,7 @@ import { existsSync, linkSync, lstatSync, mkdirSync, readFileSync, renameSync, r
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { git, gitOk, readTaskbook, workspace, type Taskbook } from "./taskbook.ts";
-import { nextPhase, restorePhase, taskFlow, titles, type Outcome, type Phase } from "./workflow.ts";
+import { nextPhase, restorePhase, stages, titles, type Outcome, type Phase } from "./workflow.ts";
 import { prepareTaskWorktree, readEntryArgument, verifyPreparedEntry, type PreparedEntry } from "./entry.ts";
 import { launchT3Thread, readT3Endpoint } from "./t3.ts";
 import { loadUpstreamInputs, pinUpstreamInputs, type UpstreamPins } from "./upstream.ts";
@@ -14,10 +14,8 @@ const reportTool = "taskbook_report";
 const kickoffType = "pi-taskbook-stage";
 const promptDir = fileURLToPath(new URL("./prompts/", import.meta.url));
 const common = readFileSync(join(promptDir, "common.md"), "utf8");
-const prompts = Object.fromEntries(Object.keys(titles).map(phase => {
-  const name = phase === "implement-new" || phase === "implement-fix" ? "implement" : phase;
-  return [phase, readFileSync(join(promptDir, name + ".md"), "utf8")];
-}));
+const promptNames = [...stages.slice(1), "fact-check-fix", "fact-check-new"];
+const prompts = Object.fromEntries(promptNames.map(name => [name, readFileSync(join(promptDir, name + ".md"), "utf8")]));
 
 type Report = { phase: Phase; outcome: Outcome; summary: string; evidence: string[]; reviewThread?: string };
 type State = {
@@ -25,6 +23,7 @@ type State = {
   digest: string;
   session: string;
   base: string;
+  branch: string;
   phase: Phase | "exit";
   exit?: "ready" | "blocked" | "cancelled";
   revision?: string;
@@ -78,23 +77,25 @@ function openRun(ctx: ExtensionContext, task: Taskbook, prepared?: PreparedEntry
   }
 
   if (!existsSync(path)) {
-    const initial: State = { version: 1, digest: task.digest, session, base: preliminary.base, phase: taskFlow(task.type)[0], reports: [],
+    const initial: State = { version: 1, digest: task.digest, session, base: preliminary.base, branch: preliminary.branch,
+      phase: stages[0], reports: [],
       upstream: pinUpstreamInputs() };
     try { save(path, initial, task, true); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
   }
   if (!lstatSync(path).isFile()) throw new Error("审计状态需要是普通文件。");
-  const saved = JSON.parse(readFileSync(path, "utf8")) as Omit<State, "phase" | "reports"> & {
-    phase: string; reports: (Omit<Report, "phase"> & { phase: string })[];
+  const saved = JSON.parse(readFileSync(path, "utf8")) as Omit<State, "phase" | "reports" | "branch"> & {
+    phase: string; branch?: string; reports: (Omit<Report, "phase"> & { phase: string })[];
   };
   if (saved.version !== 1 || saved.digest !== task.digest || saved.session !== session || !Array.isArray(saved.reports)) {
     throw new Error("审计记录不匹配，或任务已绑定到另一个 Pi 会话。");
   }
   const state: State = { ...saved,
+    branch: saved.branch ?? preliminary.branch,
     phase: saved.phase === "exit" ? "exit" : restorePhase(task.type, saved.phase),
     reports: saved.reports.map(report => ({ ...report, phase: restorePhase(task.type, report.phase) })),
   };
-  workspace(ctx.cwd, task, state.base);
+  workspace(ctx.cwd, task, state.base, state.branch);
   return { task, root: preliminary.root, path, state };
 }
 
@@ -109,10 +110,11 @@ function cleanRevision(run: Run) {
 function buildPhaseInput(run: Run, phase: Phase, attempt: string) {
   const { task, state } = run;
   const fixed = JSON.stringify({ task: task.id, type: task.type, base: state.base, revision: state.revision,
-    branch: task.branch, phase, attempt, priorReports: state.reports }, null, 2);
+    branch: state.branch, phase, attempt, priorReports: state.reports }, null, 2);
   const upstream = loadUpstreamInputs(state.upstream, phase, task.type);
   const methods = upstream.flatMap(file => ["## 当前阶段的上游方法 " + file.source, file.text]);
-  return [common, prompts[phase], ...methods, "## 当前运行数据", fixed, "## 任务书原文", task.markdown,
+  const prompt = phase === "fact-check" ? (task.type.startsWith("fix-") ? "fact-check-fix" : "fact-check-new") : phase;
+  return [common, prompts[prompt], ...methods, "## 当前运行数据", fixed, "## 任务书原文", task.markdown,
     "## 任务书随附事实", task.facts ?? "任务书未声明随附事实文件。"].join("\n\n");
 }
 
@@ -132,7 +134,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
 
   function startPhase(ctx: ExtensionContext) {
     if (!run || run.state.phase === "exit") return;
-    workspace(ctx.cwd, run.task, run.state.base);
+    workspace(ctx.cwd, run.task, run.state.base, run.state.branch);
     const token = randomUUID();
     phaseInput = buildPhaseInput(run, run.state.phase, token);
     attempt = token;
@@ -207,7 +209,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
         const prepared = prepareTaskWorktree(ctx.cwd, task, location);
         preparedPath = prepared.path;
         const reply = await launchT3Thread(endpoint, {
-          title: task.id, branch: task.branch, worktreePath: prepared.path, message: prepared.message,
+          title: task.id, branch: prepared.branch, worktreePath: prepared.path, message: prepared.message,
           clientRequestId: "pi-taskbook-" + task.digest,
         });
         ctx.ui.notify(`已交给新 T3 thread ${reply.threadId}\n${reply.link ?? prepared.path}`, "info");
@@ -266,9 +268,9 @@ export default function taskbookExtension(pi: ExtensionAPI) {
           throw new Error("请提供本阶段独立审核的子 thread 标识。");
         }
       }
-      workspace(ctx.cwd, run.task, run.state.base);
+      workspace(ctx.cwd, run.task, run.state.base, run.state.branch);
       let revision = run.state.revision;
-      if (outcome !== "blocked" && (phase === "implement-new" || phase === "implement-fix")) revision = cleanRevision(run);
+      if (outcome !== "blocked" && phase === "implement") revision = cleanRevision(run);
       if (outcome !== "blocked" && revision && cleanRevision(run) !== revision) {
         throw new Error("待审快照已变化，应退出并使用更新的任务书重新提交。");
       }
