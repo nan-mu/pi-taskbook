@@ -2,6 +2,8 @@ import { execFile, execFileSync } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -17,15 +19,20 @@ export type PlanStep = { id: string; action: string; checks: string; targets: st
 export type ExecutionPlan = { version: number; steps: PlanStep[] };
 export type PlanGap = { stepId: string; observation: string; question: string };
 export type ModelRoutes = { initial: string; design: string; implement: string; review: string;
-  factReview?: string; correctness?: string; quality?: string };
+  factReview?: string; correctness?: string; quality?: string;
+  factCheck?: string; performance?: string; consult?: string };
 export function modelKey(model: NonNullable<ExtensionContext["model"]>) {
   return model.provider + "/" + model.id;
 }
 
-export function modelRoutes(ctx: ExtensionContext): ModelRoutes {
+export function modelConfigPath() {
+  return process.env.PI_TASKBOOK_CONFIG || join(getAgentDir(), "pi-taskbook.json");
+}
+
+export function modelRoutes(ctx: ExtensionContext, configPath = modelConfigPath()): ModelRoutes {
   if (!ctx.model) throw new Error("任务需要已选定的 Pi 模型。");
   const initial = modelKey(ctx.model);
-  return {
+  const routes: ModelRoutes = {
     initial, design: process.env.PI_TASKBOOK_DESIGN_MODEL || initial,
     implement: process.env.PI_TASKBOOK_IMPLEMENT_MODEL || initial,
     review: process.env.PI_TASKBOOK_REVIEW_MODEL || initial,
@@ -33,6 +40,32 @@ export function modelRoutes(ctx: ExtensionContext): ModelRoutes {
     correctness: process.env.PI_TASKBOOK_CORRECTNESS_MODEL || undefined,
     quality: process.env.PI_TASKBOOK_QUALITY_MODEL || undefined,
   };
+  if (!existsSync(configPath)) {
+    if (process.env.PI_TASKBOOK_CONFIG) throw new Error("找不到角色配置文件 " + configPath);
+    return routes;
+  }
+  let config: unknown;
+  try { config = JSON.parse(readFileSync(configPath, "utf8")); }
+  catch { throw new Error("无法读取角色配置或 JSON 格式无效：" + configPath); }
+  if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("角色配置需要 JSON 对象: " + configPath);
+  const allowed = ["design", "implement", "consult", "factCheck", "performance", "review", "factReview", "correctness", "quality"] as const;
+  for (const [role, value] of Object.entries(config)) {
+    if (!allowed.includes(role as typeof allowed[number])) {
+      throw new Error("角色配置包含未知字段：" + configPath);
+    }
+    if (typeof value !== "string" || !value.trim() || value !== value.trim()) {
+      throw new Error(`角色配置 ${configPath} 的 ${role} 需要有效的 provider/model-id。`);
+    }
+    try { resolveModel(ctx, value); }
+    catch { throw new Error(`角色配置 ${configPath} 的 ${role} 未匹配已注册的 Pi 模型。`); }
+    routes[role as typeof allowed[number]] = value;
+  }
+  if (Object.hasOwn(config, "review")) {
+    for (const role of ["factReview", "correctness", "quality"] as const) {
+      if (!Object.hasOwn(config, role)) routes[role] = routes.review;
+    }
+  }
+  return routes;
 }
 
 export function resolveModel(ctx: ExtensionContext, key: string) {

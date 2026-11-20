@@ -65,7 +65,27 @@ Entry 可写 `New feature`、`Fix feature`、`New experiment` 或 `Fix experimen
 
 遇到改变计划的缺口，执行者提交 `plan-gap`，注明哪一步遇到了什么观察、需要什么判断。插件将问题送回设计者重拟计划。路由没有配置不同的设计模型、相同缺口重复出现，或设计者提出 `needs-user` 时，暂停并保留问题。用户通过 `/taskbook-answer <决定>` 继续设计。若出现事实矛盾，使用后文的事实裁决命令。
 
-`PI_TASKBOOK_DESIGN_MODEL`、`PI_TASKBOOK_IMPLEMENT_MODEL`、`PI_TASKBOOK_REVIEW_MODEL` 接受 Pi 中已注册的 `provider/model-id`，未设置时沿用入口模型。事实、规格、质量三个角色分别可用 `PI_TASKBOOK_FACT_REVIEW_MODEL`、`PI_TASKBOOK_CORRECTNESS_MODEL`、`PI_TASKBOOK_QUALITY_MODEL` 覆盖审核默认值。把具备更强推理能力的模型配置给设计者，由用户的模型路由决定能力层级。配置在任务建立时固定。
+### 角色模型配置
+
+运行 `/taskbook-setup` 可一次检查角色模型配置、默认 npm 安装位置的子代理包版本、当前会话的子代理 RPC 和项目记忆台账。它也会报告仓库根目录下常用的审计与术语路径。Agent 根据检查结果汇报拟议变更，汇报阶段没有工具。在同一会话运行 `/taskbook-setup apply <批准的改动>`，Agent 会使用适用技能执行你选定的改动。
+
+项目记忆台账在首笔通过独立审核的写入时创建。仓库另有事实或术语清单时，按项目约定确定应创建的文件和格式。
+
+将 [pi-taskbook.example.json](pi-taskbook.example.json) 复制到 `~/.pi/agent/pi-taskbook.json`，按下面的职责填写 Pi 已注册的 `provider/model-id`。同一模型可以用于多个角色。用 `pi --list-models` 核对 ID，凭据和端点继续由 Pi/Magpie 配置管理。
+
+| 配置键 | 职责与运行位置 |
+| --- | --- |
+| `factCheck`、`performance` | 主 Pi 会话采集事实、执行正式测量。 |
+| `design`、`implement` | 主 Pi 会话设计计划、按计划实施。 |
+| `consult` | 独立只读设计顾问，向设计阶段返回建议。 |
+| `factReview`、`correctness`、`quality` | 三个新建只读会话分别进行事实、规格、质量审核，向状态机返回取证结果。 |
+| `review` | 三个审核角色的共用默认模型。 |
+
+T3 启动的 Pi 从它自己的用户 agent 目录读取配置。设有 `PI_CODING_AGENT_DIR` 时使用该目录。也可以给 T3 启动的 Pi 设置 `PI_TASKBOOK_CONFIG` 为配置文件的绝对路径。新任务从 Pi 的本地模型注册表解析模型 ID，再把路由写入检查点。恢复任务沿用检查点中的模型 ID。
+
+文件里的角色键优先于旧环境变量。同样，文件中的 `review` 优先于旧审核变量，除非该审核角色在文件中另有设置。缺省值继续从 `PI_TASKBOOK_DESIGN_MODEL`、`PI_TASKBOOK_IMPLEMENT_MODEL`、`PI_TASKBOOK_FACT_REVIEW_MODEL`、`PI_TASKBOOK_CORRECTNESS_MODEL`、`PI_TASKBOOK_QUALITY_MODEL`、`PI_TASKBOOK_REVIEW_MODEL` 回退。顾问默认沿用设计模型，事实采集和测量默认使用入口模型。子会话继承派发时的 thinking level。
+
+Taskbook 使用 Pi 模型 ID 和当前会话的 thinking level。PStack 的 pstack-models 设置、按角色推理预算和多模型评审团保留在上游。
 
 ### 项目记忆与跨项目记忆
 
