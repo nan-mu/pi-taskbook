@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, linkSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { modelRoutes, resolveModel, type ExecutionPlan, type ModelRoutes, type PlanGap } from "./design-worker.ts";
@@ -7,10 +7,12 @@ import { verifyPreparedEntry, type PreparedEntry } from "../taskbook/entry.ts";
 import type { CheckedFact } from "../facts/fact-check.ts";
 import type { MagpieSyncResult } from "../integrations/magpie-memory.ts";
 import type { FactConflict, FactDecision } from "./task-context.ts";
-import { readProjectMemory, type MemoryChange } from "../facts/project-memory.ts";
+import { legacyProjectFactsPath, readProjectMemory, type MemoryChange } from "../facts/project-memory.ts";
 import type { ReviewResult } from "../review/reviewer.ts";
-import { git, gitExclusion, workspace, type Taskbook } from "../taskbook/document.ts";
+import { git, workspace, type Taskbook } from "../taskbook/document.ts";
 import { loadUpstreamInputs, pinUpstreamInputs, usesCurrentInputs, type UpstreamPins } from "../methods/upstream.ts";
+import { inspectAuditMigration } from "../setup/audit-migration.ts";
+import { ensureRunDirectory, runDirectory } from "./run-paths.ts";
 import { restorePhase, stages, type Outcome, type Phase } from "./transitions.ts";
 
 export type RunObservation = { revision: string; toolName: string; toolCallId: string; input: unknown; isError: boolean; observed: string };
@@ -25,7 +27,7 @@ type CompletedSync = {
 };
 type ConfirmedMagpieItem = Extract<CompletedSync["result"]["items"][number], { remoteId: string }>;
 type State = {
-  version: 2;
+  version: 3;
   digest: string;
   session: string;
   reviewPolicy?: 1;
@@ -79,25 +81,17 @@ export function openRun({ ctx, task, promptDigest, prepared }: {
   const session = ctx.sessionManager.getSessionId();
   if (!ctx.sessionManager.getSessionFile()) throw new Error("请在有持久会话记录的 Pi thread 中启动任务。");
   const preliminary = verifyPreparedEntry(ctx.cwd, task, prepared);
-  const relativePath = ".audit/pi-taskbook/" + task.id + "-" + task.digest.slice(0, 16) + "/state.json";
-  if (gitExclusion(preliminary.root, relativePath).status !== "ready") {
-    throw new Error("请先将 .audit/pi-taskbook/ 加入 Git 排除配置。");
+  const key = task.id + "-" + task.digest.slice(0, 16);
+  const path = join(runDirectory(preliminary.root), key, "state.json");
+  if (!existsSync(path) && lstatSync(join(preliminary.root, ".audit/pi-taskbook", key, "state.json"), {throwIfNoEntry: false})) {
+    throw new Error("该任务仍有旧检查点。先运行 /taskbook-setup 并批准迁移，再提交原任务书。");
   }
-  const path = join(preliminary.root, relativePath);
-  let directory = preliminary.root;
-  for (const component of relativePath.split("/").slice(0, -1)) {
-    directory = join(directory, component);
-    if (!existsSync(directory)) {
-      try { mkdirSync(directory, { mode: 0o700 }); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-    }
-    if (!lstatSync(directory).isDirectory()) throw new Error("审计路径需要真实的目录。");
-  }
+  ensureRunDirectory(preliminary.root, key);
 
   if (!existsSync(path)) {
     const upstream = pinUpstreamInputs();
     loadUpstreamInputs(upstream, stages[0], task.type);
-    const initial: State = { version: 2, reviewPolicy: 1, promptDigest, digest: task.digest, session, base: preliminary.base, branch: preliminary.branch,
+    const initial: State = { version: 3, reviewPolicy: 1, promptDigest, digest: task.digest, session, base: preliminary.base, branch: preliminary.branch,
       phase: stages[0], reports: [],
       upstream };
     try { save(path, initial, task, true); }
@@ -107,10 +101,10 @@ export function openRun({ ctx, task, promptDigest, prepared }: {
   const saved = JSON.parse(readFileSync(path, "utf8")) as Omit<State, "version" | "phase" | "reports" | "branch"> & {
     version: number; phase: string; branch?: string; reports: (Omit<Report, "phase"> & { phase: string })[];
   };
-  if ((saved.version !== 1 && saved.version !== 2) || saved.digest !== task.digest || saved.session !== session || !Array.isArray(saved.reports)) {
+  if (![1, 2, 3].includes(saved.version) || saved.digest !== task.digest || saved.session !== session || !Array.isArray(saved.reports)) {
     throw new Error("审计记录不匹配，或任务已绑定到另一个 Pi 会话。");
   }
-  const state: State = { ...saved, version: 2,
+  const state: State = { ...saved, version: 3,
     branch: saved.branch ?? preliminary.branch,
     phase: saved.phase === "exit" ? "exit" : restorePhase(task.type, saved.phase),
     reports: saved.reports.map(report => ({ ...report, phase: restorePhase(task.type, report.phase) })),
@@ -124,7 +118,7 @@ export function openRun({ ctx, task, promptDigest, prepared }: {
     }
     save(path, state, task);
   }
-  if ((state.phase !== "exit" || state.exit === "ready") && (saved.version === 1 || !state.reviewPolicy || state.promptDigest !== promptDigest || !usesCurrentInputs(state.upstream))) {
+  if ((state.phase !== "exit" || state.exit === "ready") && (saved.version < 3 || !state.reviewPolicy || state.promptDigest !== promptDigest || !usesCurrentInputs(state.upstream))) {
     const upstream = pinUpstreamInputs();
     loadUpstreamInputs(upstream, "fact-check", task.type);
     Object.assign(state, { reviewPolicy: 1, promptDigest, upstream, phase: "fact-check", cycleStart: state.reports.length,
@@ -155,7 +149,12 @@ export function openRun({ ctx, task, promptDigest, prepared }: {
 
 export function cleanRevision(run: Run) {
   const revision = git(run.root, "rev-parse", "HEAD");
-  if (git(run.root, "status", "--porcelain", "--untracked-files=all")) {
+  const untracked = git(run.root, "ls-files", "--others", "--exclude-standard", "-z").split("\0").filter(Boolean);
+  if (untracked.includes(legacyProjectFactsPath)) readProjectMemory(run.root);
+  const isAudit = (path: string) => path.startsWith(".audit/");
+  if (git(run.root, "status", "--porcelain", "--untracked-files=no") ||
+      untracked.some(path => path !== legacyProjectFactsPath && !isAudit(path)) ||
+      (untracked.some(isAudit) && inspectAuditMigration(run.root).status !== "archived")) {
     throw new Error("交付快照需要干净的工作区。保留任务外改动，待其妥善处理后重试。");
   }
   return revision;

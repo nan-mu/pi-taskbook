@@ -1,0 +1,2 @@
+id	fact	source	labels
+t3-worktree-ownership	Pi Taskbook delegates worktree creation and management for /taskbook-new to T3's t3_thread_launch MCP tool with workspaceStrategy.type=worktree, without allocating a checkout itself.	ce29da0406120b6f7cdccbf66a22c7c2a0c9eed8:src/integrations/t3.ts:112-128	worktree,t3

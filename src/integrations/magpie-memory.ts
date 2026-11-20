@@ -1,19 +1,20 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { isDeepStrictEqual, promisify } from "node:util";
 import type { ExtensionAPI, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import { lockProjectMemory, projectFactsPath, projectGlossaryPath, readProjectMemory, type ProjectRecord } from "../facts/project-memory.ts";
+import { decodeTsv, encodeTsv } from "../facts/tsv.ts";
 import { magpieSessionTools, type MagpieCapability } from "./mcp-catalog.ts";
 import { git, gitOk } from "../taskbook/document.ts";
 
 const exec = promisify(execFile);
 const protocol = "pi-taskbook-magpie-v1";
-const mirrorPath = ".fact/foreign.json";
-const lockPath = ".fact/foreign.lock";
+const legacyMirrorPath = ".fact/foreign.json";
+const sourceFactsFile = "facts.tsv";
 const remoteTag = "pi-taskbook-v1";
 type Args = Record<string, string | number | null | string[]>;
 export type MagpieTransport = {
@@ -65,11 +66,12 @@ const pageSchema = Type.Object({
   records: Type.Array(rowSchema, { maxItems: 50 }),
   next_cursor: Type.Union([Type.Null(), nonempty]),
 });
-const foreignRecordSchema = Type.Pick(rowSchema, ["id", "owner", "fact_id", "kind", "text", "scope", "version", "fact_version", "status"],
+const sourceFactSchema = Type.Pick(rowSchema, ["id", "owner", "fact_id", "kind", "text", "scope", "version", "fact_version", "status"],
   {additionalProperties: false});
-const mirrorSchema = Type.Object({
-  schema: Type.Literal(1), repository: repoName, records: Type.Array(foreignRecordSchema),
+const legacyMirrorSchema = Type.Object({
+  schema: Type.Literal(1), repository: repoName, records: Type.Array(sourceFactSchema),
 });
+type SourceFact = Static<typeof sourceFactSchema>;
 type RemoteRow = Static<typeof rowSchema>;
 const scopes = new Map<string, RemoteRow["kind"]>([["cross-project:rule", "rule"], ["cross-project:preference", "preference"],
   ["cross-project:fact", "fact"], ["cross-project:term", "term"]]);
@@ -283,58 +285,136 @@ async function syncItem(root: string, input: SyncInput, transport: MagpieTranspo
   }
 }
 
-function foreignFile(root: string) {
-  const directory = lstatSync(join(root, ".fact"), {throwIfNoEntry: false});
-  if (directory && !directory.isDirectory()) throw new Error("外来事实目录格式无效。");
-  const file = lstatSync(join(root, mirrorPath), {throwIfNoEntry: false});
-  if (file && (!file.isFile() || !gitOk(root, "check-ignore", "-q", "--", mirrorPath))) {
-    throw new Error("外来事实镜像需要是被 Git 排除的普通文件。");
-  }
-  return file && readFileSync(join(root, mirrorPath), "utf8");
+const sourceFactColumns = ["project", "owner", "id", "fact_id", "kind", "scope", "version", "fact_version", "status", "text"];
+
+function sourceSlug(owner: string) {
+  const slug = owner.split("/")[1];
+  if (!slug || !/^[a-z0-9_.-]+$/.test(slug) || [".", "..", ".git"].includes(slug)) return;
+  return slug;
 }
 
-export function readForeignFacts(root: string, repository: string) {
-  try {
-    const raw = foreignFile(root);
-    if (raw === undefined) return {status: "available" as const, records: []};
-    const data: unknown = JSON.parse(raw);
-    if (!Value.Check(mirrorSchema, data) || data.repository !== repository.toLowerCase() ||
-        data.records.some(record => record.owner === data.repository || sensitive.test(record.text))) {
-      throw new Error("外来事实镜像的版本或来源无效。");
+function sourceDirectory(root: string, slug?: string) {
+  const parent = join(root, ".fact");
+  const parentStat = lstatSync(parent, {throwIfNoEntry: false});
+  if (parentStat && !parentStat.isDirectory()) throw new Error(".fact 需要真实目录。");
+  if (!slug) return {path: parent, exists: Boolean(parentStat)};
+  const path = join(parent, slug);
+  const stat = lstatSync(path, {throwIfNoEntry: false});
+  if (stat && !stat.isDirectory()) throw new Error("来源项目的事实路径需要真实目录。");
+  return {path, exists: Boolean(stat)};
+}
+
+function factKey(record: SourceFact) {
+  return JSON.stringify([record.owner, record.id]);
+}
+
+function readSourceTables(root: string, repository: string) {
+  const directory = sourceDirectory(root);
+  if (!directory.exists) return [];
+  const records: SourceFact[] = [];
+  for (const entry of readdirSync(directory.path, {withFileTypes: true})) {
+    if (!entry.isDirectory()) continue;
+    const relative = ".fact/" + entry.name + "/" + sourceFactsFile;
+    const path = join(root, relative);
+    const stat = lstatSync(path, {throwIfNoEntry: false});
+    if (!stat || !gitOk(root, "check-ignore", "-q", "--", relative)) continue;
+    if (!stat.isFile()) throw new Error("来源项目的事实表需要是独立的本地文件。");
+    const [columns, ...rows] = decodeTsv(readFileSync(path, "utf8"));
+    if (!isDeepStrictEqual(columns, sourceFactColumns)) throw new Error("来源项目的事实表字段无效。");
+    const keys = new Set<string>();
+    for (const row of rows) {
+      const [project, owner, id, fact_id, kind, scope, version, fact_version, status, text] = row;
+      const record = {owner, id, fact_id, kind, scope, version: Number(version), fact_version: Number(fact_version), status, text};
+      if (row.length !== sourceFactColumns.length || project !== repository || owner === repository ||
+          sourceSlug(owner) !== entry.name || !Value.Check(sourceFactSchema, record) ||
+          sensitive.test(record.text) || keys.has(factKey(record))) {
+        throw new Error("来源项目的事实表记录无效。");
+      }
+      keys.add(factKey(record));
+      records.push(record);
     }
-    return {status: "available" as const, records: data.records};
+  }
+  return records;
+}
+
+export function readSourceProjectFacts(root: string, repository: string) {
+  try {
+    return {status: "available" as const, records: readSourceTables(root, repository.toLowerCase())};
   } catch {
-    return {status: "unavailable" as const, reason: "外来事实镜像无法核对格式、归属或 Git 排除。"};
+    return {status: "unavailable" as const, reason: "无法核对来源项目的事实表格式或归属。"};
   }
 }
 
-function mirrorRows(root: string, repository: string, rows: RemoteRow[]): MirrorResult {
-  const foreign = rows.filter(row => row.owner !== repository && row.eligible);
-  if (!foreign.length && !lstatSync(join(root, mirrorPath), {throwIfNoEntry: false})) return {status: "complete", updated: 0};
-  if (![mirrorPath, lockPath + "/"].every(path => gitOk(root, "check-ignore", "-q", "--", path))) {
-    return {status: "pending", updated: 0, reason: "Git 需排除 .fact/foreign.json 与 .fact/foreign.lock 才能写外来事实镜像。"};
-  }
-  const file = join(root, mirrorPath);
-  const lock = join(root, lockPath);
-  const temporary = lock + "/" + randomUUID();
+function configureLocalExclusion(root: string, path: string, temporary?: string) {
+  if (git(root, "ls-files", "--", path)) throw new Error("来源项目的事实表已被 Git 跟踪。");
+  const paths = temporary ? [path, temporary] : [path];
+  if (paths.every(file => gitOk(root, "check-ignore", "-q", "--", file))) return;
+  const exclude = git(root, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude");
+  const directory = dirname(exclude);
+  mkdirSync(directory, {recursive: true});
+  if (!lstatSync(directory).isDirectory()) throw new Error("Git 本地排除规则目录无效。");
+  const lock = exclude + ".lock";
+  const descriptor = openSync(lock, "wx", 0o600);
+  let replaced = false;
   try {
-    foreignFile(root);
-    const directory = join(root, ".fact");
-    if (!lstatSync(directory, {throwIfNoEntry: false})) mkdirSync(directory, {mode: 0o700});
-    const staging = lstatSync(lock, {throwIfNoEntry: false});
-    if (staging && !staging.isDirectory()) throw new Error("外来事实镜像的暂存路径需要真实目录。");
-    if (!staging) mkdirSync(lock, {mode: 0o700});
-    const snapshot = readForeignFacts(root, repository);
-    if (snapshot.status === "unavailable") return {status: "pending", updated: 0, reason: snapshot.reason};
-    const records = new Map(snapshot.records.map(record => [JSON.stringify([record.owner, record.id]), record]));
+    const previous = lstatSync(exclude, {throwIfNoEntry: false});
+    if (previous && !previous.isFile()) throw new Error("Git 本地排除规则需要普通文件。");
+    const raw = previous ? readFileSync(exclude, "utf8") : "";
+    const rules = temporary ? ["/" + path, "/" + dirname(path) + "/.facts-*.tmp"] : ["/" + path];
+    const missing = rules.filter(rule => !raw.split(/\r?\n/).includes(rule));
+    if (missing.length) {
+      writeFileSync(descriptor, raw + (raw && !raw.endsWith("\n") ? "\n" : "") + missing.join("\n") + "\n");
+      if (previous) fchmodSync(descriptor, previous.mode & 0o777);
+      renameSync(lock, exclude);
+      replaced = true;
+    }
+  } finally {
+    closeSync(descriptor);
+    if (!replaced) rmSync(lock, {force: true});
+  }
+  if (!paths.every(file => gitOk(root, "check-ignore", "-q", "--", file))) {
+    throw new Error("仓库规则不允许将来源项目的事实表独立保存在本机。");
+  }
+}
+
+function writeSourceTable(root: string, repository: string, slug: string, records: SourceFact[]) {
+  const directory = sourceDirectory(root, slug);
+  const path = ".fact/" + slug + "/" + sourceFactsFile;
+  const stat = lstatSync(join(root, path), {throwIfNoEntry: false});
+  if (stat && (!stat.isFile() || !gitOk(root, "check-ignore", "-q", "--", path))) {
+    throw new Error("已有来源项目的事实表需要保留。");
+  }
+  const temporary = ".fact/" + slug + "/.facts-" + randomUUID() + ".tmp";
+  configureLocalExclusion(root, path, temporary);
+  if (!directory.exists) mkdirSync(directory.path, {recursive: true, mode: 0o700});
+  const contents = encodeTsv([sourceFactColumns, ...records.map(record => [
+    repository, record.owner, record.id, record.fact_id, record.kind, record.scope,
+    String(record.version), String(record.fact_version), record.status, record.text,
+  ])]);
+  try {
+    writeFileSync(join(root, temporary), contents, {mode: 0o600, flag: "wx"});
+    renameSync(join(root, temporary), join(root, path));
+  } finally {
+    rmSync(join(root, temporary), {force: true});
+  }
+}
+
+function mergeSourceFacts(root: string, repository: string, incoming: SourceFact[], mode: "sync" | "migration"): MirrorResult {
+  let updated = 0;
+  try {
+    const snapshot = readSourceTables(root, repository);
+    const records = new Map(snapshot.map(record => [factKey(record), record]));
     const visible = new Set<string>();
-    let updated = 0;
+    const changed = new Map<string, number>();
     let conflict = false;
-    for (const { eligible, writable, ...row } of foreign) {
-      if (sensitive.test(row.text)) { conflict = true; continue; }
-      const key = JSON.stringify([row.owner, row.id]);
+    for (const row of incoming) {
+      const slug = sourceSlug(row.owner);
+      if (!slug || sensitive.test(row.text)) { conflict = true; continue; }
+      const key = factKey(row);
       visible.add(key);
       const prior = records.get(key);
+      if (prior && mode === "migration" && prior.fact_id === row.fact_id && prior.version > row.version &&
+          prior.fact_version >= row.fact_version) continue;
       if (prior && (prior.fact_id !== row.fact_id || row.fact_version < prior.fact_version || row.version < prior.version ||
           (row.fact_version === prior.fact_version && (row.text !== prior.text || row.status !== prior.status || row.kind !== prior.kind)) ||
           (row.version === prior.version && !isDeepStrictEqual(prior, row)))) {
@@ -343,22 +423,65 @@ function mirrorRows(root: string, repository: string, rows: RemoteRow[]): Mirror
       }
       if (prior?.version === row.version) continue;
       records.set(key, row);
-      updated++;
+      changed.set(slug, (changed.get(slug) ?? 0) + 1);
     }
-    if (updated) {
-      writeFileSync(temporary, JSON.stringify({schema: 1, repository, records: [...records.values()]}, null, 2) + "\n",
-        {mode: 0o600, flag: "wx"});
-      renameSync(temporary, file);
+    for (const [slug, count] of changed) {
+      writeSourceTable(root, repository, slug, [...records.values()].filter(record => sourceSlug(record.owner) === slug));
+      updated += count;
     }
-    if (conflict) return {status: "pending", updated, reason: "部分镜像记录的版本、来源或保密检查未通过。"};
-    if ([...records].some(([key, record]) => !visible.has(key) && record.status === "active")) {
-      return {status: "pending", updated, reason: "查询未返回既有镜像的明确退役信号，已保留该镜像。"};
+    if (conflict) return {status: "pending", updated, reason: "部分来源项目的记录版本、归属或保密检查未通过。"};
+    if (mode === "sync" && snapshot.some(record => !visible.has(factKey(record)) && record.status === "active")) {
+      return {status: "pending", updated, reason: "查询未返回既有事实的明确退役信号，已保留该事实。"};
     }
     return {status: "complete", updated};
   } catch {
-    return {status: "pending", updated: 0, reason: "无法安全写入外来事实镜像。"};
+    return {status: "pending", updated, reason: "无法安全写入来源项目的事实表。"};
+  }
+}
+
+function readLegacyMagpieMirror(root: string, repository: string) {
+  sourceDirectory(root);
+  const path = join(root, legacyMirrorPath);
+  const stat = lstatSync(path, {throwIfNoEntry: false});
+  if (!stat) return;
+  if (!stat.isFile()) throw new Error("旧 Magpie 镜像需要是普通文件。");
+  const raw = readFileSync(path, "utf8");
+  const data: unknown = JSON.parse(raw);
+  if (!Value.Check(legacyMirrorSchema, data) || data.repository !== repository ||
+      data.records.some(record => record.owner === repository || !sourceSlug(record.owner) || sensitive.test(record.text)) ||
+      new Set(data.records.map(factKey)).size !== data.records.length) {
+    throw new Error("旧 Magpie 镜像的格式或归属无效。");
+  }
+  return { revision: createHash("sha256").update(raw).digest("hex"), records: data.records };
+}
+
+export function inspectLegacyMagpieMirror(root: string, repository: string) {
+  try {
+    const legacy = readLegacyMagpieMirror(root, repository.toLowerCase());
+    if (!legacy) return {source: legacyMirrorPath, status: "missing" as const};
+    const projects = [...new Set(legacy.records.map(record => record.owner))].map(owner => ({
+      owner, path: ".fact/" + sourceSlug(owner) + "/" + sourceFactsFile,
+      records: legacy.records.filter(record => record.owner === owner).length,
+    }));
+    return {source: legacyMirrorPath, status: "ready" as const, revision: legacy.revision, projects};
+  } catch {
+    return {source: legacyMirrorPath, status: "invalid" as const};
+  }
+}
+
+export function migrateLegacyMagpieMirror(root: string, repository: string, expectedRevision: string) {
+  repository = repository.toLowerCase();
+  const release = lockProjectMemory(root);
+  try {
+    const legacy = readLegacyMagpieMirror(root, repository);
+    if (!legacy || legacy.revision !== expectedRevision) throw new Error("旧 Magpie 镜像已变化，请重新盘点。");
+    const result = mergeSourceFacts(root, repository, legacy.records, "migration");
+    if (result.status === "complete" && !git(root, "ls-files", "--", legacyMirrorPath)) {
+      configureLocalExclusion(root, legacyMirrorPath);
+    }
+    return result;
   } finally {
-    if (lstatSync(lock, {throwIfNoEntry: false})?.isDirectory()) rmSync(temporary, {force: true});
+    release();
   }
 }
 
@@ -390,8 +513,14 @@ export async function syncMagpieMemory(root: string, input: SyncInput, transport
     const items: ItemResult[] = [];
     for (const [id, local] of candidates) items.push(await syncItem(root, input, transport, context, repository, id, local));
     let mirror: MirrorResult;
-    try { mirror = mirrorRows(root, repository, await searchRows(transport, [remoteTag])); }
-    catch { mirror = {status: "pending", updated: 0, reason: "Magpie 未返回可验证的外来事实与分页，已保留现有镜像。"}; }
+    try {
+      const rows = await searchRows(transport, [remoteTag]);
+      const sourceFacts = rows.filter(row => row.owner !== repository && row.eligible)
+        .map(({eligible, writable, ...row}) => row);
+      mirror = mergeSourceFacts(root, repository, sourceFacts, "sync");
+    } catch {
+      mirror = {status: "pending", updated: 0, reason: "Magpie 未返回可验证的其他项目事实与分页，已保留现有记录。"};
+    }
     return {status: items.some(item => item.status === "pending") || mirror.status === "pending" ? "pending" : "complete", items, mirror};
   } catch {
     return failed("Magpie 同步无法核对已审核快照，或服务调用失败。");

@@ -3,40 +3,19 @@ import { createHash, randomUUID } from "node:crypto";
 import { linkSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, join, posix } from "node:path";
-import { Type, type Static } from "typebox";
-import { Value } from "typebox/value";
 import { taskAuthoredFacts } from "../workflow/task-context.ts";
 import type { CheckedFact } from "./fact-check.ts";
 import type { Taskbook } from "../taskbook/document.ts";
 
-export const projectFactsPath = ".fact/project.json";
+import { formatProjectTsv, keyPattern, memoryId, parseProjectTsv, type PriorValue,
+  type ProjectDocument, type ProjectKind, type ProjectRecord } from "./project-memory-format.ts";
 
-const keyPattern = /^[\p{L}\p{N}][\p{L}\p{N}._/-]{0,127}$/u;
-const nonempty = Type.String({minLength: 1});
-const version = Type.Integer({minimum: 1, maximum: Number.MAX_SAFE_INTEGER});
-const kindSchema = Type.Union([Type.Literal("fact"), Type.Literal("term")]);
-const typeSchema = Type.Union([Type.Literal("decision"), Type.Literal("interface"), Type.Literal("observation")]);
-const sourceSchema = Type.Object({
-  repository: Type.String({pattern: "^[\\w.-]+/[\\w.-]+$"}),
-  taskId: nonempty, taskDigest: nonempty, base: nonempty, reviewSession: nonempty,
-  rationale: Type.Optional(nonempty), observationFingerprint: Type.Optional(nonempty), factId: Type.Optional(nonempty),
-  evidence: Type.Array(nonempty),
-  migration: Type.Optional(Type.Object({source: nonempty, sourceVersion: nonempty}, {additionalProperties: false})),
-}, {additionalProperties: false});
-const valueFields = {scope: nonempty, text: nonempty, version, deleted: Type.Boolean(), source: sourceSchema,
-  type: Type.Optional(typeSchema)};
-const priorSchema = Type.Object(valueFields, {additionalProperties: false});
-const recordSchema = Type.Object({...valueFields, key: nonempty, kind: kindSchema,
-  sharedSince: Type.Optional(version), history: Type.Optional(Type.Array(priorSchema))}, {additionalProperties: false});
-const documentSchema = Type.Object({
-  schema: Type.Literal(1), records: Type.Record(Type.String({pattern: "^project:(fact|term):"}), recordSchema, {additionalProperties: false}),
-  applied: Type.Record(Type.String({pattern: "^[a-f0-9]{64}$"}), Type.Literal(true), {additionalProperties: false}),
-}, {additionalProperties: false});
+export { formatProjectTsv, memoryId, parseLegacyProjectDocument, parseProjectTsv } from "./project-memory-format.ts";
+export type { ProjectDocument, ProjectKind, ProjectRecord } from "./project-memory-format.ts";
 
-export type ProjectKind = Static<typeof kindSchema>;
-type PriorValue = Static<typeof priorSchema>;
-export type ProjectRecord = Static<typeof recordSchema>;
-export type ProjectDocument = Static<typeof documentSchema>;
+export const projectFactsPath = ".fact/facts.tsv";
+export const legacyProjectFactsPath = ".fact/project.json";
+
 export type ProjectSnapshot = { head: string | null } & Omit<ProjectDocument, "schema">;
 export type MemoryChange = { action: "create" | "update" | "delete"; kind: ProjectKind; key: string;
   expected: number; scope: string; text: string; authorization: string; factId?: string; type?: ProjectRecord["type"] };
@@ -48,22 +27,6 @@ function git(root: string, args: string[]) {
 }
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 const sharedScopes = new Set(["cross-project:rule", "cross-project:preference", "cross-project:fact", "cross-project:term"]);
-export function memoryId(kind: ProjectKind, key: string) { return "project:" + kind + ":" + key; }
-export function parseProjectDocument(text: string): ProjectDocument {
-  let data: unknown;
-  try { data = JSON.parse(text); }
-  catch { throw new Error("项目事实文件的 JSON 格式无效。"); }
-  if (!Value.Check(documentSchema, data) || Object.entries(data.records).some(([id, record]) =>
-    !keyPattern.test(record.key) || id !== memoryId(record.kind, record.key) ||
-    (record.sharedSince !== undefined && record.sharedSince > record.version) ||
-    record.history?.some((previous, index, history) =>
-      previous.version >= record.version || (index > 0 && previous.version <= history[index - 1].version) ||
-      previous.source.repository.toLowerCase() !== record.source.repository.toLowerCase()))) {
-    throw new Error("项目事实文件的记录或版本格式无效。");
-  }
-  return data;
-}
-
 function regularFile(root: string, relativePath: string) {
   let current = root;
   for (const segment of relativePath.split("/").slice(0, -1)) {
@@ -77,6 +40,13 @@ function regularFile(root: string, relativePath: string) {
   if (!entry) return;
   if (!entry.isFile()) throw new Error("项目事实路径要求普通文件：" + relativePath);
   return readFileSync(path, "utf8");
+}
+
+export function readLegacyProjectJson(root: string) {
+  const content = regularFile(root, legacyProjectFactsPath);
+  if (content === undefined) return;
+  const revision = hash(content);
+  return { content, revision, receipt: hash(JSON.stringify([legacyProjectFactsPath, revision])) };
 }
 
 export function projectGlossaryPath(root: string) {
@@ -113,12 +83,18 @@ function synchronizeGlossary(existing: string | undefined, records: ProjectSnaps
   return glossary.slice(0, start) + section + glossary.slice(end + glossaryEnd.length);
 }
 
-export function readProjectMemory(root: string): ProjectSnapshot {
+export function readProjectMemory(root: string, options: {allowUnmigratedLegacy?: boolean} = {}): ProjectSnapshot {
   const raw = regularFile(root, projectFactsPath);
   const glossary = projectGlossaryPath(root);
   const currentTerms = regularFile(root, glossary);
+  const {records, applied} = raw === undefined ? {records: {}, applied: {}} : parseProjectTsv(raw);
+  if (!options.allowUnmigratedLegacy) {
+    const legacy = readLegacyProjectJson(root);
+    if (legacy && !applied[legacy.receipt]) {
+      throw new Error("发现尚未迁移的 " + legacyProjectFactsPath + "。请在 /taskbook-setup 中批准迁移。");
+    }
+  }
   if (raw === undefined && currentTerms === undefined && glossary === "GLOSSARY.md") return {head: null, records: {}, applied: {}};
-  const {records, applied} = raw === undefined ? {records: {}, applied: {}} : parseProjectDocument(raw);
   if (Object.values(records).some(record => record.kind === "term") && synchronizeGlossary(currentTerms, records) !== currentTerms) {
     throw new Error("项目术语清单的管理区与 .fact 不一致，请恢复已审核版本。");
   }
@@ -343,15 +319,20 @@ export function lockProjectMemory(root: string) {
   };
 }
 
-export function commitProjectMemory(root: string, snapshot: ProjectSnapshot, document: ProjectDocument, message: string, modified = true) {
+export function commitProjectMemory(root: string, snapshot: ProjectSnapshot, document: ProjectDocument, message: string, modified = true,
+  migration?: {projectJsonVersion?: string}) {
   const unlock = lockProjectMemory(root);
   try {
-    if (readProjectMemory(root).head !== snapshot.head) {
+    const options = {allowUnmigratedLegacy: migration !== undefined};
+    if (readProjectMemory(root, options).head !== snapshot.head) {
       throw new Error("另一工作区或编辑已更新项目事实，重交同一任务书以重新独立审核。");
     }
+    if (migration?.projectJsonVersion !== undefined && readLegacyProjectJson(root)?.revision !== migration.projectJsonVersion) {
+      throw new Error("旧 JSON 版本已变化，请重新盘点。");
+    }
     if (!modified) return snapshot;
-    const content = JSON.stringify(document, null, 2) + "\n";
-    parseProjectDocument(content);
+    const content = formatProjectTsv(document);
+    parseProjectTsv(content);
     const mutations = new Map([[projectFactsPath, content]]);
     if (Object.values(document.records).some(record => record.kind === "term")) {
       const glossary = projectGlossaryPath(root);
@@ -388,7 +369,7 @@ export function commitProjectMemory(root: string, snapshot: ProjectSnapshot, doc
       }
       throw error;
     }
-    return readProjectMemory(root);
+    return readProjectMemory(root, options);
   } finally {
     unlock();
   }

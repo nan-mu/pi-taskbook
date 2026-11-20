@@ -5,8 +5,9 @@ import { join, posix } from "node:path";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import {
-  commitProjectMemory, lockProjectMemory, observationFingerprint, observationIdentity, parseProjectDocument, projectFactsPath,
-  readProjectMemory, type ProjectDocument, type ProjectRecord, type ProjectSnapshot,
+  commitProjectMemory, legacyProjectFactsPath, lockProjectMemory, observationFingerprint, observationIdentity,
+  parseLegacyProjectDocument, parseProjectTsv, projectFactsPath, readLegacyProjectJson, readProjectMemory,
+  type ProjectDocument, type ProjectRecord, type ProjectSnapshot,
 } from "./project-memory.ts";
 import { factChecksParameter } from "./fact-check.ts";
 import { git, gitOk } from "../taskbook/document.ts";
@@ -35,12 +36,16 @@ const reviewSchema = Type.Object({
     toolInput: Type.Optional(Type.Unknown()), toolError: Type.Optional(Type.Boolean()),
   })),
 });
-const archivedDocuments = new Set(["project-memory.json", "memory.json", "facts.json", "terms.json"]);
+const archivedDocuments = new Set(["project-memory.json", "memory.json", "facts.json", "terms.json",
+  "project-memory.tsv", "memory.tsv", "facts.tsv", "terms.tsv"]);
+type Archive = {source: string; revision: string; document: ProjectDocument};
 type SourceVersion = {id: string; sourceVersion: string};
 type Entry = SourceVersion & { source: string; sourceRevision: string; target: string; record: ProjectRecord };
 type Inventory = {
   legacyHead: string | null;
   ledger?: ProjectDocument;
+  projectJson?: Archive & {receipt: string};
+  archives: Archive[];
   entries: Entry[];
   unresolved: {source: string; reason: string}[];
 };
@@ -49,7 +54,11 @@ function readLegacyDocument(root: string, revision: string) {
   const content = execFileSync("git", ["cat-file", "blob", revision + ":" + legacyFile], {
     cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"],
   });
-  return parseProjectDocument(content);
+  return parseLegacyProjectDocument(content);
+}
+
+function parseArchive(source: string, raw: string) {
+  return source.endsWith(".tsv") ? parseProjectTsv(raw) : parseLegacyProjectDocument(raw);
 }
 
 function recordVersion(record: ProjectRecord, version: number) {
@@ -186,7 +195,12 @@ function auditInventory(root: string, inventory: Inventory, directory = auditPat
       else if (entry.isFile() && (isCheckpoint || archivedDocuments.has(entry.name))) {
         const raw = readFileSync(join(root, source), "utf8");
         if (isCheckpoint) checkpointInventory(root, inventory, source, raw, repository);
-        else addDocument(inventory, source, hash(raw), parseProjectDocument(raw), repository);
+        else {
+          const revision = hash(raw);
+          const document = parseArchive(source, raw);
+          inventory.archives.push({source, revision, document});
+          addDocument(inventory, source, revision, document, repository);
+        }
       } else {
         inventory.unresolved.push({source, reason: "未识别的审计资料格式，保留原件。"});
       }
@@ -199,14 +213,24 @@ function auditInventory(root: string, inventory: Inventory, directory = auditPat
 function inventory(root: string, repository?: string) {
   const legacyHead = git(root, "for-each-ref", "--format=%(refname) %(objectname)", legacyRef).split("\n")
     .find(line => line.startsWith(legacyRef + " "))?.slice(legacyRef.length + 1) ?? null;
-  const result: Inventory = {legacyHead, entries: [], unresolved: []};
+  const result: Inventory = {legacyHead, entries: [], unresolved: [], archives: []};
   ledgerInventory(root, result, repository);
+  try {
+    const local = readLegacyProjectJson(root);
+    if (local) {
+      const document = parseLegacyProjectDocument(local.content);
+      result.projectJson = {source: legacyProjectFactsPath, revision: local.revision, receipt: local.receipt, document};
+      addDocument(result, legacyProjectFactsPath, local.revision, document, repository);
+    }
+  } catch {
+    result.unresolved.push({source: legacyProjectFactsPath, reason: "无法读取或验证旧项目事实。"});
+  }
   auditInventory(root, result, auditPath, repository);
   return result;
 }
 
 export function inspectLegacyProjectMemory(root: string, repository?: string) {
-  const local = readProjectMemory(root);
+  const local = readProjectMemory(root, {allowUnmigratedLegacy: true});
   const preview = inventory(root, repository);
   const alternatives = new Map<string, Entry[]>();
   for (const entry of preview.entries) {
@@ -214,26 +238,57 @@ export function inspectLegacyProjectMemory(root: string, repository?: string) {
     candidates.push(entry);
     alternatives.set(entry.target, candidates);
   }
-  return {legacyHead: preview.legacyHead, unresolved: preview.unresolved,
-    entries: preview.entries.map(entry => {
+  const entries = preview.entries.map(entry => {
       const localStatus = status(local, entry);
       const competing = alternatives.get(entry.target)?.some(other =>
         other !== entry && !copied(other.record, entry.record) && !copied(entry.record, other.record));
       return {id: entry.id, sourceVersion: entry.sourceVersion, source: entry.source, sourceRevision: entry.sourceRevision, target: projectFactsPath + "#" + entry.target,
         version: entry.record.version, status: localStatus === "ready" && competing ? "conflict" : localStatus,
         retired: entry.record.deleted, kind: entry.record.kind};
-    })};
+  });
+  const projectJson = preview.projectJson;
+  function archiveStatus(archive: Archive) {
+    if (preview.unresolved.some(item => item.source === archive.source || item.source.startsWith(archive.source + " ")) ||
+        entries.some(entry => entry.source === archive.source && entry.status === "conflict")) return "conflict";
+    return Object.entries(archive.document.records).every(([id, record]) => copied(local.records[id], record)) &&
+      Object.keys(archive.document.applied).every(id => local.applied[id]) ? "already-imported" : "ready";
+  }
+  const archives = preview.archives.map(archive => ({source: archive.source, sourceRevision: archive.revision, status: archiveStatus(archive)}));
+  return {legacyHead: preview.legacyHead, unresolved: preview.unresolved, entries, archives,
+    ...(projectJson ? {projectJson: {source: projectJson.source, sourceRevision: projectJson.revision,
+      status: local.applied[projectJson.receipt] ? "already-imported" :
+        archiveStatus(projectJson) === "conflict" ? "conflict" : "ready"}} : {})};
 }
 
-export function importLegacyProjectMemory(root: string, repository: string, selections: SourceVersion[]) {
-  if (!selections.length || new Set(selections.map(item => item.id)).size !== selections.length) {
+export function importLegacyProjectMemory(root: string, repository: string, selections: SourceVersion[],
+  {projectJsonVersion, archiveVersions = []}: {projectJsonVersion?: string; archiveVersions?: {source: string; sourceRevision: string}[]} = {}) {
+  if ((!selections.length && !projectJsonVersion && !archiveVersions.length) ||
+      new Set(selections.map(item => item.id)).size !== selections.length) {
     throw new Error("请选择不重复的迁移条目与预览版本。");
   }
-  const snapshot = readProjectMemory(root);
+  const snapshot = readProjectMemory(root, {allowUnmigratedLegacy: true});
   const preview = inventory(root, repository);
+  if (projectJsonVersion !== undefined && preview.projectJson?.revision !== projectJsonVersion) {
+    throw new Error("旧 JSON 版本已变化，请重新盘点。");
+  }
+  const local = readLegacyProjectJson(root);
+  if (local && !snapshot.applied[local.receipt] && projectJsonVersion !== local.revision) {
+    throw new Error("请同时批准迁移现有的旧项目事实文件。");
+  }
+  const approvedArchives = new Set(archiveVersions.map(choice => {
+    const archive = preview.archives.find(item => item.source === choice.source && item.revision === choice.sourceRevision);
+    if (!archive) throw new Error("迁移预览中没有对应的归档版本。");
+    return archive.source;
+  }));
+  const requested = new Map(selections.map(item => [item.id, item]));
+  for (const entry of preview.entries) {
+    if ((projectJsonVersion !== undefined && entry.source === legacyProjectFactsPath) || approvedArchives.has(entry.source)) {
+      if (!requested.has(entry.id)) requested.set(entry.id, entry);
+    }
+  }
   const document: ProjectDocument = {schema: 1, records: {...snapshot.records}, applied: {...snapshot.applied}};
   let modified = false;
-  const selected = selections.flatMap(choice => {
+  const selected = [...requested.values()].flatMap(choice => {
     const marker = hash(JSON.stringify(["migration", choice.id, choice.sourceVersion]));
     const entry = preview.entries.find(item => item.id === choice.id && item.sourceVersion === choice.sourceVersion);
     if (snapshot.applied[marker]) return [];
@@ -250,24 +305,34 @@ export function importLegacyProjectMemory(root: string, repository: string, sele
     document.applied[marker] = true;
     modified = true;
   }
-  for (const archive of new Set(selected.map(({entry}) => entry.source).filter(isArchivePath))) {
-    const raw = regularArchive(root, archive);
-    const old = parseProjectDocument(raw);
-    if (!Object.entries(old.records).every(([key, record]) => copied(document.records[key], record))) continue;
-    for (const marker of Object.keys(old.applied)) {
+  function copyReceipts(source: ProjectDocument) {
+    for (const marker of Object.keys(source.applied)) {
       if (document.applied[marker]) continue;
       document.applied[marker] = true;
       modified = true;
     }
   }
-  if (preview.ledger && Object.entries(preview.ledger.records).every(([key, record]) => copied(document.records[key], record))) {
-    for (const marker of Object.keys(preview.ledger.applied)) {
-      if (document.applied[marker]) continue;
-      document.applied[marker] = true;
+  function hasCompleteCopy(source: ProjectDocument) {
+    return Object.entries(source.records).every(([key, record]) => copied(document.records[key], record));
+  }
+  const selectedSources = new Set(selected.map(({entry}) => entry.source));
+  for (const archive of preview.archives) {
+    if (!selectedSources.has(archive.source) && !approvedArchives.has(archive.source)) continue;
+    if (hash(regularArchive(root, archive.source)) !== archive.revision) throw new Error("归档版本已变化，请重新盘点。");
+    if (hasCompleteCopy(archive.document)) copyReceipts(archive.document);
+    else if (approvedArchives.has(archive.source)) throw new Error("归档含归属未核对的条目，请重新盘点。");
+  }
+  const approvedJson = projectJsonVersion === undefined ? undefined : preview.projectJson;
+  if (approvedJson) {
+    if (!hasCompleteCopy(approvedJson.document)) throw new Error("旧项目事实含归属未核对的条目。");
+    copyReceipts(approvedJson.document);
+    if (!document.applied[approvedJson.receipt]) {
+      document.applied[approvedJson.receipt] = true;
       modified = true;
     }
   }
-  return commitProjectMemory(root, snapshot, document, "Migrate reviewed project facts", modified);
+  if (preview.ledger && selectedSources.has(legacyRef) && hasCompleteCopy(preview.ledger)) copyReceipts(preview.ledger);
+  return commitProjectMemory(root, snapshot, document, "Migrate reviewed project facts", modified, {projectJsonVersion});
 }
 
 export function deleteLegacyProjectMemoryRef(root: string, expectedHead: string, repository?: string) {
@@ -292,11 +357,15 @@ function requireCommittedCopy(root: string, source: ProjectDocument) {
   if (!gitOk(root, "cat-file", "-e", "HEAD:" + projectFactsPath)) {
     throw new Error("旧资料缺少可回查的提交副本。");
   }
-  const committed = parseProjectDocument(git(root, "show", "HEAD:" + projectFactsPath));
+  const content = execFileSync("git", ["cat-file", "blob", "HEAD:" + projectFactsPath], {
+    cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"],
+  });
+  const committed = parseProjectTsv(content);
   if (Object.entries(source.records).some(([key, record]) => !copied(committed.records[key], record)) ||
       Object.keys(source.applied).some(key => !committed.applied[key])) {
     throw new Error("旧资料仍有条目或应用记录缺少可回查的提交副本。");
   }
+  return committed;
 }
 
 function isArchivePath(path: string) {
@@ -316,14 +385,18 @@ function regularArchive(root: string, path: string) {
 }
 
 export function deleteLegacyProjectMemoryArchive(root: string, path: string, expectedRevision: string) {
-  if (!isArchivePath(path) || !/^[a-f0-9]{64}$/.test(expectedRevision)) {
+  if ((path !== legacyProjectFactsPath && !isArchivePath(path)) || !/^[a-f0-9]{64}$/.test(expectedRevision)) {
     throw new Error("请选择预览中的归档路径与版本。Pi 的任务检查点需要保留。");
   }
   const unlock = lockProjectMemory(root);
   try {
     const raw = regularArchive(root, path);
     if (hash(raw) !== expectedRevision) throw new Error("归档版本已变化，请重新预览。");
-    requireCommittedCopy(root, parseProjectDocument(raw));
+    const committed = requireCommittedCopy(root, parseArchive(path, raw));
+    if (path === legacyProjectFactsPath) {
+      const receipt = readLegacyProjectJson(root)?.receipt;
+      if (!receipt || !committed.applied[receipt]) throw new Error("旧项目事实没有已提交的迁移回执。");
+    }
     if (regularArchive(root, path) !== raw) throw new Error("归档版本已变化，请重新预览。");
     unlinkSync(join(root, path));
   } finally {

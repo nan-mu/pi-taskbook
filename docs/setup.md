@@ -17,7 +17,9 @@ printf '%s\n' '{"type":"get_commands"}' '{"type":"get_available_models"}' |
 
 ## 配置角色模型
 
-使用 `pi --offline --list-models` 核对可用模型 ID。需要为不同阶段指定模型时，将[角色配置示例](../pi-taskbook.example.json)复制到 agent 目录并命名为 `pi-taskbook.json`。也可以设置 `PI_TASKBOOK_CONFIG` 指向文件的绝对路径。将示例中的值替换成 Pi 已注册的 `provider/model-id`。
+使用 `pi --offline --list-models` 核对可用模型 ID。[角色配置示例](../taskbook-models.example.md)使用每行一个 `角色: provider/model-id` 的 Markdown 格式，支持 `#` 注释和空行。默认读取 `~/.agents/taskbook-models.md`。可设置 `PI_TASKBOOK_CONFIG` 指定其他文件。
+
+如果 Markdown 文件尚未生成，Pi 可以读取原设置目录的 `pi-taskbook.json`。Setup 会读到 `~/.agents/pstack-models.md` 时将其作为模型选择参考，并询问用户是否生成 Markdown。PStack 中的名称须与 Pi 已注册的模型对应。
 
 | 配置键 | 职责 | 默认模型 |
 | --- | --- | --- |
@@ -31,17 +33,11 @@ printf '%s\n' '{"type":"get_commands"}' '{"type":"get_available_models"}' |
 
 任务开始时保存解析后的模型 ID。恢复沿用检查点中的 ID。独立会话继承派发时的 Pi thinking level。
 
-## 设置 Git 排除规则
+## 生成配置与迁移旧资料
 
-在目标仓库的 `.gitignore` 或 `git rev-parse --git-path info/exclude` 所指文件中加入以下规则。
+运行 `/taskbook-setup` 开始普通 AI 对话。插件将本次模型、项目和 MCP 探测结果附到消息中。直接回复是否同意生成配置或迁移。迁移确认会列出来源和目标。核对迁移结果后，再选择保留或清理原 `.audit`。
 
-```gitignore
-/.audit/pi-taskbook/
-/.fact/foreign.json
-/.fact/foreign.lock/
-```
-
-第一条是正式任务的前置条件。后两条用于启用外来事实镜像。项目事实文件 `.fact/project.json` 应允许 Git 跟踪。
+新的检查点位于当前 Git worktree 的元数据目录。项目事实用 `.fact/facts.tsv`，允许 Git 跟踪。迁移与目录说明见[项目事实与术语](project-memory.md)。
 
 ## 解读 setup 报告
 
@@ -57,5 +53,3 @@ printf '%s\n' '{"type":"get_commands"}' '{"type":"get_available_models"}' |
 | `t3` | 使用当前会话的 T3 MCP 上下文只读检查 `t3_thread_launch` 及托管 worktree 参数。 |
 
 使用 `/taskbook-new` 时，从 T3 启动的 Pi 会话运行 setup。T3 为该会话注入 MCP 上下文，并管理 worktree 路径。已有 linked worktree 可以使用 `/taskbook` 独立运行。
-
-在同一 Pi 会话执行 `/taskbook-setup apply <批准的改动>`，才会进入执行阶段。初始化、旧资料导入和删除分开批准。迁移命令见[迁移与恢复](project-memory.md#迁移与恢复)。

@@ -1,3 +1,4 @@
+import csv
 import hashlib
 import http.server
 import json
@@ -36,6 +37,12 @@ wrong_baseline = "At the baseline, an explicit output path is ignored."
 correct_baseline = "At the baseline, a user-supplied explicit output path takes precedence."
 first_build = 'DEFAULT = "build"\nCLEAN = "../build"\n'
 fixed_build = 'DEFAULT = "build"\nCLEAN = DEFAULT\n'
+
+def prompt_text(message):
+    content = message.get("content")
+    if isinstance(content, list):
+        return "".join(item.get("text", "") for item in content if item.get("type") == "text")
+    return content or ""
 
 def review_turn(packet, messages, body):
     role = packet["role"]
@@ -436,27 +443,28 @@ class Provider(http.server.BaseHTTPRequestHandler):
                 return
             messages = body["messages"]
             system = "\n".join(str(m["content"]) for m in messages if m["role"] in ("system", "developer"))
-            if "根据本轮 /taskbook-setup 的检查结果汇报" in system:
-                assert not body.get("tools"), body.get("tools")
-                content = json.dumps(messages, ensure_ascii=False)
-                assert "FIXTURE_CONFIG_SECRET" not in content
-                setup_reports.append(content)
+            latest = prompt_text(messages[-1])
+            if "这是 /taskbook-setup 的普通对话" in latest:
+                assert body.get("tools")
+                assert "FIXTURE_CONFIG_SECRET" not in latest
+                setup_reports.append(latest)
                 if setup_retry.is_set():
                     setup_retry.clear()
                     self.send_error(503)
                     return
                 delta = {"role": "assistant", "content": "setup fixture report"}
                 finish = "stop"
-            elif "这是用户通过 /taskbook-setup apply 明确批准的执行轮" in system:
-                names = [tool["function"]["name"] for tool in body.get("tools", [])]
-                if messages[-1]["role"] == "tool":
-                    delta = {"role": "assistant", "content": "setup fixture applied"}
-                    finish = "stop"
-                else:
-                    assert "write" in names
+            elif messages[-1]["role"] == "user" and latest in ("同意生成", "请迁移旧审计资料", "请清理已迁移的审计资料"):
+                if latest == "同意生成":
                     setup_tool_calls.append("write")
                     delta = tool_call("write", {"path": "setup-approved.txt", "content": "approved"})
-                    finish = "tool_calls"
+                else:
+                    delta = tool_call("taskbook_migrate", {"operation": "migrate" if latest.startswith("请迁移") else "delete-audit"})
+                finish = "tool_calls"
+            elif messages[-1]["role"] == "tool" and any(message["role"] == "user" and prompt_text(message) in
+                    ("同意生成", "请迁移旧审计资料", "请清理已迁移的审计资料") for message in messages):
+                delta = {"role": "assistant", "content": "setup follow-up complete"}
+                finish = "stop"
             elif "PI_TASKBOOK_INDEPENDENT_REVIEW" in system:
                 user_message = next(m["content"] for m in messages if m["role"] == "user")
                 if isinstance(user_message, list):
@@ -575,7 +583,7 @@ class Client:
              "--no-skills", "--no-context-files", "--provider", "fixture", "--model", "fixture",
              "--session-id", session, *([] if subagents else ["-e", str(repo / "index.ts")])],
             cwd=work, env={**os.environ, "PI_TASKBOOK_PSTACK_ROOT": "", "PI_TASKBOOK_MATT_ROOT": "",
-                           "PI_CODING_AGENT_DIR": str(config), "MAGPIE_GATEWAY": "http://127.0.0.1:1", **(env or {})},
+                           "PI_CODING_AGENT_DIR": str(config), "HOME": str(config.parent), "MAGPIE_GATEWAY": "http://127.0.0.1:1", **(env or {})},
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
         threading.Thread(target=self.read, daemon=True).start()
 
@@ -613,6 +621,12 @@ class Client:
         self.notifications.append(item)
         return item
 
+    def confirm(self, accepted):
+        event = self.until(lambda item: item.get("type") == "extension_ui_request" and item.get("method") == "confirm")
+        self.process.stdin.write(json.dumps({"type": "extension_ui_response", "id": event["id"], "confirmed": accepted}) + "\n")
+        self.process.stdin.flush()
+        return event
+
     def settled(self, text):
         return self.until(lambda item: item.get("type") == "agent_end" and text in str(item))
 
@@ -630,8 +644,26 @@ class Client:
 def git(where, *args):
     return subprocess.check_output(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgSign=false", "-C", str(where), *args], text=True, stderr=subprocess.STDOUT).strip()
 
+def run_directory(work):
+    return Path(git(work, "rev-parse", "--absolute-git-dir")) / "pi-taskbook/runs"
+
+def facts_at(work, revision="HEAD"):
+    raw = subprocess.check_output(["git", "-C", str(work), "show", revision + ":.fact/facts.tsv"], text=True)
+    rows = list(csv.DictReader(raw.splitlines(), delimiter="\t"))
+    records = {}
+    for row in rows:
+        if row["row"] != "record":
+            continue
+        records[row["id"]] = {
+            "text": row["text"], "version": int(row["version"]), "deleted": row["status"] == "retired",
+            "type": row["type"], "scope": row["scope"],
+            "source": {"reviewSession": row["review_session"], "factId": row["fact_id"], "migration": {"source": row["migration_source"]}},
+            "history": [{"version": int(old["version"])} for old in rows if old["row"] == "history" and old["id"] == row["id"]],
+        }
+    return records
+
 def state_for(wt, name):
-    files = list((wt / ".audit/pi-taskbook").glob(f"{name}-*/state.json"))
+    files = list(run_directory(wt).glob(f"{name}-*/state.json"))
     assert len(files) == 1, files
     return json.loads(files[0].read_text())
 
@@ -704,10 +736,9 @@ with tempfile.TemporaryDirectory(prefix="pi-taskbook-rpc-") as tmp:
     main.mkdir()
     git(main, "init", "-b", "main")
     git(main, "remote", "add", "origin", "git@github.com:fixture/repo.git")
-    (main / ".gitignore").write_text("/.audit/pi-taskbook/\n/.fact/foreign.json\n/.fact/foreign.lock/\n")
     (main / "measure.py").write_text(sample_program)
     (main / "build_method.py").write_text('DEFAULT = "../build"\nCLEAN = DEFAULT\n' + override_contract)
-    git(main, "add", ".gitignore", "measure.py", "build_method.py")
+    git(main, "add", "measure.py", "build_method.py")
     git(main, "commit", "-m", "Base")
     work = d / "work"
     git(main, "worktree", "add", "-b", "agent/fixture", str(work))
@@ -850,7 +881,7 @@ Complete the shared stages.
         client.notify("退出（可恢复）")
         s = state_for(work, "resume")
         assert s["phase"] == "implement" and len(s["reports"]) == 3, s
-        state_path = next((work / ".audit/pi-taskbook").glob("resume-*/state.json"))
+        state_path = next(run_directory(work).glob("resume-*/state.json"))
         del s["upstream"]
         s["phase"] = "implement-new"
         s["reports"][0]["phase"] = "confirm-premises"
@@ -929,12 +960,16 @@ Complete the shared stages.
     finally:
         client.close()
 
-    role_file = config / "pi-taskbook.json"
-    role_file.write_text(json.dumps({
+    models_dir = d / ".agents"
+    models_dir.mkdir()
+    (models_dir / "pstack-models.md").write_text("judgment and prose: fixture/review\n")
+    role_file = models_dir / "taskbook-models.md"
+    roles = {
         "design": "fixture/design", "implement": "fixture/worker", "consult": "fixture/quality-review",
         "factCheck": "fixture/fixture", "performance": "fixture/fixture",
         "factReview": "fixture/review", "correctness": "fixture/review", "quality": "fixture/quality-review",
-    }))
+    }
+    role_file.write_text("".join(f"{role}: {model}\n" for role, model in roles.items()))
     router = Client(work, config, str(uuid.uuid4()), roots)
     try:
         changes = "## Project memory\n\n- create term endpoint @0 | project | Missing-input endpoint behavior is an exit status of 4.\n"
@@ -957,7 +992,7 @@ Complete the shared stages.
             assert any(action.get("result", {}).get("agentId") for action in routed["designActions"]), routed["designActions"]
         assert "M1" in [i["id"] for i in fact_approval["items"]]
         memory_head = git(work, "rev-parse", "HEAD")
-        snapshot = json.loads(git(work, "show", memory_head + ":.fact/project.json"))
+        snapshot = facts_at(work, memory_head)
         assert not git(work, "for-each-ref", "refs/pi-taskbook/project-memory")
         assert routed["approvedProjectHead"] == routed["sync"]["projectHead"]
         assert routed["revision"] == routed["sync"]["revision"]
@@ -965,12 +1000,12 @@ Complete the shared stages.
         assert "endpoint" in (work / "GLOSSARY.md").read_text()
         clone = d / "clone"
         git(d, "clone", "-b", "agent/fixture", str(work), str(clone))
-        assert (clone / ".fact/project.json").read_text() == (work / ".fact/project.json").read_text()
-        term = snapshot["records"]["project:term:endpoint"]
+        assert (clone / ".fact/facts.tsv").read_text() == (work / ".fact/facts.tsv").read_text()
+        term = snapshot["project:term:endpoint"]
         assert term["version"] == 1 and term["source"]["reviewSession"] == fact_approval["sessionId"]
         classified = {i["id"]: i["memoryUse"] for i in fact_approval["items"] if "memoryUse" in i}
         assert classified == {"P1":"independent", "P2":"change-evidence"}
-        recorded = [entry["text"] for key, entry in snapshot["records"].items() if key.startswith("project:fact:observation-")]
+        recorded = [entry["text"] for key, entry in snapshot.items() if key.startswith("project:fact:observation-")]
         assert measurement_prefix in recorded and missing_input_evidence not in recorded
         stale = taskfile(d, "memory-stale")
         stale.write_text(stale.read_text() + "\n" + changes.replace("create term endpoint @0", "update term endpoint @9"))
@@ -1001,13 +1036,13 @@ Complete the shared stages.
                           "- delete term endpoint @2 | project | The glossary term has retired.\n")
         submit(router, retire)
         router.notify("可交接")
-        retired = json.loads(git(work, "show", "HEAD:.fact/project.json"))["records"]["project:term:endpoint"]
+        retired = facts_at(work)["project:term:endpoint"]
         assert retired["version"] == 3 and retired["deleted"]
         assert [entry["version"] for entry in retired["history"]] == [1, 2]
         assert "Updated endpoint definition." not in (work / "GLOSSARY.md").read_text()
         assert not git(work, "for-each-ref", "refs/pi-taskbook/project-memory")
 
-        old_path = next((work / ".audit/pi-taskbook").glob("term-retire-*/state.json"))
+        old_path = next(run_directory(work).glob("term-retire-*/state.json"))
         old = json.loads(old_path.read_text())
         old["version"] = 1
         old_path.write_text(json.dumps(old))
@@ -1021,10 +1056,10 @@ Complete the shared stages.
         router.notify(user_question)
         waiting = state_for(work, "design-question")
         assert waiting["pendingQuestion"]["question"] == user_question, waiting
-        role_file.write_text(json.dumps({"design": "fixture/invalid-test-model"}))
+        role_file.write_text("design: fixture/invalid-test-model\n")
         submit(router, taskfile(d, "invalid-model"))
         message = router.notify("未匹配已注册的 Pi 模型")
-        assert "pi-taskbook.json" in str(message) and "design" in str(message) and "invalid-test-model" not in str(message), message
+        assert "taskbook-models.md" in str(message) and "design" in str(message) and "invalid-test-model" not in str(message), message
         before = len(requests)
         submit(router, question)
         router.notify(user_question)
@@ -1043,8 +1078,6 @@ Complete the shared stages.
     setup = Client(work, config, str(uuid.uuid4()))
     try:
         before = git(work, "status", "--porcelain", "--untracked-files=all")
-        setup.command(type="prompt", message="/taskbook-setup apply initialize")
-        setup.notify("当前会话没有待批准")
         report_count = len(setup_reports)
         setup_retry.set()
         setup.command(type="prompt", message="/taskbook-setup")
@@ -1052,19 +1085,28 @@ Complete the shared stages.
         assert len(setup_reports) == report_count + 2 and not setup_tool_calls
         assert git(work, "status", "--porcelain", "--untracked-files=all") == before
         assert not (work / "setup-approved.txt").exists()
-        setup.command(type="prompt", message="/taskbook-setup apply Write only setup-approved.txt with content approved")
-        setup.settled("setup fixture applied")
+        assert "judgment and prose: fixture/review" in setup_reports[-1]
+        setup.command(type="prompt", message="同意生成")
+        setup.settled("setup follow-up complete")
         assert setup_tool_calls == ["write"]
         assert (work / "setup-approved.txt").read_text() == "approved"
         (work / "setup-approved.txt").unlink()
-        role_file.write_text('{"design":"FIXTURE_CONFIG_SECRET"')  # broken JSON
+        role_file.write_text('FIXTURE_CONFIG_SECRET')  # malformed Markdown route
         setup.command(type="prompt", message="/taskbook-setup")
         setup.settled("setup fixture report")
         assert "FIXTURE_CONFIG_SECRET" not in setup_reports[-1]
         role_file.unlink()
 
+        (work / ".audit").mkdir()
+        (work / ".audit/notes.txt").write_text("Preserve unclassified notes.")
+        setup.command(type="prompt", message="/taskbook-setup")
+        setup.settled("setup fixture report")
+        setup.command(type="prompt", message="请迁移旧审计资料")
+        assert "归档 .audit" in str(setup.confirm(False))
+        setup.settled("setup follow-up complete")
+
         archive = work / ".audit/legacy/facts.json"
-        archive.parent.mkdir()
+        archive.parent.mkdir(parents=True)
         legacy = {"key": "old-archive", "kind": "fact", "scope": "project", "text": "Reviewed historical record",
                   "version": 1, "deleted": True,
                   "source": {"repository": "fixture/repo", "taskId": "old", "taskDigest": "old-digest",
@@ -1075,23 +1117,35 @@ Complete the shared stages.
         content = setup_reports[-1]
         assert ".audit/legacy/facts.json" in content and "old-archive" in content
         before = (archive.read_bytes(), git(work, "rev-parse", "HEAD"))
-        outsider = Client(work, config, str(uuid.uuid4()))
-        try:
-            outsider.command(type="prompt", message="/taskbook-setup apply import 1")
-            outsider.notify("当前会话没有待批准")
-        finally:
-            outsider.close()
-        assert before == (archive.read_bytes(), git(work, "rev-parse", "HEAD"))
-        setup.command(type="prompt", message="/taskbook-setup apply import 1")
-        setup.notify("已导入获批旧资料")
-        imported = json.loads(git(work, "show", "HEAD:.fact/project.json"))["records"]["project:fact:old-archive"]
-        assert imported["deleted"] and imported["source"]["migration"]["source"] == ".audit/legacy/facts.json"
-        assert archive.read_bytes() == before[0]
+        legacy_run = work / ".audit/pi-taskbook" / old_path.parent.name / "state.json"
+        legacy_run.parent.mkdir(parents=True)
+        legacy_run.write_bytes(old_path.read_bytes())
+        old_path.unlink()
         setup.command(type="prompt", message="/taskbook-setup")
         setup.settled("setup fixture report")
-        setup.command(type="prompt", message="/taskbook-setup apply delete-legacy-archive 1")
-        setup.notify("已删除核对过的旧审计资料")
-        assert not archive.exists() and state_for(work, "term-retire")["version"] == 1
+        setup.command(type="prompt", message="请迁移旧审计资料")
+        assert "归档 .audit" in str(setup.confirm(False))
+        setup.settled("setup follow-up complete")
+        assert not old_path.exists() and before == (archive.read_bytes(), git(work, "rev-parse", "HEAD"))
+        setup.command(type="prompt", message="请迁移旧审计资料")
+        assert "归档 .audit" in str(setup.confirm(True))
+        setup.settled("setup follow-up complete")
+        imported = facts_at(work)["project:fact:old-archive"]
+        assert imported["deleted"] and imported["source"]["migration"]["source"] == ".audit/legacy/facts.json"
+        assert archive.read_bytes() == before[0] and old_path.read_bytes() == legacy_run.read_bytes()
+        backups = list(run_directory(work).parent.glob("legacy-audit/*/notes.txt"))
+        assert len(backups) == 1 and backups[0].read_text() == "Preserve unclassified notes."
+        submit(setup, taskfile(d, "keep-audit"))
+        setup.notify("可交接")
+        assert (work / ".audit").exists() and state_for(work, "keep-audit")["exit"] == "ready"
+        setup.command(type="prompt", message="请清理已迁移的审计资料")
+        assert "删除" in str(setup.confirm(False))
+        setup.settled("setup follow-up complete")
+        assert (work / ".audit").exists()
+        setup.command(type="prompt", message="请清理已迁移的审计资料")
+        assert "删除" in str(setup.confirm(True))
+        setup.settled("setup follow-up complete")
+        assert not (work / ".audit").exists() and state_for(work, "term-retire")["version"] == 1
     finally:
         setup.close()
 
@@ -1121,7 +1175,7 @@ Complete the shared stages.
         shared.notify("有阻塞")
         state = state_for(work, "shared-rejected")
         assert state["exit"] == "blocked" and "sync" not in state
-        assert "project:fact:quality-gate" in json.loads(git(work, "show", "HEAD:.fact/project.json"))["records"]
+        assert "project:fact:quality-gate" in facts_at(work)
         assert not any(call["tool"] in ("memory_save", "memory_forget") for call in calls())
         shared_book = taskfile(d, "shared-create")
         shared_book.write_text(shared_book.read_text() + "\n## Project memory\n"
@@ -1143,10 +1197,10 @@ Complete the shared stages.
         submit(shared, shared_book)
         shared.notify("可交接")
         assert calls() == audit
-        mirror = json.loads((work / ".fact/foreign.json").read_text())
-        assert len(mirror["records"]) == 1 and mirror["records"][0]["owner"] == "fixture/other"
-        assert mirror["records"][0]["fact_id"] == "project:fact:shared-contract"
-        assert git(work, "check-ignore", "--", ".fact/foreign.json") == ".fact/foreign.json"
+        mirror_file = work / ".fact/other/facts.tsv"
+        mirror = mirror_file.read_text()
+        assert "fixture/other" in mirror and "project:fact:shared-contract" in mirror
+        assert git(work, "check-ignore", "--", ".fact/other/facts.tsv") == ".fact/other/facts.tsv"
 
         for name, operation, tool, version in (
             ("shared-update", "update fact shared-contract @1 | cross-project:fact | Fixture projects use the updated interface.", "memory_save", 1),
@@ -1163,7 +1217,7 @@ Complete the shared stages.
             args = written[0]["args"]
             assert args["owner"] == "fixture/repo" and args["id"] != "m_other" and args["if_version"] == version
             assert args["fact_version"] == version + 1
-            assert json.loads((work / ".fact/foreign.json").read_text()) == mirror
+            assert mirror_file.read_text() == mirror
             audit = calls()
 
         lost = taskfile(d, "shared-lost")
@@ -1176,7 +1230,7 @@ Complete the shared stages.
         assert state["sync"]["result"]["status"] == "pending"
         lost_writes = [call for call in calls()[len(audit):] if call["tool"] in ("memory_save", "memory_forget")]
         assert len(lost_writes) == 1 and lost_writes[0]["args"]["fact_id"] == "project:fact:lose-receipt"
-        own = json.loads(git(work, "show", "HEAD:.fact/project.json"))["records"].values()
+        own = facts_at(work).values()
         assert any(record.get("type") == "decision" and record["source"].get("factId") == "F1" and record["scope"] == "project" for record in own)
         audit = calls()
         submit(shared, lost)

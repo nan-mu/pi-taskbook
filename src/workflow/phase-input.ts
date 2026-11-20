@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { projectFacts, readProjectMemory, type ProjectSnapshot } from "../facts/project-memory.ts";
-import { readForeignFacts, type recallMagpieMemory } from "../integrations/magpie-memory.ts";
+import { readSourceProjectFacts, type recallMagpieMemory } from "../integrations/magpie-memory.ts";
 import { methodDirectory, workerMethodStages } from "../methods/catalog.ts";
 import { loadUpstreamInputs } from "../methods/upstream.ts";
 import type { Run } from "./checkpoint.ts";
@@ -25,7 +25,7 @@ export function readRunContext(run: Run, snapshot = readProjectMemory(run.root))
   const legacyFactChecks = run.state.reports.filter(report => report.phase === "fact-review" &&
     report.outcome === "pass" && report.projectHead === undefined).flatMap(report => report.factChecks ?? []);
   if (Object.values(snapshot.records).some(record => record.source.repository.toLowerCase() !== run.task.repository.toLowerCase())) {
-    throw new Error(".fact/project.json 含其他仓库归属的记录。请按来源核对本项目事实。");
+    throw new Error(".fact/facts.tsv 含其他仓库归属的记录。请按来源核对本项目事实。");
   }
   const result = taskMemory(run.task, decisions.filter(d => !d.factId.startsWith("project:")), legacyFactChecks);
   const referencedFactIds = new Set([...decisions, ...(run.state.pendingConflicts ?? [])].map(item => item.factId));
@@ -48,13 +48,13 @@ export function buildPhaseInput(run: Run, phase: Phase, attempt: string, project
     userAnswers: state.userAnswers ?? [], designActions: phase === "design" ?
       state.designActions?.filter(action => action.version === (state.plan?.version ?? 0)) : undefined,
     ...readRunContext(run, projectSnapshot), magpieCandidates,
-    foreignFactCandidates: phase === "fact-check" ? readForeignFacts(run.root, task.repository.toLowerCase()) : undefined,
+    sourceProjectFactCandidates: phase === "fact-check" ? readSourceProjectFacts(run.root, task.repository.toLowerCase()) : undefined,
     decisions: state.decisions ?? [],
     priorReports: workerContext(phase, state.reports.slice(state.cycleStart ?? 0)) }, null, 2);
   const upstream = loadUpstreamInputs(state.upstream, phase, task.type);
   const methods = upstream.flatMap(file => ["## 当前阶段的上游方法 " + file.source, file.text]);
   const guidance = [prompts[phase]];
-  guidance.push(".fact 自有事实与术语由独立事实审核写入。foreignFactCandidates 是按来源提供的只读候选数据。完成前只核对 Magpie 候选，不经工具或 shell 发布或退役远端数据。");
+  guidance.push(".fact 自有事实与术语由独立事实审核写入。sourceProjectFactCandidates 是按来源提供的只读候选数据。完成前只核对 Magpie 候选，不经工具或 shell 发布或退役远端数据。");
   if (phase === "fact-check") guidance.push(memoryGuide, magpieGuide);
   if (phase === "fact-check") guidance.push(prompts[task.type.startsWith("fix-") ? "fact-check-fix" : "fact-check-new"]);
   return [common, ...guidance, ...methods, methodDirectory(workerMethodStages(phase)), "## 当前运行数据", fixed, "## 任务书原文", task.markdown,

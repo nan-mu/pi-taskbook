@@ -1,0 +1,3 @@
+id	fact	source	labels
+audit-migration-approval	Pi Taskbook migrates legacy PStack .audit data after describing the planned migration to the user and obtaining approval.	src/setup/command.ts:14	migration,audit,setup
+audit-retention	After verifying the migration, Pi Taskbook lets the user choose whether to retain or delete the original .audit directory.	src/setup/command.ts:15	migration,audit,setup

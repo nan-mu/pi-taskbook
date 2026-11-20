@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { acceptPlan, reviewerModel, runProbe } from "../src/workflow/design-worker.ts";
+import { acceptPlan, formatModelConfig, parseModelConfig, readModelConfig, reviewerModel, runProbe } from "../src/workflow/design-worker.ts";
 import { nextPhase } from "../src/workflow/transitions.ts";
 
 const step = {id: "route", action: "Implement route via the public entry.", checks: "Invoke entry with two routes.", targets: ["G1", "D1"]};
@@ -24,6 +24,37 @@ test("each role controls its specific escalation and reviewer override", () => {
   const routes = {initial: "pi/base", implement:"pi/cheap", design:"pi/strong", review:"pi/reviewer", quality:"pi/quality"};
   assert.equal(reviewerModel(routes, "fact-review"), "pi/reviewer");
   assert.equal(reviewerModel(routes, "quality"), "pi/quality");
+});
+
+test("Markdown routes accept separate roles, comments, and nested Pi model IDs", () => {
+  const roles = parseModelConfig("# Taskbook routes\r\n\r\ndesign: magpie/group/sol\r\nreview: fixture/review\r\n");
+  assert.deepEqual(roles, {design: "magpie/group/sol", review: "fixture/review"});
+  assert.match(formatModelConfig(roles), /^design: magpie\/group\/sol$/mu);
+  assert.deepEqual(parseModelConfig(formatModelConfig(roles)), roles);
+  assert.throws(() => parseModelConfig("design: auto"), /provider\/model-id/);
+  assert.throws(() => parseModelConfig("design: pi/first\ndesign: pi/second"), /重复字段/);
+  assert.throws(() => parseModelConfig("unexpected: pi/base"), /未知字段/);
+});
+
+test("a missing Markdown config preserves legacy settings until the Markdown file is created", t => {
+  const root = mkdtempSync(join(tmpdir(), "pi-model-config-"));
+  t.after(() => rmSync(root, {recursive: true, force: true}));
+  const path = join(root, "taskbook-models.md");
+  const legacyPath = join(root, "pi-taskbook.json");
+  const paths = {path, legacyPath, required: false};
+  assert.deepEqual(readModelConfig(paths), {kind:"fallback"});
+  assert.throws(() => readModelConfig({...paths, required: true}), /找不到角色配置/);
+  writeFileSync(legacyPath, '{"implement":"fixture/legacy"}\n');
+  assert.deepEqual(readModelConfig(paths), {kind:"legacy", path:legacyPath, roles:{implement:"fixture/legacy"}});
+  writeFileSync(path, "implement: fixture/current\n");
+  assert.deepEqual(readModelConfig(paths), {kind:"markdown", path, roles:{implement:"fixture/current"}});
+  writeFileSync(path, "invalid-role: future/model\n");
+  assert.throws(() => readModelConfig(paths), /角色配置无效/);
+  const override = join(root, "custom-routes");
+  writeFileSync(override, '{"implement":"fixture/legacy"}\n');
+  assert.deepEqual(readModelConfig({path:override, legacyPath:undefined, required:true}),
+    {kind:"legacy", path:override, roles:{implement:"fixture/legacy"}});
+  assert.equal(readFileSync(legacyPath, "utf8"), '{"implement":"fixture/legacy"}\n');
 });
 
 test("probe observes a fixed revision in a disposable checkout and preserves unsuccessful observations", async t => {

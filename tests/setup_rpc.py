@@ -15,7 +15,7 @@ import time
 
 MODEL_ID = "diagnostic"
 CONFIG_SENTINEL = "PRIVATE_BROKEN_CONFIG_VALUE"
-SETUP_REPORT_PROMPT = "根据本轮 /taskbook-setup 的检查结果汇报"
+SETUP_REPORT_PROMPT = "这是 /taskbook-setup 的普通对话"
 
 
 def run_mcp_fixture(path, profile):
@@ -85,7 +85,7 @@ def read_repository(root):
 
 def setup_report(repo, root, config, model, mcp_log, profiles):
     before = read_repository(root)
-    env = {"PATH": os.environ["PATH"], "HOME": os.environ["HOME"], "PI_CODING_AGENT_DIR": str(config)}
+    env = {"PATH": os.environ["PATH"], "HOME": str(config.parent), "PI_CODING_AGENT_DIR": str(config)}
     pi = os.getenv("PI_BIN") or shutil.which("pi")
     if not pi:
         raise SystemExit("Set PI_BIN to Pi 1.5.2.")
@@ -108,9 +108,9 @@ def setup_report(repo, root, config, model, mcp_log, profiles):
         process.stdin.flush()
         request = model.requests.get(timeout=10)
         response, errors = process.communicate(timeout=5)
-        system = "\n".join(str(message["content"]) for message in request["messages"] if message["role"] == "system")
-        assert SETUP_REPORT_PROMPT in system, system[-300:]
-        assert not request.get("tools"), request.get("tools")
+        assert SETUP_REPORT_PROMPT in json.dumps(request["messages"], ensure_ascii=False)
+        available = [tool["function"]["name"] for tool in request.get("tools", [])]
+        assert "read" in available, available
         assert CONFIG_SENTINEL not in response and CONFIG_SENTINEL not in json.dumps(request)
         reports = [event["message"]["content"] for line in response.splitlines() if line.startswith("{")
                    for event in [json.loads(line)] if event.get("type") == "message_end" and
@@ -123,7 +123,7 @@ def setup_report(repo, root, config, model, mcp_log, profiles):
         assert before == read_repository(root), "Setup changed project files or refs"
         if mcp_log.exists():
             assert not any(line.endswith("tools/call") for line in mcp_log.read_text().splitlines())
-        return json.loads(reports[0])
+        return json.loads(reports[0].split("\n\n", 1)[1])
     finally:
         if process.poll() is None:
             process.terminate()
@@ -162,17 +162,22 @@ def test_setup():
             missing = setup_report(repo, root, config, model, mcp_log, [])
             assert missing["models"]["file"]["status"] == "missing"
             assert missing["models"]["effective"]["status"] == "fallback"
-            assert set(missing["models"]["initialization"]["content"].values()) == {"setup-fixture/diagnostic"}
-            assert missing["readiness"] == {"runnable": False, "taskbookNew": False, "initialized": False, "blockers": ["checkpointExclusion"]}
+            proposed = missing["models"]["initialization"]["content"]
+            assert "design: setup-fixture/diagnostic" in proposed
+            assert missing["readiness"] == {"runnable": True, "taskbookNew": False, "initialized": False, "blockers": []}
             assert missing["repository"]["facts"]["status"] == "missing"
             assert missing["repository"]["glossary"]["path"] == "GLOSSARY.md"
             assert missing["mcp"]["magpie"]["capabilities"]["memory_search"]["status"] == "unconfirmed"
             assert missing["t3"]["status"] == "missing" and not missing["t3"]["worktree"]
 
-            (config / "pi-taskbook.json").write_text(json.dumps({"design": "setup-fixture/diagnostic"}))
-            (root / ".gitignore").write_text("/.audit/pi-taskbook/\n/.fact/foreign.json\n/.fact/foreign.lock/\n")
+            models = config.parent / ".agents"
+            models.mkdir()
+            pstack = "judgment and prose: setup-fixture/diagnostic\n"
+            (models / "pstack-models.md").write_text(pstack)
+            role_file = models / "taskbook-models.md"
+            role_file.write_text(proposed)
             (root / ".fact").mkdir()
-            (root / ".fact/project.json").write_text('{"schema":1,"records":{},"applied":{}}')
+            (root / ".fact/facts.tsv").write_text(missing["repository"]["facts"]["initialization"]["content"])
             (root / "docs/agents").mkdir(parents=True)
             (root / "docs/agents/domain.md").write_text("The glossary lives at `docs/terms.md`.\n")
             (root / "docs/terms.md").write_text("# Glossary\n")
@@ -183,8 +188,10 @@ def test_setup():
             valid = setup_report(repo, root, config, model, mcp_log, ["magpie", "forge"])
             assert valid["readiness"] == {"runnable": True, "taskbookNew": False, "initialized": True, "blockers": []}
             assert valid["repository"]["glossary"]["path"] == "docs/terms.md"
-            assert valid["repository"]["exclusions"]["foreignMirrorLock"]["status"] == "ready"
-            assert valid["repository"]["audit"]["unresolved"][0]["path"] == ".audit/unknown.txt"
+            assert "checkpoints" not in valid["repository"]["exclusions"]
+            assert valid["models"]["pstack"]["content"] == pstack
+            assert valid["legacy"]["audit"]["status"] == "ready"
+            assert any(item["source"] == ".audit/unknown.txt" for item in valid["legacy"]["facts"]["unresolved"])
             assert all(item["status"] == "discovered" for item in valid["mcp"]["magpie"]["capabilities"].values()), valid["mcp"]
             github = valid["mcp"]["github"]
             assert github["services"] == ["forge"]
@@ -193,8 +200,16 @@ def test_setup():
             assert all(item["status"] == "discovered" for item in github["write"].values())
             assert github["declaredAlternative"] == "gh"
 
-            (config / "pi-taskbook.json").write_text('{"design":"' + CONFIG_SENTINEL)
-            (root / ".fact/project.json").write_text(CONFIG_SENTINEL)
+            legacy = root / ".fact/project.json"
+            legacy.write_text(json.dumps({"schema": 1, "records": {}, "applied": {}}))
+            needs_migration = setup_report(repo, root, config, model, mcp_log, ["magpie", "forge"])
+            assert needs_migration["repository"]["facts"]["status"] == "migration-required"
+            assert needs_migration["readiness"]["blockers"] == ["projectFactsMigration"]
+            assert not needs_migration["readiness"]["runnable"]
+            legacy.unlink()
+
+            role_file.write_text(CONFIG_SENTINEL)
+            (root / ".fact/facts.tsv").write_text(CONFIG_SENTINEL)
             (root / "docs/terms.md").write_bytes(b"unterminated\xff")
             describe_servers("reduced-memory", "reduced-forge")
             invalid = setup_report(repo, root, config, model, mcp_log, ["reduced-memory", "reduced-forge"])

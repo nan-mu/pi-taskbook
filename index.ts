@@ -1,7 +1,7 @@
 import { buildPhaseInput, localPromptDigest, magpieGuide, memoryGuide, readRunContext } from "./src/workflow/phase-input.ts";
 import { registerSetupCommand } from "./src/setup/command.ts";
 import { checkpoint, cleanRevision, openRun, type Report, type Run, type RunObservation } from "./src/workflow/checkpoint.ts";
-import { magpieSessionTransport, readForeignFacts, recallMagpieMemory, syncMagpieMemory, type MagpieSyncResult } from "./src/integrations/magpie-memory.ts";
+import { magpieSessionTransport, readSourceProjectFacts, recallMagpieMemory, syncMagpieMemory, type MagpieSyncResult } from "./src/integrations/magpie-memory.ts";
 import { readStageMethod, workerMethodStages } from "./src/methods/catalog.ts";
 import { methodTool, registerMethodTool } from "./src/methods/tool.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -16,12 +16,14 @@ import { loadUpstreamInputs, pinUpstreamInputs } from "./src/methods/upstream.ts
 import { validateConflict, parseFactDecision } from "./src/workflow/task-context.ts";
 import { consultDesign, runIndependentReview, type ReviewResult } from "./src/review/reviewer.ts";
 import { checkFacts, factChecksParameter, type Observation } from "./src/facts/fact-check.ts";
+import { maxFactMatches, queryProjectFacts } from "./src/facts/query.ts";
 
 import { applyApprovedMemory, historicalProjectFacts, memoryId, pendingMemoryChanges, readProjectMemory, taskbookMemoryChanges, type MemoryChange, type ProjectSnapshot } from "./src/facts/project-memory.ts";
 
 import { acceptPlan, modelKey, planParameter, resolveModel, reviewerModel, runProbe } from "./src/workflow/design-worker.ts";
 
 const reportTool = "taskbook_report";
+const queryFactsTool = "taskbook_query_facts";
 const designTools = ["taskbook_consult", "taskbook_probe"];
 const kickoffType = "pi-taskbook-stage";
 const reportParameters = Type.Object({
@@ -64,6 +66,23 @@ export default function taskbookExtension(pi: ExtensionAPI) {
 
   registerMethodTool(pi, () => run && started && !reported && run.state.phase !== "exit"
     ? run.state.phase : undefined);
+
+  pi.registerTool({
+    name: queryFactsTool,
+    label: "Search project facts",
+    description: "Find relevant project memory and source pointers in .fact topic tables. An exact registered label searches across tables. Check the source before using a result as evidence.",
+    parameters: Type.Object({
+      query: Type.String({ minLength: 1, maxLength: 240, description: "An exact label such as worktree, or search terms." }),
+      label: Type.Optional(Type.String({ minLength: 1, maxLength: 100, description: "Restrict a text query to one registered label." })),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: maxFactMatches, default: 5 })),
+    }, { additionalProperties: false }),
+    async execute(_id, input, _signal, _onUpdate, ctx) {
+      let root = ctx.cwd;
+      try { root = git(ctx.cwd, "rev-parse", "--show-toplevel"); } catch { /* Pi also supports plain directories. */ }
+      const result = await queryProjectFacts(root, input);
+      return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+    },
+  });
 
   function toggleReportTool(enabled: boolean) {
     const tools = pi.getActiveTools().filter(name => name !== reportTool && name !== methodTool && !designTools.includes(name));
@@ -167,7 +186,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     const evidence = { projectHead: projectSnapshot.head,
       ...(factReview ? {factChecks: proposals, magpieCandidates, classifyFactChecks,
       priorProjectFacts: historicalProjectFacts(projectSnapshot),
-      foreignFactCandidates: readForeignFacts(active.root, task.repository.toLowerCase())} : {candidateReports}),
+      sourceProjectFactCandidates: readSourceProjectFacts(active.root, task.repository.toLowerCase())} : {candidateReports}),
       decisions: state.decisions ?? [], userAnswers: state.userAnswers ?? [] };
     const methods = loadUpstreamInputs(state.upstream, phase, task.type);
     const objectives = factReview ? proposals.map((proposal, i) => ({id: "P" + (i+1), text: JSON.stringify(proposal)}))
@@ -480,7 +499,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     if (reviewing || run?.state.pendingQuestion || run?.state.pendingConflicts?.length) return { block: true, reason: "当前由独立审核者或用户裁决。" };
     if (started && reported) return { block: true, reason: "当前阶段已提交，等待 Pi 结束这一轮。" };
     if (started && run && (run.state.phase === "fact-check" || run.state.phase === "implement" || run.state.phase === "performance") &&
-        ![reportTool, methodTool, "edit", "write"].includes(event.toolName)) {
+        ![reportTool, methodTool, queryFactsTool, "edit", "write"].includes(event.toolName)) {
       try { observedCalls.set(event.toolCallId, cleanRevision(run)); } catch { return; }
     }
   });

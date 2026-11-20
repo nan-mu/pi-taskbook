@@ -2,8 +2,10 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+import subprocess
 
 work = Path(sys.argv[1])
+gitdir = Path(subprocess.check_output(["git", "-C", str(work), "rev-parse", "--absolute-git-dir"], text=True).strip())
 log = Path(sys.argv[2])
 records = [{"id": "m_other", "owner": "fixture/other", "fact_id": "project:fact:shared-contract",
             "kind": "fact", "text": "Fixture projects use the reviewed interface.", "scope": "global",
@@ -40,7 +42,7 @@ for line in sys.stdin:
         name = request["params"]["name"]
         args = request["params"].get("arguments", {})
         completions = []
-        for path in (work / ".audit/pi-taskbook").glob("shared-*/state.json"):
+        for path in (gitdir / "pi-taskbook/runs").glob("shared-*/state.json"):
             state = json.loads(path.read_text())
             if state.get("exit") == "ready":
                 completions.append({"revision": state["revision"], "facts": state["approvedProjectHead"],

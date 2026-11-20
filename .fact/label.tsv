@@ -1,0 +1,6 @@
+label	description
+worktree	Checkout selection, creation, and ownership.
+t3	T3 interfaces used by Pi Taskbook.
+migration	Migration from legacy project data.
+audit	Handling of legacy PStack .audit data.
+setup	Pi Taskbook setup decisions.

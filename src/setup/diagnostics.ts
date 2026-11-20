@@ -1,10 +1,12 @@
 import { inspectT3 } from "../integrations/t3.ts";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { modelConfigPath, modelKey, modelRoutes, resolveModel, reviewerModel, type ModelRoutes } from "../workflow/design-worker.ts";
-import { readProjectMemory, projectFactsPath, projectGlossaryPath } from "../facts/project-memory.ts";
+import { formatModelConfig, modelConfigPaths, modelKey, modelRoutes, parseModelConfig, readModelConfig,
+  resolveModel, reviewerModel, type ModelRoutes } from "../workflow/design-worker.ts";
+import { formatProjectTsv, legacyProjectFactsPath, readLegacyProjectJson, readProjectMemory, projectFactsPath, projectGlossaryPath } from "../facts/project-memory.ts";
 import { probeSubagents } from "../review/subagent-probe.ts";
 import { inspectMcpCapabilities } from "../integrations/mcp-catalog.ts";
 import { git, gitExclusion } from "../taskbook/document.ts";
@@ -14,8 +16,6 @@ type PathCheck = { path: string; status: Status };
 const subagentPackage = "@tintinweb/pi-subagents";
 const testedPackageVersions = ["0.26.0", "0.26.1"];
 const checkpointDirectory = ".audit/pi-taskbook";
-const foreignMirrorPath = ".fact/foreign.json";
-const foreignMirrorLock = ".fact/foreign.lock/";
 
 function fileStatus(path: string, kind: "file" | "directory"): PathCheck {
   try {
@@ -59,44 +59,63 @@ function configuredRoles(routes: ModelRoutes) {
   };
 }
 
-function modelSetup(ctx: ExtensionContext) {
-  const path = modelConfigPath();
-  const file = fileStatus(path, "file");
-  const example = fileURLToPath(new URL("../../pi-taskbook.example.json", import.meta.url));
-  const selected = ctx.model && ctx.modelRegistry.find(ctx.model.provider, ctx.model.id);
-  const suggestion = selected ?? ctx.modelRegistry.getAvailable()[0] ?? ctx.modelRegistry.getAll()[0];
-  let suggestedRoles: unknown;
-  if (file.status === "missing") {
-    try { suggestedRoles = JSON.parse(readFileSync(example, "utf8")); }
-    catch { suggestedRoles = null; }
+function pstackSetup() {
+  const path = join(homedir(), ".agents", "pstack-models.md");
+  const check = fileStatus(path, "file");
+  if (check.status !== "ready") return check;
+  try {
+    const stat = lstatSync(path);
+    if (stat.size > 16 * 1024) return { path, status: "unconfirmed", reason: "参考配置超过 16 KiB。" };
+    const content = new TextDecoder("utf-8", {fatal: true}).decode(readFileSync(path));
+    if (content.includes("\0")) return { path, status: "invalid" };
+    return { ...check, content };
+  } catch {
+    return { path, status: "unconfirmed", reason: "无法读取 PStack 模型配置。" };
   }
-  const proposedContents = suggestion && file.status === "missing" ? Object.fromEntries(
-    Object.keys(configuredRoles({
-      initial: modelKey(suggestion), design: modelKey(suggestion), implement: modelKey(suggestion), review: modelKey(suggestion),
-    })).map(role => {
-      const recommendation = typeof suggestedRoles === "object" && suggestedRoles ?
-        Object.getOwnPropertyDescriptor(suggestedRoles, role)?.value : undefined;
-      try {
-        return [role, typeof recommendation === "string" ? modelKey(resolveModel(ctx, recommendation)) : modelKey(suggestion)];
-      } catch {
-        return [role, modelKey(suggestion)];
-      }
-    }),
-  ) : null;
-  const initialization = file.status === "missing" ? {
-    operation: "initialize",
-    path,
-    content: proposedContents,
-    purpose: proposedContents ? "使用 Pi 已注册模型创建各角色的显式路由。" : "先在 Pi 注册模型，再填写各角色。",
-  } : null;
-  if (file.status === "invalid" || file.status === "unconfirmed") {
-    return { file, example, initialization, effective: { status: file.status, reason: "角色配置路径须为可读取的普通文件。" } };
+}
+
+function modelSetup(ctx: ExtensionContext) {
+  const paths = modelConfigPaths();
+  const file = fileStatus(paths.path, "file");
+  const example = fileURLToPath(new URL("../../taskbook-models.example.md", import.meta.url));
+  const legacy = paths.legacyPath ? fileStatus(paths.legacyPath, "file") : undefined;
+  const selected = ctx.model && ctx.modelRegistry.find(ctx.model.provider, ctx.model.id);
+  const available = ctx.modelRegistry.getAvailable();
+  const suggestion = selected ?? available[0] ?? ctx.modelRegistry.getAll()[0];
+  const fallbackModel = suggestion && modelKey(suggestion);
+  let recommended: ReturnType<typeof parseModelConfig> = {};
+  if (file.status === "missing") {
+    try { recommended = parseModelConfig(readFileSync(example, "utf8")); }
+    catch { /* Checked-in recommendations can be omitted. */ }
+  }
+  const initial = fallbackModel && configuredRoles({
+    initial: fallbackModel, design: fallbackModel, implement: fallbackModel, review: fallbackModel,
+  });
+  const proposed = initial && Object.fromEntries(Object.entries(initial).map(([role, fallback]) => {
+    const preference = Object.getOwnPropertyDescriptor(recommended, role)?.value;
+    try { return [role, typeof preference === "string" ? modelKey(resolveModel(ctx, preference)) : fallback]; }
+    catch { return [role, fallback]; }
+  }));
+  const details = {
+    file, example, legacy,
+    pstack: pstackSetup(),
+    availableModels: available.slice(0, 64).map(modelKey),
+  };
+  function initialization(source?: ReturnType<typeof readModelConfig>) {
+    if (file.status !== "missing") return null;
+    const prior = source?.kind === "legacy" ? source : undefined;
+    return { operation: "initialize", path: paths.path,
+      content: prior ? formatModelConfig(prior.roles) : proposed ? formatModelConfig(proposed) : null,
+      ...(prior ? {source: prior.path} : {}),
+      purpose: prior ? "将旧 JSON 中的角色设置生成 Markdown。" : proposed ?
+        "使用 Pi 已注册模型创建各角色的显式路由。" : "先在 Pi 注册模型，再填写各角色。" };
   }
   try {
+    const config = readModelConfig(paths);
     if (!selected && !suggestion) {
-      return { file, example, initialization, effective: { status: "unconfirmed", reason: "Pi 未注册可核对的角色模型。" } };
+      return { ...details, initialization: initialization(), effective: { status: "unconfirmed", reason: "Pi 未注册可核对的角色模型。" } };
     }
-    const routes = effectiveRoutes(modelRoutes({ ...ctx, model: selected ?? suggestion }, path));
+    const routes = effectiveRoutes(modelRoutes({ ...ctx, model: selected ?? suggestion }, config));
     const registered = new Map([...new Set(Object.values(routes))].map(key => {
       try { return [key, modelKey(resolveModel({ ...ctx, model: selected }, key))]; }
       catch { return [key, null]; }
@@ -105,13 +124,16 @@ function modelSetup(ctx: ExtensionContext) {
     const invalidRoles = Object.entries(safeRoutes).filter(([, key]) => !key).map(([role]) => role);
     const status = invalidRoles.length ? "invalid" : !selected ? "unconfirmed" :
       file.status === "missing" ? "fallback" : "ready";
-    return { file, example, initialization, effective: { status, routes: safeRoutes, invalidRoles,
+    return { ...details, initialization: initialization(config), effective: { status,
+      source: config.kind, routes: safeRoutes, invalidRoles,
       reason: !selected ? "正式任务需要选定模型。" : undefined } };
   } catch {
-    const reason = file.status === "missing" ? "显式指定的角色配置文件缺失，正式任务需先补齐。" :
-      "无法读取角色配置，或其 JSON、字段、角色模型无效。";
-    const status = file.status === "missing" ? "missing" : "invalid";
-    return { file: { ...file, status }, example, initialization, effective: { status, reason } };
+    const missingOverride = file.status === "missing" && paths.required && (!legacy || legacy.status === "missing");
+    const status = missingOverride ? "missing" : file.status === "unconfirmed" ? "unconfirmed" : "invalid";
+    return { ...details, file: file.status === "ready" ? { ...file, status } : file,
+      legacy: file.status === "missing" && legacy?.status === "ready" ? { ...legacy, status } : legacy,
+      initialization: initialization(), effective: { status, reason: missingOverride ?
+        "显式指定的角色配置文件缺失，正式任务需先补齐。" : "无法读取角色配置，或其 Markdown、旧 JSON、角色模型无效。" } };
   }
 }
 
@@ -172,13 +194,17 @@ function glossarySetup(root: string) {
 
 function factsSetup(root: string) {
   const check = repoPath(root, projectFactsPath, "file");
-  if (check.status === "missing") {
-    return { ...check, initialization: { operation: "initialize", path: projectFactsPath,
-      content: { schema: 1, records: {}, applied: {} }, purpose: "建立空的项目事实文件。旧资料应另行盘点和批准迁移。" } };
-  }
-  if (check.status !== "ready") return check;
+  if (check.status !== "ready" && check.status !== "missing") return check;
   try {
-    const { head, records } = readProjectMemory(root);
+    const legacy = readLegacyProjectJson(root);
+    if (check.status === "missing" && !legacy) {
+      return { ...check, initialization: { operation: "initialize", path: projectFactsPath,
+        content: formatProjectTsv({ schema: 1, records: {}, applied: {} }), purpose: "建立空的项目事实文件。先盘点旧资料并确认迁移范围。" } };
+    }
+    const { head, records, applied } = readProjectMemory(root, {allowUnmigratedLegacy: true});
+    if (legacy && !applied[legacy.receipt]) {
+      return { ...check, status: "migration-required", source: legacyProjectFactsPath, reason: "正式任务需要先批准迁移旧项目事实。" };
+    }
     return { ...check, version: head, records: Object.keys(records).length };
   } catch {
     return { ...check, status: "invalid", reason: "项目事实格式、版本或术语区对应关系无效，需核对文件。" };
@@ -236,28 +262,16 @@ export async function collectSetup(pi: ExtensionAPI, ctx: ExtensionContext) {
   const facts = factsSetup(root);
   const glossary = glossarySetup(root);
   const audit = auditSetup(root, glossary.path);
-  const checkpointsExcluded = gitExclusion(root, checkpointDirectory + "/setup-probe-0000000000000000/state.json");
-  const trackedCheckpoints = git(root, "ls-files", "--", checkpointDirectory) !== "";
   const factsExcluded = gitExclusion(root, projectFactsPath);
   const exclusions = {
-    checkpoints: { ...checkpointsExcluded,
-      status: trackedCheckpoints ? "invalid" : checkpointsExcluded.status,
-      rule: "/.audit/pi-taskbook/",
-      impact: "正式任务需要将运行检查点排除在 Git 之外。使用 .gitignore 或当前仓库的本地排除文件。",
-    },
-    foreignMirror: { ...gitExclusion(root, foreignMirrorPath), rule: "/" + foreignMirrorPath,
-      impact: "默认仅在 Git 排除路径保存来自其他项目的镜像。" },
-    foreignMirrorLock: { ...gitExclusion(root, foreignMirrorLock), rule: "/" + foreignMirrorLock,
-      impact: "外来镜像并发写入使用独立的 Git 排除目录。" },
     projectFacts: { ...factsExcluded, status: factsExcluded.status === "ready" ? "invalid" :
       factsExcluded.status === "missing" ? "ready" : "unconfirmed",
       impact: "获准纳入普通项目历史的事实文件必须允许 Git 跟踪。" },
   };
   const blockers = [
     !["ready", "fallback"].includes(models.effective.status) && "modelRoutes",
-    exclusions.checkpoints.status !== "ready" && "checkpointExclusion",
-    !["missing", "ready"].includes(audit.checkpoints.status) && "checkpointDirectory",
-    !["missing", "ready"].includes(facts.status) && "projectFactsFormat",
+    facts.status === "migration-required" ? "projectFactsMigration" :
+      !["missing", "ready"].includes(facts.status) && "projectFactsFormat",
     !["missing", "ready"].includes(glossary.status) && "glossaryFormat",
     exclusions.projectFacts.status !== "ready" && "projectFactsTracking",
   ].filter(Boolean);

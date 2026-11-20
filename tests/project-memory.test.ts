@@ -4,8 +4,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
-import { applyApprovedMemory, historicalProjectFacts, pendingMemoryChanges, projectFacts, projectFactsPath, readProjectMemory,
-  taskbookMemoryChanges } from "../src/facts/project-memory.ts";
+import { applyApprovedMemory, formatProjectTsv, historicalProjectFacts, legacyProjectFactsPath, parseProjectTsv, pendingMemoryChanges,
+  projectFacts, projectFactsPath, readProjectMemory, taskbookMemoryChanges, type ProjectDocument } from "../src/facts/project-memory.ts";
 import { deleteLegacyProjectMemoryArchive, deleteLegacyProjectMemoryRef, importLegacyProjectMemory, inspectLegacyProjectMemory } from "../src/facts/project-memory-migration.ts";
 import type { CheckedFact } from "../src/facts/fact-check.ts";
 
@@ -64,8 +64,10 @@ test("reviewed term create, replace, retirement and reactivation retain all sour
   assert.equal(retired.records[id].sharedSince, 2);
   assert.equal(retired.records[id].deleted, true);
   assert.deepEqual(projectFacts(retired, base), []);
-  assert.equal(JSON.parse(git(other, "show", "HEAD^:" + projectFactsPath)).records[id].text, second.records[id].text);
-  assert.equal(JSON.parse(git(other, "show", "HEAD^^:" + projectFactsPath)).records[id].text, first.records[id].text);
+  const committed = (revision: string) => parseProjectTsv(execFileSync("git", ["show", revision + ":" + projectFactsPath],
+    {cwd: other, encoding: "utf8"}));
+  assert.equal(committed("HEAD^").records[id].text, second.records[id].text);
+  assert.equal(committed("HEAD^^").records[id].text, first.records[id].text);
   assert.doesNotMatch(readFileSync(join(other, "GLOSSARY.md"), "utf8"), /Start signal/);
   assert.throws(() => apply("bad", "- create term entry @0 | project | Cannot silently restore."));
   assert.equal(apply("restore", "- create term entry @3 | project | Explicitly restored.").records[id].version, 4);
@@ -169,7 +171,7 @@ function legacyCommit(root: string, document: object, parent?: string) {
 
 test("migration previews reviewed legacy sources and retires only the explicitly selected, verified ref", t => {
   const {root, base} = repository(t);
-  assert.deepEqual(inspectLegacyProjectMemory(root), {legacyHead:null, entries:[], unresolved:[]});
+  assert.deepEqual(inspectLegacyProjectMemory(root), {legacyHead:null, entries:[], unresolved:[], archives:[]});
   const termId = "project:term:entry";
   const source = {repository:"owner/repo", taskId:"legacy", taskDigest:"old-digest", base, reviewSession:"old-review", evidence:["author source"]};
   const first = {kind:"term", key:"entry", scope:"project", text:"Local term", version:1, deleted:false, source};
@@ -281,4 +283,43 @@ test("archive cleanup checks the exact preview version and keeps checkpoints and
   assert.throws(() => readFileSync(join(root, archived)), /ENOENT/);
   assert.equal(readFileSync(join(root, active), "utf8"), "unrecognized checkpoint");
   assert.deepEqual(importLegacyProjectMemory(root, "owner/repo", entries), imported);
+});
+
+test("TSV preserves sourced versions and multiline fact text as inspectable rows", () => {
+  const id = "project:fact:escape";
+  const source = {repository: "owner/repo", taskId: "task", taskDigest: "digest", base: "base", reviewSession: "review",
+    evidence: ["first\nsecond\tthird", "literal \\n"]};
+  const document: ProjectDocument = {schema: 1, records: {[id]: {
+    kind: "fact", key: "escape", scope: "project", text: "Updated\r\nline\twith literal \\t", version: 2, deleted: false, source,
+    history: [{scope: "project", text: "Old value", version: 1, deleted: false, source}],
+  }}, applied: {[ "a".repeat(64) ]: true}};
+  const text = formatProjectTsv(document);
+  assert.match(text, /^record\tproject:fact:escape\t2\tfact\t/m);
+  assert.match(text, /^history\tproject:fact:escape\t1\t/m);
+  assert.match(text, /first\\nsecond\\tthird/);
+  assert.deepEqual(parseProjectTsv(text), document);
+  assert.throws(() => parseProjectTsv(text.replace("\\nsecond", "\\qsecond")), /转义无效/);
+});
+
+test("normal reads require explicit migration of pre-existing own JSON, including receipt-only documents", t => {
+  const {root, base} = repository(t);
+  const old = join(root, legacyProjectFactsPath);
+  const marker = "c".repeat(64);
+  const raw = JSON.stringify({schema: 1, records: {}, applied: {[marker]: true}});
+  mkdirSync(join(root, ".fact"));
+  writeFileSync(old, raw);
+  const preview = inspectLegacyProjectMemory(root, "owner/repo");
+  assert.equal(preview.projectJson?.status, "ready");
+  assert.equal(preview.entries.length, 0);
+  assert.equal(git(root, "rev-parse", "HEAD"), base);
+  assert.throws(() => readProjectMemory(root), /尚未迁移/);
+  assert.throws(() => importLegacyProjectMemory(root, "owner/repo", [], {projectJsonVersion: "old"}), /版本已变化/);
+  assert.equal(git(root, "rev-parse", "HEAD"), base);
+  const approval = {projectJsonVersion: preview.projectJson?.sourceRevision};
+  const imported = importLegacyProjectMemory(root, "owner/repo", [], approval);
+  assert.equal(imported.applied[marker], true);
+  assert.deepEqual(readProjectMemory(root), imported);
+  assert.equal(readFileSync(old, "utf8"), raw);
+  assert.deepEqual(importLegacyProjectMemory(root, "owner/repo", [], approval), imported);
+  assert.equal(inspectLegacyProjectMemory(root, "owner/repo").projectJson?.status, "already-imported");
 });

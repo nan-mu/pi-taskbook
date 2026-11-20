@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
-import { readForeignFacts, recallMagpieMemory, syncMagpieMemory, type MagpieTransport } from "../src/integrations/magpie-memory.ts";
-import { applyApprovedMemory, readProjectMemory, type MemoryChange } from "../src/facts/project-memory.ts";
+import { inspectLegacyMagpieMirror, migrateLegacyMagpieMirror, readSourceProjectFacts, recallMagpieMemory,
+  syncMagpieMemory, type MagpieTransport } from "../src/integrations/magpie-memory.ts";
+import { applyApprovedMemory, projectFactsPath, readProjectMemory, type MemoryChange } from "../src/facts/project-memory.ts";
 
 type Request = Parameters<MagpieTransport["call"]>;
 type Row = {
@@ -25,9 +26,7 @@ function project(t: TestContext, repository: string) {
   git("config", "user.name", "Fixture");
   git("config", "user.email", "fixture@example.invalid");
   git("remote", "add", "origin", "https://github.com/" + repository + ".git");
-  writeFileSync(join(root, ".gitignore"), "/.fact/foreign.json\n/.fact/foreign.lock/\n");
-  git("add", ".");
-  git("commit", "-qm", "fixture");
+  git("commit", "--allow-empty", "-qm", "fixture");
   const base = git("rev-parse", "HEAD");
   let task = 0;
 
@@ -150,7 +149,7 @@ test("lost response, competing local edits and remote version changes preserve s
   assert.equal(svc.log.length, before);
 });
 
-test("foreign mirror keys distinguish owners, preserve missing rows and apply explicit retirement", async t => {
+test("source project TSV preserves missing rows and applies explicit retirement", async t => {
   const a = project(t, "team/a");
   const b = project(t, "team/b");
   const svc = services();
@@ -161,14 +160,19 @@ test("foreign mirror keys distinguish owners, preserve missing rows and apply ex
   await syncMagpieMemory(b.root, bCreated, forB);
   assert.equal((await syncMagpieMemory(a.root, aCreated, forA)).mirror.updated, 1);
   assert.equal(svc.rows.size, 2);
+  const path = ".fact/b/facts.tsv";
+  assert.equal(a.git("check-ignore", "--", path), path);
+  assert.match(readFileSync(join(a.root, path), "utf8"), /^project\towner\tid\tfact_id\t/m);
+  assert.equal(existsSync(join(a.root, ".fact/a")), false);
+  assert.equal(existsSync(join(a.root, ".gitignore")), false);
   const mirror = () => {
-    const mirror = readForeignFacts(a.root, "team/a");
+    const mirror = readSourceProjectFacts(a.root, "team/a");
     assert.equal(mirror.status, "available");
     return mirror.records;
   };
   assert.equal(mirror()[0].owner, "team/b");
   assert.equal(a.git("status", "--porcelain", "--untracked-files=all"), "");
-  const aBefore = readFileSync(join(a.root, ".fact/project.json"), "utf8");
+  const aBefore = readFileSync(join(a.root, projectFactsPath), "utf8");
   const beforeWrites = svc.writes().length;
   svc.faults.mirrorRows = [];
   assert.equal((await syncMagpieMemory(a.root, aCreated, forA)).mirror.status, "pending");
@@ -189,7 +193,68 @@ test("foreign mirror keys distinguish owners, preserve missing rows and apply ex
   await syncMagpieMemory(a.root, aCreated, forA);
   assert.equal(mirror()[0].status, "retired");
   assert.equal(svc.writes().length, beforeReplay);
-  assert.equal(readFileSync(join(a.root, ".fact/project.json"), "utf8"), aBefore);
+  assert.equal(readFileSync(join(a.root, projectFactsPath), "utf8"), aBefore);
+});
+
+test("same-name sources with the same record ID coexist in one TSV table", async t => {
+  const world = project(t, "team/a");
+  const local = world.change("project", "Local fact.");
+  const svc = services();
+  const row: Row = {id: "m_1", owner: "team/b", fact_id: id, kind: "fact", text: "tab\tline\nbackslash\\",
+    scope: "global", version: 1, fact_version: 1, status: "active", eligible: true, writable: false};
+  svc.faults.mirrorRows = [row, {...row, owner: "another/b", text: "A different owner."}];
+  const transport = svc.transport("team/a");
+  assert.deepEqual((await syncMagpieMemory(world.root, local, transport)).mirror, {status: "complete", updated: 2});
+  const table = readFileSync(join(world.root, ".fact/b/facts.tsv"), "utf8");
+  assert.equal(table.trimEnd().split("\n").length, 3);
+  const facts = readSourceProjectFacts(world.root, "team/a");
+  assert.equal(facts.status, "available");
+  assert.deepEqual(facts.records.map(record => [record.owner, record.id, record.text]),
+    [[row.owner, row.id, row.text], ["another/b", row.id, "A different owner."]]);
+  assert.deepEqual((await syncMagpieMemory(world.root, local, transport)).mirror, {status: "complete", updated: 0});
+});
+
+test("sync preserves tracked source tables and does not follow source directory symlinks", async t => {
+  const world = project(t, "team/a");
+  const local = world.change("project", "Local fact.");
+  mkdirSync(join(world.root, ".fact/b"), {recursive: true});
+  const path = ".fact/b/facts.tsv";
+  writeFileSync(join(world.root, path), "User-owned table\n");
+  world.git("add", path);
+  world.git("commit", "-qm", "User-owned table");
+  const current = {...local, revision: world.git("rev-parse", "HEAD")};
+  const svc = services();
+  const row: Row = {id: "m_1", owner: "team/b", fact_id: id, kind: "fact", text: "Remote fact.", scope: "global",
+    version: 1, fact_version: 1, status: "active", eligible: true, writable: false};
+  svc.faults.mirrorRows = [row];
+  assert.equal((await syncMagpieMemory(world.root, current, svc.transport("team/a"))).mirror.status, "pending");
+  assert.equal(readFileSync(join(world.root, path), "utf8"), "User-owned table\n");
+  const outside = mkdtempSync(join(tmpdir(), "pi-magpie-link-target-"));
+  t.after(() => rmSync(outside, {recursive:true, force:true}));
+  symlinkSync(outside, join(world.root, ".fact/c"), "dir");
+  svc.faults.mirrorRows = [{...row, owner: "team/c"}];
+  assert.equal((await syncMagpieMemory(world.root, current, svc.transport("team/a"))).mirror.status, "pending");
+  assert.equal(existsSync(join(outside, "facts.tsv")), false);
+});
+
+test("approved legacy mirror migration is revision-bound and retains the original", t => {
+  const world = project(t, "team/a");
+  const source = ".fact/foreign.json";
+  const record = {id: "m_1", owner: "team/b", fact_id: id, kind: "fact", text: "Old mirror.", scope: "global",
+    version: 1, fact_version: 1, status: "active"};
+  const original = JSON.stringify({schema: 1, repository: "team/a", records: [record]});
+  mkdirSync(join(world.root, ".fact"));
+  writeFileSync(join(world.root, source), original);
+  const preview = inspectLegacyMagpieMirror(world.root, "team/a");
+  assert.equal(preview.status, "ready");
+  assert.deepEqual(preview.projects, [{owner: "team/b", path: ".fact/b/facts.tsv", records: 1}]);
+  assert.throws(() => migrateLegacyMagpieMirror(world.root, "team/a", "incorrect"), /已变化/);
+  assert.equal(existsSync(join(world.root, ".fact/b/facts.tsv")), false);
+  assert.deepEqual(migrateLegacyMagpieMirror(world.root, "team/a", preview.revision), {status: "complete", updated: 1});
+  assert.deepEqual(migrateLegacyMagpieMirror(world.root, "team/a", preview.revision), {status: "complete", updated: 0});
+  assert.equal(readFileSync(join(world.root, source), "utf8"), original);
+  assert.equal(world.git("check-ignore", "--", source), source);
+  assert.equal(world.git("status", "--porcelain", "--untracked-files=all"), "");
 });
 
 test("scope, identity, read-only legacy, unavailable save condition and foreign IDs block writes", async t => {
