@@ -9,8 +9,8 @@ export default function snapshotTools(pi: ExtensionAPI) {
     const tools = pi.getActiveTools();
     const model = ctx.model;
     if (tools.length !== 1 || tools[0] !== dispatch.tool.name || model?.provider !== dispatch.model.provider ||
-        model.id !== dispatch.model.id) {
-      dispatch.failure = "子代理的实际工具或模型与 Taskbook 派发不一致。";
+        model.id !== dispatch.model.id || ctx.thinkingLevel !== dispatch.thinkingLevel) {
+      dispatch.failure = "子代理的实际工具、模型或推理档位与 Taskbook 派发不一致。";
       dispatch.controller.abort();
     } else {
       dispatch.sessionId = ctx.sessionManager.getSessionId();

@@ -5,14 +5,14 @@ import { fileURLToPath } from "node:url";
 import { projectFacts, readProjectMemory, type ProjectSnapshot } from "../facts/project-memory.ts";
 import { readSourceProjectFacts, type recallMagpieMemory } from "../integrations/magpie-memory.ts";
 import { methodDirectory, workerMethodStages } from "../methods/catalog.ts";
-import { loadUpstreamInputs } from "../methods/upstream.ts";
+import { phaseSources, usesCurrentInputs } from "../methods/upstream.ts";
 import type { Run } from "./checkpoint.ts";
 import { taskMemory, workerContext } from "./task-context.ts";
 import type { Phase } from "./transitions.ts";
 
 const promptDir = fileURLToPath(new URL("../../prompts/", import.meta.url));
 export const magpieGuide = readFileSync(new URL("../../methods/magpie-memory/SKILL.md", import.meta.url), "utf8").replace(/^---\n[\s\S]*?\n---\n+/, "");
-const localRolePrompts = readdirSync(promptDir).filter(name => name.endsWith(".md")).sort()
+const localRolePrompts = readdirSync(promptDir).filter(name => name.endsWith(".md") && name !== "setup.md").sort()
   .map(name => [name, readFileSync(join(promptDir, name), "utf8")]);
 export const localPromptDigest = createHash("sha256").update(JSON.stringify([localRolePrompts, magpieGuide])).digest("hex");
 export const memoryGuide = readFileSync(join(promptDir, "project-memory.md"), "utf8");
@@ -43,6 +43,7 @@ export function readRunContext(run: Run, snapshot = readProjectMemory(run.root))
 
 export function buildPhaseInput(run: Run, phase: Phase, attempt: string, projectSnapshot: ProjectSnapshot, magpieCandidates?: Awaited<ReturnType<typeof recallMagpieMemory>> & {receipts?: string[]}) {
   const { task, state } = run;
+  if (!usesCurrentInputs(state.upstream)) throw new Error("任务的方法版本与随包编审版本不同，需要从事实核查重新建立审计。");
   const fixed = JSON.stringify({ task: task.id, type: task.type, base: state.base, revision: state.revision,
     branch: state.branch, phase, attempt, plan: state.plan, planGap: state.planGap,
     userAnswers: state.userAnswers ?? [], designActions: phase === "design" ?
@@ -50,13 +51,11 @@ export function buildPhaseInput(run: Run, phase: Phase, attempt: string, project
     ...readRunContext(run, projectSnapshot), magpieCandidates,
     sourceProjectFactCandidates: phase === "fact-check" ? readSourceProjectFacts(run.root, task.repository.toLowerCase()) : undefined,
     decisions: state.decisions ?? [],
-    priorReports: workerContext(phase, state.reports.slice(state.cycleStart ?? 0)) }, null, 2);
-  const upstream = loadUpstreamInputs(state.upstream, phase, task.type);
-  const methods = upstream.flatMap(file => ["## 当前阶段的上游方法 " + file.source, file.text]);
+    priorReports: workerContext(phase, state.reports.slice(state.cycleStart ?? 0)) });
   const guidance = [prompts[phase]];
-  guidance.push(".fact 自有事实与术语由独立事实审核写入。sourceProjectFactCandidates 是按来源提供的只读候选数据。完成前只核对 Magpie 候选，不经工具或 shell 发布或退役远端数据。");
-  if (phase === "fact-check") guidance.push(memoryGuide, magpieGuide);
-  if (phase === "fact-check") guidance.push(prompts[task.type.startsWith("fix-") ? "fact-check-fix" : "fact-check-new"]);
-  return [common, ...guidance, ...methods, methodDirectory(workerMethodStages(phase)), "## 当前运行数据", fixed, "## 任务书原文", task.markdown,
+  if (phase === "fact-check") guidance.push(prompts[task.type.startsWith("fix-") ? "fact-check-fix" : "fact-check-new"], magpieGuide);
+  const methods = methodDirectory(workerMethodStages(phase, task.type), phaseSources(phase, task.type));
+  return [common, ...guidance, "## Reference methods\nUse taskbook_method when a method is needed. Omit name to browse.\n" + methods,
+    "## 当前运行数据", fixed, "## 任务书原文", task.markdown,
     ...(task.facts !== undefined ? ["## 任务书随附事实", task.facts] : [])].join("\n\n");
 }

@@ -1,9 +1,3 @@
-# 修复任务 · 复现或核实缺陷
+# Fix premise
 
-在固定基线上核实原缺陷。先看已有证据，用实际入口和最小输入取得稳定的失败信号。已有证据可以直接支持故障事实时，说明它如何对应当前版本与可观察结果。
-
-- 修复功能时，给出执行入口、实际表现、期望行为和影响。把最小复现留给实现阶段做回归检查。
-- 修复实验时，说明哪条方法、测量或数据路径影响了实验可靠性，记录受影响的结果和最小复查方法。把有效性和重跑范围交给设计阶段。
-- 成本过高或环境缺失时，保留能核对的静态证据与待测假设。只有任务书允许带待测假设继续时，才据此通过。
-
-缺失能支撑修复的关键证据时，记录阻塞。本阶段交付失败信号或缺陷证据，诊断根因和改动留给后续阶段。
+Use the real entry point and the smallest input that reproduces the defect on the baseline. Record actual behavior, expected behavior and impact. For an experiment, identify the affected method, data or result and the smallest check that can confirm the impact. Use static evidence only within its scope. Carry an untested premise forward only when the taskbook allows it. Leave root cause and rerun scope to design.

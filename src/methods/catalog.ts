@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Phase } from "../workflow/transitions.ts";
+import type { Taskbook } from "../taskbook/document.ts";
 
 export type MethodStage = "intake" | "fact" | "design" | "experiment" | "implement" | "escalate" | "review" | "memory" | "exit";
 export type CatalogOwner = "pstack" | "matt";
@@ -42,11 +43,11 @@ export function phaseMethod(id: string, phase: Phase) {
     text: "通用方法 " + id + "\n" + text };
 }
 
-export function workerMethodStages(phase: Phase): MethodStage[] {
+export function workerMethodStages(phase: Phase, type?: Taskbook["type"]): MethodStage[] {
   switch (phase) {
     case "fact-check": return ["intake", "fact", "memory"];
     case "design": return ["design", "experiment", "escalate"];
-    case "implement": return ["implement", "exit"];
+    case "implement": return type?.endsWith("-experiment") ? ["implement", "exit", "experiment"] : ["implement", "exit"];
     case "performance": return ["experiment"];
     default: return [];
   }
@@ -58,9 +59,9 @@ function available(stages: MethodStage[]) {
 function describe(entry: typeof methods[number]) {
   return entry.id + " · " + (entry.applies || entry.reason);
 }
-export function methodDirectory(stages: MethodStage[]) {
-  return "按本轮问题选用下列方法。需要具体步骤时调用 taskbook_method，name 填完整标识。\n" +
-    available(stages).map(describe).join("\n");
+export function methodDirectory(stages: MethodStage[], selection?: string[]) {
+  const entries = available(stages);
+  return (selection ? entries.filter(entry => selection.includes(entry.id)) : entries).map(describe).join("\n");
 }
 export function readStageMethod(name: string, stages: MethodStage[], phase?: Phase) {
   const entry = available(stages).find(item => item.id === name);

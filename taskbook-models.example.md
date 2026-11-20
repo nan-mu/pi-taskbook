@@ -1,6 +1,7 @@
 # Taskbook model configuration. One line per role.
 # Replace these examples with model IDs registered in Pi.
 # Omitted roles use their defaults.
+# Append @ thinking-level only when that model supports the level in Pi.
 design: magpie/group/sol
 implement: magpie/group/terra
 consult: magpie/group/luna

@@ -1,9 +1,3 @@
-# 新增任务 · 核查前提
+# New work premise
 
-在固定基线上先核查任务书所依赖的事实，然后给出可复查的证据。查阅已有实现和记录，把已存在的行为或实验与本次新增目标对应起来。
-
-- 新增功能时，核对实际调用方、数据契约和依赖版本。明确需要新增或替换的行为，以及后续可观察它的入口。
-- 新增实验时，核对研究问题、可用环境、受试版本和数据条件。说明现有实验能回答哪些问题，本次新增实验需要提供哪些可重复的证据。
-- 性能或实验前提需要实测时，先看已有记录里的准备和复跑成本。区分实测与静态推断。只有任务书允许带待测假设继续时，才据此通过。
-
-核查结论通过后交给设计阶段。关键前提被推翻或证据不足时，提交阻塞和复查依据。
+For a feature, verify the current callers, contract and entry point for the proposed behavior. For an experiment, verify the research question, environment, revision and data conditions. Identify the evidence the new work must produce. Carry an untested premise forward only when the taskbook allows it.

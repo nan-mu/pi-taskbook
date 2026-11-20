@@ -56,7 +56,7 @@
 
 ## 方法目录
 
-PStack 和 Matt Pocock 的方法条目分别记录在 [pstack.json](../methods/pstack.json) 和 [matt.json](../methods/matt.json)。每条注明上游版本、适用阶段和采纳范围。插件按任务类型与阶段附加核心方法。工作会话可用 `taskbook_method` 读取本阶段的其它条目，例如实施阶段的 `matt:pr`。
+PStack 和 Matt Pocock 的方法条目分别记录在 [pstack.json](../methods/pstack.json) 和 [matt.json](../methods/matt.json)。每条注明上游版本、适用阶段和采纳范围。工作会话先收到与任务和阶段相关的方法索引。用 `taskbook_method` 读取需要的正文，省略名称可列出本阶段的完整目录。独立审核只接收本角色的审核要求及方法。
 
 离线目录和执行流程图可由仓库中的脚本生成。流程图使用运行时相同的阶段方法选择。
 

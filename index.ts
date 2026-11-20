@@ -20,11 +20,13 @@ import { maxFactMatches, queryProjectFacts } from "./src/facts/query.ts";
 
 import { applyApprovedMemory, historicalProjectFacts, memoryId, pendingMemoryChanges, readProjectMemory, taskbookMemoryChanges, type MemoryChange, type ProjectSnapshot } from "./src/facts/project-memory.ts";
 
-import { acceptPlan, modelKey, planParameter, resolveModel, reviewerModel, runProbe } from "./src/workflow/design-worker.ts";
+import { acceptPlan, planParameter, runProbe } from "./src/workflow/design-worker.ts";
+import { modelKey, roleSelection } from "./src/models/config.ts";
 
 const reportTool = "taskbook_report";
 const queryFactsTool = "taskbook_query_facts";
 const designTools = ["taskbook_consult", "taskbook_probe"];
+const directDelegation = (name: string) => /^(?:agent|subagents?|subagentworkflow|get_subagent_result|steer_subagent|workflow|delegate_task|create_threads|t3_thread_launch)(?:_[\da-f]+)?$/i.test(name.split("__").at(-1) ?? name);
 const kickoffType = "pi-taskbook-stage";
 const reportParameters = Type.Object({
   attempt: Type.String({ description: "当前阶段提示词中给出的执行标识。" }),
@@ -61,11 +63,13 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   let reviewing: AbortController | undefined;
   let assisting: AbortController | undefined;
   let initialModel: ExtensionContext["model"];
+  let initialThinking: ExtensionContext["thinkingLevel"] | undefined;
+  const suspendedDelegation = new Set<string>();
   const observedCalls = new Map<string, string>();
   const candidateOutputs = new Map<string, Omit<RunObservation, "observed"> & { text: string[] }>();
 
   registerMethodTool(pi, () => run && started && !reported && run.state.phase !== "exit"
-    ? run.state.phase : undefined);
+    ? {phase: run.state.phase, type: run.task.type} : undefined);
 
   pi.registerTool({
     name: queryFactsTool,
@@ -86,9 +90,17 @@ export default function taskbookExtension(pi: ExtensionAPI) {
 
   function toggleReportTool(enabled: boolean) {
     const tools = pi.getActiveTools().filter(name => name !== reportTool && name !== methodTool && !designTools.includes(name));
+    if (!run) {
+      tools.push(...[...suspendedDelegation].filter(name => !tools.includes(name)));
+      suspendedDelegation.clear();
+    }
     if (enabled && run?.state.phase === "design") tools.push(...designTools);
     if (enabled) tools.push(reportTool, methodTool);
-    pi.setActiveTools(tools);
+    pi.setActiveTools(run ? tools.filter(name => {
+      if (!directDelegation(name)) return true;
+      suspendedDelegation.add(name);
+      return false;
+    }) : tools);
   }
 
   function pauseForUser(ctx: ExtensionContext, active: Run) {
@@ -117,12 +129,11 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     if (phase === "fact-review" || phase === "correctness" || phase === "quality") {
       return startReview(ctx, run, phase);
     }
-    const routes = run.state.routes!;
-    const target = resolveModel(ctx, phase === "design" ? routes.design : phase === "implement" ? routes.implement
-      : phase === "fact-check" ? routes.factCheck ?? routes.initial : routes.performance ?? routes.initial);
+    const {model: target, thinkingLevel} = roleSelection(ctx, run.root, run.state.routes!, phase === "fact-check" ? "factCheck" : phase);
     if ((!ctx.model || modelKey(ctx.model) !== modelKey(target)) && !await pi.setModel(target)) {
       throw new Error("角色模型不可用 " + modelKey(target));
     }
+    pi.setThinkingLevel(thinkingLevel);
     toggleReportTool(true);
     const token = randomUUID();
     const active = run;
@@ -189,7 +200,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       sourceProjectFactCandidates: readSourceProjectFacts(active.root, task.repository.toLowerCase())} : {candidateReports}),
       decisions: state.decisions ?? [], userAnswers: state.userAnswers ?? [] };
     const methods = loadUpstreamInputs(state.upstream, phase, task.type);
-    const objectives = factReview ? proposals.map((proposal, i) => ({id: "P" + (i+1), text: JSON.stringify(proposal)}))
+    const objectives = factReview ? proposals.map((proposal, i) => ({id: "P" + (i+1), text: proposal.claim}))
       : [...goals, ...delivery];
     if (phase === "correctness") {
       objectives.push(...(state.userAnswers ?? []).map((answer, index) => ({
@@ -210,8 +221,9 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     reviewing = controller;
     let review: ReviewResult;
     try {
+      const target = roleSelection(ctx, active.root, state.routes!, phase === "fact-review" ? "factReview" : phase);
       review = await runIndependentReview(ctx, {root: active.root, base: state.base, revision, role: phase,
-        taskbook: task.markdown, facts, objectives, evidence, methods}, controller.signal, resolveModel(ctx, reviewerModel(state.routes!, phase)), pi);
+        taskbook: task.markdown, facts, objectives, evidence, methods}, controller.signal, target.model, pi, target.thinkingLevel);
     } catch (error) {
       if (controller.signal.aborted || run !== active) return;
       throw error;
@@ -271,8 +283,11 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     toggleReportTool(false);
     ctx.ui.setStatus("pi-taskbook", undefined);
     const previous = initialModel;
+    const thinking = initialThinking;
     initialModel = undefined;
+    initialThinking = undefined;
     if (previous && (!ctx.model || modelKey(ctx.model) !== modelKey(previous))) await pi.setModel(previous);
+    if (thinking !== undefined) pi.setThinkingLevel(thinking);
   }
 
   async function exitInvocation(ctx: ExtensionContext, reason: string, recoverable?: Run) {
@@ -356,20 +371,22 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     pi.sendMessage({ customType: "pi-taskbook-exit", content: handoff, display: true }, { triggerTurn: false });
   }
 
-  const setupIsChecking = registerSetupCommand(pi, () => Boolean(
+  const setup = registerSetupCommand(pi, () => Boolean(
     attempt || launching || reviewing || syncing || assisting || run?.state.pendingQuestion || run?.state.pendingConflicts?.length));
 
   pi.registerCommand("taskbook", {
     description: "在当前 linked worktree 接收任务书或恢复工作流",
     async handler(args, ctx) {
-      if (!ctx.isIdle() || attempt || launching || setupIsChecking() || reviewing || syncing) return ctx.ui.notify("入口请求已退出：当前会话正在处理任务。", "warning");
+      if (!ctx.isIdle() || attempt || launching || setup.isChecking() || reviewing || syncing) return ctx.ui.notify("入口请求已退出：当前会话正在处理任务。", "warning");
       if (!args.trim()) return exitInvocation(ctx, "用法 /taskbook <任务书路径>");
+      setup.closeModels();
       try {
         const input = readEntryArgument(args.trim());
         const task = readTaskbook(ctx.cwd, input.prepared ? '"' + input.path + '"' : input.path);
         const candidate = openRun({ ctx, task, promptDigest: localPromptDigest, prepared: input.prepared });
         if (candidate.state.phase === "exit") return announce(ctx, candidate);
         initialModel ??= ctx.model;
+        initialThinking ??= pi.getThinkingLevel();
         run = candidate;
         toggleReportTool(true);
         await startPhase(ctx);
@@ -382,8 +399,9 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   pi.registerCommand("taskbook-new", {
     description: "请 T3 按任务书创建 worktree 和新 thread",
     async handler(args, ctx) {
-      if (!ctx.isIdle() || attempt || launching || setupIsChecking() || reviewing || syncing) return ctx.ui.notify("入口请求已退出：当前会话正在处理任务。", "warning");
+      if (!ctx.isIdle() || attempt || launching || setup.isChecking() || reviewing || syncing) return ctx.ui.notify("入口请求已退出：当前会话正在处理任务。", "warning");
       if (!args.trim()) return exitInvocation(ctx, "用法 /taskbook-new <任务书路径>");
+      setup.closeModels();
       launching = true;
       let requested = false;
       try {
@@ -492,6 +510,9 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", event => {
+    if (run && directDelegation(event.toolName)) {
+      return {block: true, reason: "任务书的子代理由插件按项目配置派发。设计阶段可用 taskbook_consult。"};
+    }
     if ((run || syncing) && /^(?:mcp__.*__)?memory_(?:save|forget)(?:_[\da-f]+)?$/i.test(event.toolName) &&
         !(syncing && syncCaller && event.parentToolCallId === syncCaller.id)) {
       return { block: true, reason: "Magpie 写入由规格和质量审核通过后持久化的完成检查点触发。" };
@@ -557,16 +578,13 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     async execute(_id, {attempt: token, question, methods: selection = []}, signal, _onUpdate, ctx) {
       return designAction("consult", token, {question, methods:selection}, signal, async (active, stop) => {
         const {state, task} = active;
+        const target = roleSelection(ctx, active.root, state.routes!, "consult");
         const {facts, goals, delivery} = readRunContext(active);
-        const methods = loadUpstreamInputs(state.upstream, "design", task.type);
-        for (const id of selection) {
-          const method = readStageMethod(id, workerMethodStages("design"), "design");
-          if (!methods.some(core => core.source === method.source)) methods.push(method);
-        }
+        const methods = selection.map(id => readStageMethod(id, workerMethodStages("design"), "design"));
         return consultDesign(ctx, {root: active.root, base: state.base, revision: git(active.root, "rev-parse", "HEAD"),
           taskbook: task.markdown, facts, objectives:[...goals, ...delivery], methods,
           evidence: {plan:state.plan, gap:state.planGap, decisions:state.decisions, userAnswers:state.userAnswers}},
-          question, resolveModel(ctx, state.routes!.consult ?? state.routes!.design), stop, pi);
+          question, target.model, stop, pi, target.thinkingLevel);
       });
     },
   });
@@ -653,10 +671,15 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       const repeatedGap = outcome === "plan-gap" && previousGap?.gap?.stepId === params.gap!.stepId &&
         previousGap.gap.observation.trim() === params.gap!.observation.trim() &&
         previousGap.gap.question.trim() === params.gap!.question.trim();
-      const sameModel = run.state.routes!.design === run.state.routes!.implement;
+      let sameRoute = false;
+      if (outcome === "plan-gap") {
+        const design = roleSelection(ctx, run.root, run.state.routes!, "design");
+        const implement = roleSelection(ctx, run.root, run.state.routes!, "implement");
+        sameRoute = modelKey(design.model) === modelKey(implement.model) && design.thinkingLevel === implement.thinkingLevel;
+      }
       const question = outcome === "needs-user" ? summary : repeatedGap ?
-        "修订方案后，同一步骤和观察再次受阻。请决定下一步：" + params.gap!.question : outcome === "plan-gap" && sameModel ?
-        "执行者退回方案，当前配置未指定不同的设计模型。请给出决定或处理意见：" + params.gap!.question : undefined;
+        "修订方案后，同一步骤和观察再次受阻。请决定下一步：" + params.gap!.question : outcome === "plan-gap" && sameRoute ?
+        "执行者退回方案，当前配置未指定不同的设计模型或推理档位。请给出决定或处理意见：" + params.gap!.question : undefined;
       checkpoint(run, { ...run.state, revision, candidateId, plan, pendingQuestion:question ? {question} : undefined,
         planGap: outcome === "plan-gap" ? {...params.gap!, planVersion: plan?.version, revision: git(run.root,"rev-parse","HEAD"),
           evidence, summary} : params.plan ? undefined : run.state.planGap, pendingConflicts: conflicts,

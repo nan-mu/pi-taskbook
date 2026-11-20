@@ -1,13 +1,7 @@
-# 实现与取证
+# Implement and verify
 
-按输入 plan.version 和 plan.steps 执行。你可以选择每一步内部的算法、结构和工具。先完成一个可验证的纵向切片。修复任务使用核查阶段的失败信号。若根因仍未判定，先排列少数可证伪的假设，再加能区分假设的最小观测。新功能使用任务书指定的公开入口做冒烟或先跑一个能表明行为缺失的检查。确认检查因要求的行为失败后，做最小修改令它通过，随后在保持行为的前提下整理实现。逐个扩展到任务书要求的其余行为。新增持久测试遵守任务书和仓库规定。
+Work through the current plan in verifiable slices. For a fix, use its failure signal and test the smallest observation that distinguishes competing causes. For a feature, use the requested public entry point to verify each behavior. For experiments, capture the reproducible procedure, environment, inputs and results. Respect taskbook approval requirements for persistent tests.
 
-新增实验按任务书记录可重复的流程、环境、采集方式和数据。修复实验要复查原缺陷及其影响，按已确认的范围重跑并记录结果适用条件。
+Verify the actual deliverable. Address each review gap. Commit task changes on the work branch and preserve unrelated changes. Follow taskbook authorization for publication. For runtime proof, run the check on the clean candidate commit. In `observedRuns`, cite the returned receipt and verbatim result. Give the rerun entry point in evidence.
 
-在真实交付物上运行验收。例如验证发布包时，解包后走消费端入口。验证给定命令时，从相同工作目录使用实际入口。记录原状态、交付状态和实际得到的证据。如果新观察与同一适用范围下的已接受事实矛盾，提交带事实标识的冲突。如果仅是实现与目标不符，直接返工并验证。审核发现列出的缺口要逐项解决，再冻结新的候审提交。
-
-使用任务分支。保留已有的非任务改动。提交任务范围内的变更并提供待审 Git 提交、验证入口和结果。完成本地交付即提交这一阶段的证据。外部推送、开 PR 和发布动作由任务书授权后的交接流程处理。
-
-需证明运行时行为或测量时，先确保候审提交已固定且工作区干净，再运行能观察该行为的命令。在 observedRuns 中写入工具结果末尾的候审观测回执 receipt 和逐字摘录 observed。evidence 提供复跑入口、项目内已有证据位置和适用条件。如果当前环境未触达必要的目标行为，按任务书约定记录缺口或阻塞。
-
-所有执行阶段报告都须给出当前 planVersion。若完成任务需要改变步骤约定的行为、交付判据、范围或假设，停在可复核的位置，保留现有工作。用 outcome=plan-gap，gap.stepId 指向有问题的步骤，gap.observation 提供实际观察和复跑入口，gap.question 写清需要设计者解决的选择。缺少必要环境、权限或外部决定同样通过该途径上报。插件让设计者依据证据修订，或将问题上抛用户。下一轮实施只使用插件交付的方案版本。既有事实发生矛盾时使用 fact-conflict。
+Submit the current `planVersion`. For a blocked or invalid step, report `plan-gap` with the step ID, actual observation and question for design. Follow the plan revision the plugin supplies.

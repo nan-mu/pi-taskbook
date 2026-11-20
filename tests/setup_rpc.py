@@ -123,7 +123,7 @@ def setup_report(repo, root, config, model, mcp_log, profiles):
         assert before == read_repository(root), "Setup changed project files or refs"
         if mcp_log.exists():
             assert not any(line.endswith("tools/call") for line in mcp_log.read_text().splitlines())
-        return json.loads(reports[0].split("\n\n", 1)[1])
+        return json.loads(reports[0].split("\n\n## Runtime diagnostics\n", 1)[1])
     finally:
         if process.poll() is None:
             process.terminate()

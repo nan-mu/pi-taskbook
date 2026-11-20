@@ -4,7 +4,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { acceptPlan, formatModelConfig, parseModelConfig, readModelConfig, reviewerModel, runProbe } from "../src/workflow/design-worker.ts";
+import { acceptPlan, runProbe } from "../src/workflow/design-worker.ts";
+import { formatModelConfig, parseModelConfig, readModelConfig, reviewerModel } from "../src/models/config.ts";
 import { nextPhase } from "../src/workflow/transitions.ts";
 
 const step = {id: "route", action: "Implement route via the public entry.", checks: "Invoke entry with two routes.", targets: ["G1", "D1"]};
@@ -31,6 +32,8 @@ test("Markdown routes accept separate roles, comments, and nested Pi model IDs",
   assert.deepEqual(roles, {design: "magpie/group/sol", review: "fixture/review"});
   assert.match(formatModelConfig(roles), /^design: magpie\/group\/sol$/mu);
   assert.deepEqual(parseModelConfig(formatModelConfig(roles)), roles);
+  assert.deepEqual(parseModelConfig("design: magpie/group/sol @ high\n"), {design:"magpie/group/sol @ high"});
+  assert.throws(() => parseModelConfig("design: magpie/group/sol @ unknown\n"), /thinking-level/);
   assert.throws(() => parseModelConfig("design: auto"), /provider\/model-id/);
   assert.throws(() => parseModelConfig("design: pi/first\ndesign: pi/second"), /重复字段/);
   assert.throws(() => parseModelConfig("unexpected: pi/base"), /未知字段/);

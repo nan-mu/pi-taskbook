@@ -17,9 +17,11 @@ printf '%s\n' '{"type":"get_commands"}' '{"type":"get_available_models"}' |
 
 ## 配置角色模型
 
-使用 `pi --offline --list-models` 核对可用模型 ID。[角色配置示例](../taskbook-models.example.md)使用每行一个 `角色: provider/model-id` 的 Markdown 格式，支持 `#` 注释和空行。默认读取 `~/.agents/taskbook-models.md`。可设置 `PI_TASKBOOK_CONFIG` 指定其他文件。
+使用 `pi --offline --list-models` 核对模型 ID。[角色配置示例](../taskbook-models.example.md)使用每行一个 `角色: provider/model-id` 的 Markdown 格式，支持 `#` 注释和空行。可以用 `design: magpie/group/sol @ high` 为角色指定该模型在 Pi 中支持的推理档位。
 
-如果 Markdown 文件尚未生成，Pi 可以读取原设置目录的 `pi-taskbook.json`。Setup 会读到 `~/.agents/pstack-models.md` 时将其作为模型选择参考，并询问用户是否生成 Markdown。PStack 中的名称须与 Pi 已注册的模型对应。
+在 `/taskbook-setup` 中选择个人配置 `~/.agents/taskbook-models.md`，或项目配置 `.fact/models.md`。插件把选择暂存到 `.fact/taskbook.tsv`。项目模型表可以同时加入 Git，也可以保存在主 checkout，用仓库的本机 `info/exclude` 排除。同一仓库的 linked worktree 可以使用主 checkout 的本机模型表。提交设置后，从包含该提交的基线启动的新 worktree 才能取得位置选择。其他 clone 使用本机选项时需要自己的模型表。
+
+项目没有保存过位置选择时，Pi 沿用个人配置、`PI_TASKBOOK_CONFIG` 和旧 `pi-taskbook.json` 的读取方式。Setup 会参考已有配置、`~/.agents/pstack-models.md` 与 Pi 当前可用的模型和档位。[Setup 回复示例](design/setup-expected-replies.md)
 
 | 配置键 | 职责 | 默认模型 |
 | --- | --- | --- |
@@ -31,11 +33,13 @@ printf '%s\n' '{"type":"get_commands"}' '{"type":"get_available_models"}' |
 
 历史环境变量仍可设置默认值。对应变量为 `PI_TASKBOOK_DESIGN_MODEL`、`PI_TASKBOOK_IMPLEMENT_MODEL`、`PI_TASKBOOK_REVIEW_MODEL`、`PI_TASKBOOK_FACT_REVIEW_MODEL`、`PI_TASKBOOK_CORRECTNESS_MODEL`、`PI_TASKBOOK_QUALITY_MODEL`。文件中的同名角色优先。文件设置 `review` 后，未在文件单独指定的审核角色都使用它。
 
-任务开始时保存解析后的模型 ID。恢复沿用检查点中的 ID。独立会话继承派发时的 Pi thinking level。
+省略推理档位时，角色继承入口会话的档位，由 Pi 按目标模型能力适配。共享审核角色和设计咨询的回退同时继承模型与档位。项目已保存位置选择时，插件在每阶段开始及每次独立派发前读取所选配置。现有未设置位置的任务沿用检查点中的模型选择。设计咨询使用 `taskbook_consult`，独立审核由插件自动派发。
 
 ## 生成配置与迁移旧资料
 
-运行 `/taskbook-setup` 开始普通 AI 对话。插件将本次模型、项目和 MCP 探测结果附到消息中。直接回复是否同意生成配置或迁移。迁移确认会列出来源和目标。核对迁移结果后，再选择保留或清理原 `.audit`。
+运行 `/taskbook-setup` 开始普通 AI 对话。插件将本次模型、项目和 MCP 探测结果附到消息中，并询问需要你决定的事项。也可以把明确的批准直接写在命令后，例如 `/taskbook-setup 批准迁移旧 .audit，保留原件`。本次要求的事项都批准时直接执行。批准为空、范围不清或缺少选择时，setup 会指出需要补齐的内容。
+
+生成项目模型表时，可一次写清方案、保存位置和 Git 选择，例如 `/taskbook-setup 批准按 Pro 生成项目模型配置，不追踪`。迁移与清理是各自的批准事项，清理前仍需核对迁移结果。[批准与回复示例](design/setup-expected-replies.md#在命令中给出批准)
 
 新的检查点位于当前 Git worktree 的元数据目录。项目事实用 `.fact/facts.tsv`，允许 Git 跟踪。迁移与目录说明见[项目事实与术语](project-memory.md)。
 

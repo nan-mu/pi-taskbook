@@ -4,8 +4,9 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { formatModelConfig, modelConfigPaths, modelKey, modelRoutes, parseModelConfig, readModelConfig,
-  resolveModel, reviewerModel, type ModelRoutes } from "../workflow/design-worker.ts";
+import { formatModelConfig, getSupportedThinkingLevels, modelConfigPaths, modelKey, modelRoutes, parseModelConfig, personalModelPath,
+  readModelConfig, resolveModel, reviewerModel, type ModelRoutes } from "../models/config.ts";
+import { modelSettingsPath, projectModelPath, projectModelsFile } from "../models/storage.ts";
 import { formatProjectTsv, legacyProjectFactsPath, readLegacyProjectJson, readProjectMemory, projectFactsPath, projectGlossaryPath } from "../facts/project-memory.ts";
 import { probeSubagents } from "../review/subagent-probe.ts";
 import { inspectMcpCapabilities } from "../integrations/mcp-catalog.ts";
@@ -74,13 +75,35 @@ function pstackSetup() {
   }
 }
 
-function modelSetup(ctx: ExtensionContext) {
-  const paths = modelConfigPaths();
+function modelSetup(ctx: ExtensionContext, root?: string) {
+  const available = ctx.modelRegistry.getAvailable();
+  const selectedKey = ctx.model && modelKey(ctx.model);
+  const selected = available.find(model => modelKey(model) === selectedKey);
+  const catalog = (selected ? [selected, ...available.filter(model => model !== selected)] : available).slice(0, 64)
+    .map(model => ({id: modelKey(model), name: model.name,
+    thinkingLevels: getSupportedThinkingLevels(model)}));
+  const inspect = (path: string) => {
+    const file = fileStatus(path, "file");
+    if (file.status !== "ready") return file;
+    try {
+      const config = readModelConfig({path, required: true, storage: "personal"});
+      return config.kind === "markdown" ? {...file, roles: config.roles} : {...file, status: "invalid"};
+    } catch { return {...file, status: "invalid"}; }
+  };
+  const detailsForSelection = {catalog, selectedAvailable: Boolean(selected), entryThinking: ctx.thinkingLevel, pstack: pstackSetup(),
+    sources: {personal: inspect(personalModelPath()), project: root && (() => {
+      try { return {...inspect(projectModelPath(root)), stagedOrTracked: Boolean(git(root, "ls-files", "--", projectModelsFile))}; }
+      catch { return {path: projectModelsFile, status: "invalid"}; }
+    })(), settings: root && repoPath(root, modelSettingsPath, "file")}};
+  let paths;
+  try { paths = modelConfigPaths(root); }
+  catch {
+    return {...detailsForSelection, scenario: catalog.length ? "existing" : "no-models", file: {path: modelSettingsPath, status: "invalid"},
+      effective: {status: "invalid", reason: "项目的 Taskbook 模型位置设置无效。"}};
+  }
   const file = fileStatus(paths.path, "file");
   const example = fileURLToPath(new URL("../../taskbook-models.example.md", import.meta.url));
   const legacy = paths.legacyPath ? fileStatus(paths.legacyPath, "file") : undefined;
-  const selected = ctx.model && ctx.modelRegistry.find(ctx.model.provider, ctx.model.id);
-  const available = ctx.modelRegistry.getAvailable();
   const suggestion = selected ?? available[0] ?? ctx.modelRegistry.getAll()[0];
   const fallbackModel = suggestion && modelKey(suggestion);
   let recommended: ReturnType<typeof parseModelConfig> = {};
@@ -97,9 +120,10 @@ function modelSetup(ctx: ExtensionContext) {
     catch { return [role, fallback]; }
   }));
   const details = {
-    file, example, legacy,
-    pstack: pstackSetup(),
-    availableModels: available.slice(0, 64).map(modelKey),
+    ...detailsForSelection, file, example, legacy, storage: paths.storage,
+    scenario: !catalog.length ? "no-models" : paths.storage || file.status !== "missing" || detailsForSelection.sources.personal.status === "ready" ||
+      detailsForSelection.sources.project?.status === "ready" ? "existing" :
+      legacy?.status === "ready" || detailsForSelection.pstack.status === "ready" ? "reference" : "new",
   };
   function initialization(source?: ReturnType<typeof readModelConfig>) {
     if (file.status !== "missing") return null;
@@ -125,7 +149,7 @@ function modelSetup(ctx: ExtensionContext) {
     const status = invalidRoles.length ? "invalid" : !selected ? "unconfirmed" :
       file.status === "missing" ? "fallback" : "ready";
     return { ...details, initialization: initialization(config), effective: { status,
-      source: config.kind, routes: safeRoutes, invalidRoles,
+      source: config.kind, routes: safeRoutes, thinkingLevels: routes.levels, invalidRoles,
       reason: !selected ? "正式任务需要选定模型。" : undefined } };
   } catch {
     const missingOverride = file.status === "missing" && paths.required && (!legacy || legacy.status === "missing");
@@ -246,16 +270,16 @@ function workflowDeclaration(root: string) {
 }
 
 export async function collectSetup(pi: ExtensionAPI, ctx: ExtensionContext) {
-  const models = modelSetup(ctx);
+  let root: string | undefined;
+  try { root = git(ctx.cwd, "rev-parse", "--show-toplevel"); } catch { }
+  const models = modelSetup(ctx, root);
   const installed = subagentManifests(pi, ctx);
   const [probe, t3] = await Promise.all([probeSubagents(pi).catch(() => null), inspectT3()]);
   const runtime = { status: probe?.responding ? "ready" : probe ? "fallback" : "unconfirmed",
     responding: probe?.responding ?? false, protocol: probe?.protocol ?? null,
     mode: probe?.responding ? "pi-subagents RPC" : "独立 Pi SDK 会话" };
   const subagents = { installed, runtime, testedPackageVersions };
-  let root: string;
-  try { root = git(ctx.cwd, "rev-parse", "--show-toplevel"); }
-  catch {
+  if (!root) {
     return { models, subagents, t3, repository: { status: "unconfirmed", reason: "当前目录没有可核对的 Git 工作区。" },
       mcp: inspectMcpCapabilities(pi), readiness: { runnable: false, taskbookNew: false, initialized: false, blockers: ["repository"] } };
   }

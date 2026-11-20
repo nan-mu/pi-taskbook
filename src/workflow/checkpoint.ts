@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { existsSync, linkSync, lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { modelRoutes, resolveModel, type ExecutionPlan, type ModelRoutes, type PlanGap } from "./design-worker.ts";
+import type { ExecutionPlan, PlanGap } from "./design-worker.ts";
+import { modelConfigPaths, modelRoles, modelRoutes, readModelConfig, resolveModel, type ModelRoutes } from "../models/config.ts";
 import { verifyPreparedEntry, type PreparedEntry } from "../taskbook/entry.ts";
 import type { CheckedFact } from "../facts/fact-check.ts";
 import type { MagpieSyncResult } from "../integrations/magpie-memory.ts";
@@ -136,8 +137,8 @@ export function openRun({ ctx, task, promptDigest, prepared }: {
     checkpoint(active, {...state, phase: "correctness", exit: undefined, sync: undefined});
   }
   if (!active.state.routes) {
-    const routes = modelRoutes(ctx);
-    for (const key of new Set(Object.values(routes))) if (key) resolveModel(ctx, key);
+    const routes = modelRoutes(ctx, readModelConfig(modelConfigPaths(active.root)));
+    for (const key of new Set(modelRoles.map(role => routes[role]))) if (key) resolveModel(ctx, key);
     checkpoint(active, {...active.state, routes});
   }
   if (!active.state.plan && (["implement", "performance", "correctness", "quality"].includes(active.state.phase) ||

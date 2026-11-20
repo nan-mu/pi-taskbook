@@ -47,6 +47,7 @@ def prompt_text(message):
 def review_turn(packet, messages, body):
     role = packet["role"]
     assert role in ("correctness", "quality", "fact-review")
+    assert re.findall(r"^## (fact-review|correctness|quality)$", str(messages[0]["content"]), re.M) == [role]
     # Every review is a fresh real Pi session, with only snapshot inspection.
     names = [item["function"]["name"] for item in body.get("tools", [])]
     assert names == ["inspect_revision"], names
@@ -64,6 +65,8 @@ def review_turn(packet, messages, body):
         assert (focus if spec else other) in str(messages[0]["content"])
         assert (other if spec else focus) not in str(messages[0]["content"])
     book = str(packet["taskbook"])
+    if "project-model-settings" in book:
+        assert body["model"] == "review", body["model"]
     if any(task in book for task in route_tasks):
         assert body["model"] == ("quality-review" if role == "quality" else "review"), body["model"]
         if spec:
@@ -189,6 +192,11 @@ route_tasks = {"design-route", "design-question"}
 plan_gap = "The old plan assumes measurements always have a numeric value."
 user_question = "Should missing values produce a distinct output?"
 user_answer = "Use an explicit no-value marker in measurement output."
+approval_partial = "按 Pro 帮我配项目模型，旧 .audit 也可以先迁移"
+approval_model = "给这个项目用 Pro 方案"
+approval_migrate = "请把旧审计资料归档，原来的 .audit 留着"
+approval_delete = "已核对归档，现在可以删除原来的 .audit"
+approval_keep = "我只想看一下归档，先保留原来的 .audit"
 
 
 def design_plan(state, revised=False):
@@ -452,17 +460,36 @@ class Provider(http.server.BaseHTTPRequestHandler):
                     setup_retry.clear()
                     self.send_error(503)
                     return
-                delta = {"role": "assistant", "content": "setup fixture report"}
-                finish = "stop"
-            elif messages[-1]["role"] == "user" and latest in ("同意生成", "请迁移旧审计资料", "请清理已迁移的审计资料"):
+                argument = latest.partition("\n\n## User command argument\n")[2]
+                if argument in (approval_migrate, approval_delete, approval_keep):
+                    operation = "migrate" if argument == approval_migrate else "delete-audit"
+                    quotes = [argument] if argument != approval_keep else ["同意删除 .audit"]
+                    delta = tool_call("taskbook_migrate", {"operation": operation, "approvedBy": quotes,
+                                     **({"sources": ["audit"]} if operation == "migrate" else {})})
+                    finish = "tool_calls"
+                else:
+                    reply = "项目模型表是否由 Git 跟踪？" if argument in (approval_partial, approval_model) else \
+                        "当前没有获批的操作" if argument == "批准：" else "setup fixture report"
+                    delta = {"role": "assistant", "content": reply}
+                    finish = "stop"
+            elif messages[-1]["role"] == "user" and latest in ("同意生成", "请迁移旧审计资料", "请清理已迁移的审计资料", "保存项目模型到本机", "保存项目模型并跟踪", "不追踪"):
                 if latest == "同意生成":
                     setup_tool_calls.append("write")
                     delta = tool_call("write", {"path": "setup-approved.txt", "content": "approved"})
+                elif latest.startswith("保存项目模型") or latest == "不追踪":
+                    assert any(t["function"]["name"] == "taskbook_model_setup" for t in body["tools"])
+                    delta = tool_call("taskbook_model_setup", {"location": "project", "gitTracking": latest.endswith("跟踪"),
+                                     "configuration": "review: fixture/review @ medium\n",
+                                     **({"approvedBy": [approval_model, latest]} if latest == "不追踪" else {})})
                 else:
                     delta = tool_call("taskbook_migrate", {"operation": "migrate" if latest.startswith("请迁移") else "delete-audit"})
                 finish = "tool_calls"
+            elif messages[-1]["role"] == "tool" and any(any(prompt_text(message).endswith(approval)
+                    for approval in (approval_migrate, approval_delete, approval_keep)) for message in messages):
+                delta = {"role": "assistant", "content": "setup operation receipt " + latest}
+                finish = "stop"
             elif messages[-1]["role"] == "tool" and any(message["role"] == "user" and prompt_text(message) in
-                    ("同意生成", "请迁移旧审计资料", "请清理已迁移的审计资料") for message in messages):
+                    ("同意生成", "请迁移旧审计资料", "请清理已迁移的审计资料", "保存项目模型到本机", "保存项目模型并跟踪", "不追踪") for message in messages):
                 delta = {"role": "assistant", "content": "setup follow-up complete"}
                 finish = "stop"
             elif "PI_TASKBOOK_INDEPENDENT_REVIEW" in system:
@@ -481,19 +508,21 @@ class Provider(http.server.BaseHTTPRequestHandler):
                 state = json.loads(reports[-1])
                 phase = state["phase"]
                 task = state["task"]
+                assert not ({"Agent", "SubagentWorkflow"} & {t["function"]["name"] for t in body.get("tools", [])})
                 kind = state["type"]
                 assert "UNTRUSTED CHECKOUT CONTENT" not in system
+                assert "## Reference methods" in system and "通用方法" not in system
                 if phase == "fact-check":
-                    assert "通用方法 pstack:principle-prove-it-works" in system and "通用方法 matt:research" in system
-                    assert ("通用方法 matt:diagnosing-bugs" in system) == kind.startswith("fix-")
+                    assert "pstack:principle-prove-it-works" in system and "matt:research" in system
+                    assert ("matt:diagnosing-bugs" in system) == kind.startswith("fix-")
                 if phase == "implement" and kind.startswith("fix-"):
-                    assert "通用方法 matt:diagnosing-bugs" in system and "通用方法 matt:tdd" not in system
+                    assert "matt:diagnosing-bugs" in system and "matt:tdd" not in system
                 if phase == "implement" and kind == "new-feature":
-                    assert "通用方法 matt:tdd" in system
+                    assert "matt:tdd" in system
                 if phase == "implement" and kind == "new-experiment":
-                    assert "通用方法 pstack:benchmark-checklist" in system and "通用方法 matt:tdd" not in system
+                    assert "pstack:benchmark-checklist" in system and "matt:tdd" not in system
                 if phase == "design":
-                    assert "通用方法 pstack:principle-model-the-domain" in system and "通用方法 matt:codebase-design" in system
+                    assert "pstack:principle-model-the-domain" in system and "matt:codebase-design" in system
                 if task in ("cancel", "shared-cancel") and phase == "fact-check":
                     cancel_started.set()
                     cancel_end.wait(8)
@@ -749,7 +778,7 @@ with tempfile.TemporaryDirectory(prefix="pi-taskbook-rpc-") as tmp:
     threading.Thread(target=server.serve_forever, daemon=True).start()
     (config / "models.json").write_text(json.dumps({"providers": {"fixture": {
         "baseUrl": f"http://127.0.0.1:{server.server_port}/v1", "api": "openai-completions",
-        "apiKey": "fixture", "models": [{"id": "fixture"}, {"id": "design"}, {"id": "worker"}, {"id":"review"}, {"id":"quality-review"}]}}}))
+        "apiKey": "fixture", "models": [{"id": "fixture"}, {"id": "design"}, {"id": "worker"}, {"id":"review", "reasoning": True}, {"id":"quality-review"}]}}}))
 
     # Legacy checkout settings can point to a different HEAD. Only package-owned methods may enter a prompt.
     roots = {}
@@ -1146,6 +1175,25 @@ Complete the shared stages.
         assert "删除" in str(setup.confirm(True))
         setup.settled("setup follow-up complete")
         assert not (work / ".audit").exists() and state_for(work, "term-retire")["version"] == 1
+
+        (work / ".audit").mkdir()
+        (work / ".audit/notes.txt").write_text("Approval fixture")
+        setup.command(type="prompt", message="/taskbook-setup " + approval_partial)
+        setup.settled("项目模型表是否由 Git 跟踪？")
+        assert not any(p.read_text() == "Approval fixture" for p in run_directory(work).parent.glob("legacy-audit/*/notes.txt"))
+        setup.command(type="prompt", message="/taskbook-setup 批准：")
+        setup.settled("当前没有获批的操作")
+
+        setup.command(type="prompt", message="/taskbook-setup " + approval_migrate)
+        setup.settled("setup operation receipt")
+        assert (work / ".audit/notes.txt").exists()
+        assert any(p.read_text() == "Approval fixture" for p in run_directory(work).parent.glob("legacy-audit/*/notes.txt"))
+        setup.command(type="prompt", message="/taskbook-setup " + approval_keep)
+        setup.settled("请引用本次 setup 的完整用户原话")
+        assert (work / ".audit").exists()
+        setup.command(type="prompt", message="/taskbook-setup " + approval_delete)
+        setup.settled("setup operation receipt")
+        assert not (work / ".audit").exists()
     finally:
         setup.close()
 
@@ -1261,6 +1309,43 @@ Complete the shared stages.
         assert state_for(work, "same-model")["plan"]["version"] == 2
     finally:
         single.close()
+
+    chosen = Client(work, config, str(uuid.uuid4()))
+    try:
+        chosen.command(type="prompt", message="/taskbook-setup")
+        chosen.settled("setup fixture report")
+        assert '"thinkingLevels"' in setup_reports[-1] and '"medium"' in setup_reports[-1]
+        chosen.command(type="prompt", message="保存项目模型到本机")
+        assert "本机 Git 排除" in str(chosen.confirm(False))
+        chosen.settled("setup follow-up complete")
+        assert not (work / ".fact/taskbook.tsv").exists()
+        assert not (main / ".fact/models.md").exists()
+        chosen.command(type="prompt", message="/taskbook-setup " + approval_model)
+        chosen.settled("项目模型表是否由 Git 跟踪？")
+        chosen.command(type="prompt", message="不追踪")
+        chosen.settled("setup follow-up complete")
+        assert git(work, "show", ":.fact/taskbook.tsv").endswith("modelConfig\tproject-local")
+        assert "review: fixture/review @ medium" in (main / ".fact/models.md").read_text()
+        assert git(main, "check-ignore", "--", ".fact/models.md") == ".fact/models.md"
+        assert not (work / ".gitignore").exists() and not git(work, "ls-files", "--", ".fact/models.md")
+        git(work, "commit", "-m", "Select the project-local model file")
+
+        submit(chosen, taskfile(d, "project-model-settings"))
+        chosen.notify("可交接")
+        selected = state_for(work, "project-model-settings")
+        reviews = [report["review"] for report in selected["reports"] if report.get("review")]
+        assert len(reviews) == 3 and all((r["model"], r["thinkingLevel"]) == ("fixture/review", "medium") for r in reviews), reviews
+
+        chosen.command(type="prompt", message="/taskbook-setup")
+        chosen.settled("setup fixture report")
+        assert '"storage": "project-local"' in setup_reports[-1]
+        chosen.command(type="prompt", message="保存项目模型并跟踪")
+        assert "项目模型表加入 Git" in str(chosen.confirm(True))
+        chosen.settled("setup follow-up complete")
+        assert git(work, "show", ":.fact/taskbook.tsv").endswith("modelConfig\tproject-tracked")
+        assert "review: fixture/review @ medium" in git(work, "show", ":.fact/models.md")
+    finally:
+        chosen.close()
         server.shutdown()
 
 assert not list(errors.queue), list(errors.queue)

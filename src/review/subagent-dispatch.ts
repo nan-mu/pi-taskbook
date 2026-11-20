@@ -7,6 +7,7 @@ type Model = NonNullable<ExtensionContext["model"]>;
 type Dispatch = {
   system: string;
   model: Model;
+  thinkingLevel: ExtensionContext["thinkingLevel"];
   tool: ToolDefinition;
   controller: AbortController;
   sessionId?: string;
@@ -17,7 +18,7 @@ const shared = globalThis as typeof globalThis & { [key]?: AsyncLocalStorage<Dis
 export const reviewDispatch = shared[key] ??= new AsyncLocalStorage<Dispatch>();
 const type = "pi-taskbook-snapshot-review";
 
-export async function dispatchReview(pi: ExtensionAPI, ctx: ExtensionContext, dispatch: Omit<Dispatch, "controller">,
+export async function dispatchReview(pi: ExtensionAPI, dispatch: Omit<Dispatch, "controller">,
   packet: string, signal?: AbortSignal) {
   if (!(await probeSubagents(pi)).responding) return;
 
@@ -53,7 +54,7 @@ export async function dispatchReview(pi: ExtensionAPI, ctx: ExtensionContext, di
       }));
       reviewDispatch.run(scope, () => pi.events.emit("subagents:rpc:spawn", {
         requestId, type, prompt: packet,
-        options: {description: "Taskbook 固定提交取证", model: dispatch.model, thinkingLevel: ctx.thinkingLevel,
+        options: {description: "Taskbook 固定提交取证", model: dispatch.model, thinkingLevel: dispatch.thinkingLevel,
           inheritContext: false, isolated: false, isBackground: false, signal: controller.signal},
       }));
     });

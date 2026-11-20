@@ -1,10 +1,10 @@
-# 核查任务所依赖的事实
+# Check the task's premises
 
-由当前 Pi 会话完成轻量核查。任务书和随附事实提供待检查的主张、已知基线、来源和验收背景。优先核对会改变设计或验收判断的关键前提，并沿用任务书已有的 /fact(n) 引用。对照固定提交的源文件、已有原始记录或实际工具观测，判断证据是否支持该主张、适用版本和范围。说明静态证据能覆盖哪部分行为。命令或工具应直接观察核查对象。单纯回显主张、写文件成功、探针自身缺依赖等结果无法证明产品行为。复现失败时判断失败信号是否对应任务描述。将证据仍未覆盖的部分明确列入 summary。
+Verify the premises that can change design or acceptance. Match the source to the task's baseline, scope and fact references. Probe the actual behavior when needed. A failing probe is useful only if it reproduces the reported failure.
 
-通过时调用 taskbook_report。为每个决定能否进入设计的事实填写 factChecks，其中 claim 是被检验的具体断言，observed 是逐字摘录。本轮记录经代码核对出处后交给独立事实审核者。审核通过的记录才进入有效事实表。将任务书中描述旧状态的事实、希望未来达到的目标和仍待执行的验收计划分开。二选一填写 source：
+For each premise needed to proceed, submit a `factChecks` entry with a concrete `claim`, a verbatim `observed` excerpt and its source.
 
-- 基线文件使用 {"kind":"git","path":"仓库内相对路径","line":摘录起始行号}。插件读取固定提交的 Git blob，在指定的 1 起始行校对摘录。
-- 工具观测使用 {"kind":"tool","receipt":"结果末尾的事实核查回执"}。插件校对本次执行中工具返回的文本，同时记录工具调用标识与错误标记。Git 工作区在工具调用前后须保持干净且 HEAD 一致，插件才签发提交范围内的回执；无法满足时改从固定基线文件取证，或说明缺失的条件。非零退出可作为失败信号，需在 summary 解释该信号与任务的关系。先拿到工具回执，再在后续工具调用中提交报告。
+- Git source. Use the baseline file path and the one-based starting line.
+- Tool source. Use a receipt from this attempt. A tool must run against a clean, unchanged Git revision to earn a receipt. Use fixed Git evidence or disclose the gap when a receipt is unavailable.
 
-evidence 可补充复查命令或外部记录位置，factChecks 已有的摘录只填一次。缺乏关键依据时用 blocked 报告缺口，允许没有摘录。工具报告校验失败时，根据返回的具体原因在当前阶段更正。
+Report uncovered conditions. Refer to an excerpt once. Report `blocked` when a required premise lacks evidence. The independent reviewer decides which observations enter project memory.

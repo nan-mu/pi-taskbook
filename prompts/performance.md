@@ -1,7 +1,5 @@
-# 性能验证
+# Measure the candidate
 
-在固定交付提交和任务书指定的基线上运行可比实验。先记录运行环境、负载、预热、指标、样本数和重复方式，确认命令量到的是任务要求的路径。保持能影响对比的条件一致。已有符合条件的数据可复用，写明来源和适用范围。
+Compare the fixed candidate and specified baseline under matching conditions. Record environment, load, warmup, metric, samples and repetition. Verify that the command measures the required path. Reuse existing measurements only with matching conditions and a source.
 
-把临时测量输出写入 Git 忽略的审计目录，保持待审提交和工作区可复查。记录原始结果、复跑结果、分布或波动和对照结论。说明观测到的变化对应哪项验收判据、可能由什么造成、能推广到哪些条件。只跑了冒烟或只取得静态证据时，如实标注。必要实测缺环境、证据冲突或阈值未达成时提交阻塞，并提供可复跑的证据位置。
-
-需证明运行时行为或测量时，先确保候审提交已固定且工作区干净，再运行能观察该行为的命令。在 observedRuns 中写入工具结果末尾的候审观测回执 receipt 和逐字摘录 observed。evidence 提供复跑入口、项目内已有证据位置和适用条件。如果当前环境未触达必要的目标行为，按任务书约定记录缺口或阻塞。
+Keep temporary output outside the checkout. Run on the clean candidate commit and cite `observedRuns` receipts with verbatim results. Report raw results, spread, comparison and the acceptance criterion they support. State the limits of the inference. Report `blocked` with the reproducible gap when required measurement is unavailable or the criterion fails.

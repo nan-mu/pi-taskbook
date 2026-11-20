@@ -23,12 +23,14 @@ type Inspection = { id: string; view: string; path?: string; start: number; dige
 type RunSource = { id: string; phase: string; revision: string; toolCallId: string; digest: string };
 export type ReviewResult = {
   sessionId: string; revision: string; role: Role; model: string; contextDigest: string;
+  thinkingLevel?: ExtensionContext["thinkingLevel"];
   agentId?: string;
   verdict: Verdict; summary: string; items: ReviewItem[]; conflicts: Conflict[]; observations: Inspection[]; runSources: RunSource[];
 };
 
 const designConsultInstruction = readFileSync(new URL("../../prompts/design-consult.md", import.meta.url), "utf8");
-const instruction = readFileSync(new URL("../../prompts/independent-review.md", import.meta.url), "utf8");
+const [reviewInstruction, ...reviewRoles] = readFileSync(new URL("../../prompts/independent-review.md", import.meta.url), "utf8")
+  .trim().split(/^## /m);
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 const parameters = Type.Object({
   view: Type.Union([Type.Literal("changes"), Type.Literal("base"), Type.Literal("candidate"), Type.Literal("diff")]),
@@ -143,7 +145,7 @@ function parseVerdict(text: string, required: string[], facts: TaskItem[], role:
 }
 
 export async function runIndependentReview(ctx: ExtensionContext, input: ReviewInput, signal?: AbortSignal, model = ctx.model,
-  pi?: ExtensionAPI): Promise<ReviewResult> {
+  pi?: ExtensionAPI, thinkingLevel = ctx.thinkingLevel): Promise<ReviewResult> {
   if (!model) throw new Error("独立审核需要已选定的 Pi 模型。");
   if (![input.base, input.revision].every(value => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(value))) {
     throw new Error("审核需要固定的基线和候审提交。");
@@ -153,34 +155,37 @@ export async function runIndependentReview(ctx: ExtensionContext, input: ReviewI
   const { root, methods, ...data } = input;
   const runSources = runSourcesFor(input);
   const packet = JSON.stringify({ ...data, requiredIds, runSources });
-  const system = [instruction, ...methods.map(method => "## " + method.source + "\n" + method.text)].join("\n\n");
-  const reply = await readOnlySession(ctx, input, model, system, packet, signal, pi);
+  const role = reviewRoles.find(section => section.startsWith(input.role + "\n"));
+  if (!role) throw new Error("缺少独立审核角色提示词：" + input.role);
+  const system = [reviewInstruction.trim(), "## " + role.trim(),
+    ...methods.map(method => "## " + method.source + "\n" + method.text)].join("\n\n");
+  const reply = await readOnlySession(input, model, thinkingLevel, system, packet, signal, pi);
   const result = parseVerdict(reply.text, requiredIds, input.facts, input.role, reply.observations, runSources,
     record(input.evidence) && input.evidence.classifyFactChecks === true);
   return { ...result, revision: input.revision, role: input.role, runSources, observations: reply.observations,
-    contextDigest: reply.contextDigest, model: reply.model, sessionId: reply.sessionId,
+    contextDigest: reply.contextDigest, model: reply.model, thinkingLevel, sessionId: reply.sessionId,
     ...("agentId" in reply ? {agentId: reply.agentId} : {}) };
 }
 
 export async function consultDesign(ctx: ExtensionContext, input: Omit<ReviewInput,"role">, question: string,
-  model: NonNullable<ExtensionContext["model"]>, signal?: AbortSignal, pi?: ExtensionAPI) {
+  model: NonNullable<ExtensionContext["model"]>, signal?: AbortSignal, pi?: ExtensionAPI, thinkingLevel = ctx.thinkingLevel) {
   const system = [designConsultInstruction,
     ...input.methods.map(method => "## " + method.source + "\n" + method.text)].join("\n\n");
   const {root: _root, methods: _methods, ...data} = input;
   const packet = JSON.stringify({...data, role:"design-consult", question});
-  const reply = await readOnlySession(ctx, input, model, system, packet, signal, pi);
-  return {answer: reply.text, model: reply.model, sessionId: reply.sessionId, observations: reply.observations,
+  const reply = await readOnlySession(input, model, thinkingLevel, system, packet, signal, pi);
+  return {answer: reply.text, model: reply.model, thinkingLevel, sessionId: reply.sessionId, observations: reply.observations,
     contextDigest: reply.contextDigest, revision: input.revision,
     ...("agentId" in reply ? {agentId: reply.agentId} : {})};
 }
 
-async function readOnlySession(ctx: ExtensionContext, input: Pick<ReviewInput,"root"|"base"|"revision">, model: NonNullable<ExtensionContext["model"]>,
-  system: string, packet: string, signal?: AbortSignal, pi?: ExtensionAPI) {
+async function readOnlySession(input: Pick<ReviewInput,"root"|"base"|"revision">, model: NonNullable<ExtensionContext["model"]>,
+  thinkingLevel: ExtensionContext["thinkingLevel"], system: string, packet: string, signal?: AbortSignal, pi?: ExtensionAPI) {
   const {root} = input;
   const observations: Inspection[] = [];
   const tool = inspectionTool(input, observations);
   const contextDigest = digest(JSON.stringify([system, packet]));
-  const delegated = pi && await dispatchReview(pi, ctx, {system, model, tool}, packet, signal);
+  const delegated = pi && await dispatchReview(pi, {system, model, thinkingLevel, tool}, packet, signal);
   if (delegated) return {...delegated, model: model.provider + "/" + model.id, contextDigest, observations};
   const agentDir = getAgentDir();
   const settingsManager = SettingsManager.inMemory();
@@ -191,7 +196,7 @@ async function readOnlySession(ctx: ExtensionContext, input: Pick<ReviewInput,"r
   await resourceLoader.reload();
   signal?.throwIfAborted();
   const { session } = await createAgentSession({
-    cwd: root, agentDir, model, thinkingLevel: ctx.thinkingLevel,
+    cwd: root, agentDir, model, thinkingLevel,
     sessionManager: SessionManager.inMemory(root), resourceLoader, settingsManager,
     customTools: [tool], tools: ["inspect_revision"],
   });
@@ -203,6 +208,7 @@ async function readOnlySession(ctx: ExtensionContext, input: Pick<ReviewInput,"r
     if (!actual || actual.provider !== model.provider || actual.id !== model.id) {
       throw new Error("独立会话未使用指定的角色模型 " + model.provider + "/" + model.id);
     }
+    if (session.thinkingLevel !== thinkingLevel) throw new Error("独立会话未使用指定的推理档位 " + thinkingLevel);
     const activeTools = session.getActiveToolNames();
     if (activeTools.length !== 1 || activeTools[0] !== "inspect_revision") {
       throw new Error("独立会话未获得限定的只读审查工具。");
