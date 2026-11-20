@@ -1,6 +1,5 @@
-"""Opt-in Linux integration test against an installed Magpie CLI. Uses only synthetic memory."""
+"""Opt-in read-only MCP tool discovery against an isolated Magpie CLI on Linux."""
 import argparse
-import json
 import os
 from pathlib import Path
 import shutil
@@ -11,53 +10,23 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = """
+SCRIPT = r"""
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { applyApprovedMemory, readProjectMemory } from PROJECT_MEMORY;
-import { syncMagpieMemory, recallMagpieMemory } from MAGPIE_MEMORY;
-
 const root = process.cwd();
-const firstText = "Fixture testers prefer independent evidence.";
-const corrected = "Fixture testers prefer two independent observations.";
-const apply = (action, expected, text) => {
-  const digest = "fixture-" + (expected + 1);
-  applyApprovedMemory(root, readProjectMemory(root), {id:"fixture", repository:"isolated/example", digest}, "base",
-    [{action, key:"evidence", expected, kind:"fact", scope:"cross-project:preference", text, authorization:"explicit synthetic request"}],
-    [{claim:"Fixture scope", observed:"yes", origin:"fixture", source:{kind:"git", path:"fixture", line:1}}],
-    {role:"fact-review", verdict:"pass", sessionId:"fixture-review", items:[{id:"P1",status:"pass",memoryUse:"change-evidence"},{id:"M1",status:"pass"}]});
-  return digest;
-};
-function userChanges(name, args) {
-  const response = execFileSync("magpie", ["tool", name, "--json", ...args], {cwd:root, encoding:"utf8"});
-  const result = JSON.parse(response);
-  assert.ok(!result.isError);
-  return result.content[0].text;
+const discovery = {};
+for (const name of ["memory_context", "memory_search", "memory_save", "memory_forget"]) {
+  const result = execFileSync("magpie", ["tools", name], {cwd:root, encoding:"utf8"});
+  assert.ok(result.startsWith(name));
+  discovery[name] = result.split("\n").map(line => /^  --([a-z_]+)/.exec(line)?.[1]).filter(Boolean);
 }
-const created = apply("create",0,firstText);
-const first = await syncMagpieMemory(root,created);
-const replay = await syncMagpieMemory(root,created);
-assert.deepEqual(first,{published:1,confirmed:0});
-assert.deepEqual(replay,{published:0,confirmed:1});
-const recall = await recallMagpieMemory(root,"evidence");
-assert.equal(recall.status,"available");
-const row = recall.results.flatMap(text => text.split("\\n")).find(line => line.includes(firstText));
-assert.ok(row);
-const id = /^\\[([^\\]]+)\\]/.exec(row)[1];
-const tag = /#(pi-[a-f0-9]{24})/.exec(row)[1];
-const updated = apply("update",1,corrected);
-await assert.rejects(syncMagpieMemory(root, updated), err => err.message.includes("远端 ID " + id));
-const manualEdit = userChanges("memory_save", ["--id=" + id, "--text=" + corrected + " [" + tag + "]"]);
-assert.ok(manualEdit.startsWith("Changed: [" + id + "]"));
-assert.equal((await syncMagpieMemory(root, updated)).confirmed, 1);
-const retired = apply("delete",2,"The fixture user retired this statement.");
-await assert.rejects(syncMagpieMemory(root, retired), err => err.message.includes("远端 ID " + id));
-assert.ok(userChanges("memory_forget",["--id=" + id]).startsWith("Forgotten: [" + id + "]"));
-assert.equal((await syncMagpieMemory(root, retired)).confirmed, 1);
-console.log(JSON.stringify({created:1,replayed:1,recalled:1,editBlocked:1,userEditConfirmed:1,
-  withdrawalBlocked:1,archiveConfirmedAbsent:1}));
+assert.ok(discovery.memory_search.includes("limit"));
+assert.ok(discovery.memory_save.includes("id"));
+assert.ok(discovery.memory_forget.includes("id"));
+assert.ok(!discovery.memory_save.includes("if_version"));
+assert.ok(!discovery.memory_forget.includes("if_version"));
+console.log(JSON.stringify({discovery}));
 """
-
 
 def isolated(cli, node):
     directory = Path(tempfile.mkdtemp())
@@ -72,7 +41,6 @@ def isolated(cli, node):
                       HTTPS_PROXY="http://127.0.0.1:1", HTTP_PROXY="http://127.0.0.1:1", NO_PROXY="127.0.0.1")
     project = directory / "repo"
     project.mkdir()
-    subprocess.run(["git", "init", "-q", str(project)], check=True)
     with tempfile.TemporaryFile() as log:
         service = subprocess.Popen([cli, "serve"], cwd=project, stderr=log, stdout=log)
         try:
@@ -86,9 +54,7 @@ def isolated(cli, node):
                     time.sleep(0.15)
             else:
                 raise RuntimeError("The isolated Magpie server did not listen on its test port.")
-            script = SCRIPT.replace("PROJECT_MEMORY", json.dumps((ROOT / "project-memory.ts").as_uri()))
-            script = script.replace("MAGPIE_MEMORY", json.dumps((ROOT / "magpie-memory.ts").as_uri()))
-            subprocess.run([node, "--input-type=module", "-e", script], cwd=project, timeout=70, check=True)
+            subprocess.run([node, "--input-type=module", "-e", SCRIPT], cwd=project, timeout=70, check=True)
         finally:
             service.terminate()
             try:

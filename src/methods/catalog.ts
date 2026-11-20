@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { Phase } from "./workflow.ts";
+import type { Phase } from "../workflow/transitions.ts";
 
 export type MethodStage = "intake" | "fact" | "design" | "experiment" | "implement" | "escalate" | "review" | "memory" | "exit";
 export type CatalogOwner = "pstack" | "matt";
@@ -13,7 +13,7 @@ type Entry = {
 type Source = { repo: string; commit: string; skills: Entry[] };
 
 function loadCatalog(owner: CatalogOwner) {
-  const bytes = readFileSync(new URL("./methods/" + owner + ".json", import.meta.url));
+  const bytes = readFileSync(new URL("../../methods/" + owner + ".json", import.meta.url));
   const catalog: Source = JSON.parse(bytes.toString("utf8"));
   const pin: CatalogPin = { commit: catalog.commit, digest: createHash("sha256").update(bytes).digest("hex") };
   return {

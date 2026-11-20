@@ -1,6 +1,6 @@
-import { catalogPins, phaseMethod, type CatalogOwner } from "./method-catalog.ts";
-import type { Taskbook } from "./taskbook.ts";
-import type { Phase } from "./workflow.ts";
+import { catalogPins, phaseMethod, type CatalogOwner } from "./catalog.ts";
+import type { Taskbook } from "../taskbook/document.ts";
+import type { Phase } from "../workflow/transitions.ts";
 
 // Old checkpoints have {root, commit}. They are readable for migration, but
 // cannot authorize work against a different version of the adapted methods.

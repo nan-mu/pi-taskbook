@@ -11,10 +11,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runIndependentReview } from "../reviewer.ts";
-import { parseFactDecision, taskMemory, validateConflict } from "../memory.ts";
-import { readTaskbook } from "../taskbook.ts";
-import { loadUpstreamInputs, pinUpstreamInputs } from "../upstream.ts";
+import { runIndependentReview } from "../src/review/reviewer.ts";
+import { parseFactDecision, taskMemory, validateConflict } from "../src/workflow/task-context.ts";
+import { readTaskbook } from "../src/taskbook/document.ts";
+import { loadUpstreamInputs, pinUpstreamInputs } from "../src/methods/upstream.ts";
 
 const task = readTaskbook(process.cwd(), process.argv[2] ?? "");
 const authority = taskMemory(task);

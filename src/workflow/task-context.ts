@@ -1,9 +1,9 @@
-import type { Taskbook } from "./taskbook.ts";
-import type { CheckedFact } from "./fact-check.ts";
-import type { Phase } from "./workflow.ts";
+import type { Taskbook } from "../taskbook/document.ts";
+import type { CheckedFact } from "../facts/fact-check.ts";
+import type { Phase } from "./transitions.ts";
 
 export type TaskItem = { id: string; text: string; userDecision?: FactDecision };
-export type FactConflict = { factId: string; observation: string; projectVersion?: number };
+export type FactConflict = { factId: string; observation: string; projectVersion?: number; projectHead?: string | null };
 export type FactDecision = { factId: string; action: "keep" | "replace"; text: string };
 
 function linesOutsideFences(markdown: string) {
@@ -59,12 +59,16 @@ function items(markdown: string, prefix: string): TaskItem[] {
   return output;
 }
 
+export function taskAuthoredFacts(markdown: string) {
+  return items(section(markdown, "Facts") ?? "", "F");
+}
+
 export function taskMemory(task: Pick<Taskbook, "markdown" | "facts">, decisions: FactDecision[] = [], verified: CheckedFact[] = []) {
   const goal = (section(task.markdown, "Goal") ?? "").replace(/^(?:Type:\s*|\*\*Type:?\*\*:?\s+)[^\n]*\n?/, "");
   const goals = items(goal, "G");
   const delivery = items(section(task.markdown, "Delivery") ?? "", "D");
   if (!goals.length || !delivery.length) throw new Error("Goal 和 Delivery 需要可审核的正文。");
-  const facts = items(section(task.markdown, "Facts") ?? "", "F");
+  const facts = taskAuthoredFacts(task.markdown);
   if (task.facts) facts.push(...items(section(task.facts, "Facts") ?? task.facts, facts.length ? "AF" : "F"));
   const seen = new Set<string>();
   for (const record of verified) {

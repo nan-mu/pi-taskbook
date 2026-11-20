@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import test from "node:test";
-import { phaseMethod, readStageMethod } from "../method-catalog.ts";
-import { loadUpstreamInputs, phaseSources, pinUpstreamInputs, usesCurrentInputs } from "../upstream.ts";
-import { stages } from "../workflow.ts";
+import { phaseMethod, readStageMethod } from "../src/methods/catalog.ts";
+import { loadUpstreamInputs, phaseSources, pinUpstreamInputs, usesCurrentInputs } from "../src/methods/upstream.ts";
+import { stages } from "../src/workflow/transitions.ts";
 
 const types = ["new-feature", "fix-feature", "new-experiment", "fix-experiment"] as const;
 const owners = ["pstack", "matt"] as const;

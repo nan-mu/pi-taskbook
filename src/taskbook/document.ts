@@ -80,8 +80,22 @@ export function git(cwd: string, ...args: string[]) {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
+export function gitExclusion(root: string, path: string) {
+  const { status } = spawnSync("git", ["check-ignore", "-q", "--", path], {cwd: root, stdio: "ignore"});
+  const outcome: "ready" | "missing" | "unconfirmed" = status === 0 ? "ready" : status === 1 ? "missing" : "unconfirmed";
+  return { path, status: outcome };
+}
+
 export function gitOk(cwd: string, ...args: string[]) {
   return spawnSync("git", args, { cwd, stdio: "ignore" }).status === 0;
+}
+
+export function repositoryIdentity(root: string) {
+  let origin: string;
+  try { origin = git(root, "remote", "get-url", "origin"); }
+  catch { return; }
+  return origin.match(/^(?:https?:\/\/(?:[^/@]+@)?github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)([\w.-]+\/[\w.-]+)$/i)?.[1]
+    ?.replace(/\.git$/i, "").toLowerCase();
 }
 
 export function taskRepository(cwd: string, task: Taskbook) {
@@ -89,9 +103,7 @@ export function taskRepository(cwd: string, task: Taskbook) {
   if ([task.branch, task.baseBranch].some(branch => branch && !gitOk(root, "check-ref-format", "refs/heads/" + branch))) {
     throw new Error("任务书中的 Git 分支名无效。");
   }
-  const origin = git(root, "remote", "get-url", "origin");
-  const repo = origin.match(/^(?:https?:\/\/(?:[^/@]+@)?github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)([\w.-]+\/[\w.-]+)$/i)?.[1]?.replace(/\.git$/i, "");
-  if (repo?.toLowerCase() !== task.repository.toLowerCase()) throw new Error("origin 与任务书中的 GitHub 仓库不一致。");
+  if (repositoryIdentity(root) !== task.repository.toLowerCase()) throw new Error("origin 与任务书中的 GitHub 仓库不一致。");
   return root;
 }
 

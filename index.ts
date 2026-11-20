@@ -1,74 +1,29 @@
-import { collectSetup } from "./taskbook-setup.ts";
-import { recallMagpieMemory, syncMagpieMemory } from "./magpie-memory.ts";
-import { methodDirectory, readStageMethod, workerMethodStages } from "./method-catalog.ts";
-import { methodTool, registerMethodTool } from "./method-tool.ts";
+import { buildPhaseInput, localPromptDigest, magpieGuide, memoryGuide, readRunContext } from "./src/workflow/phase-input.ts";
+import { registerSetupCommand } from "./src/setup/command.ts";
+import { checkpoint, cleanRevision, openRun, type Report, type Run, type RunObservation } from "./src/workflow/checkpoint.ts";
+import { magpieSessionTransport, readForeignFacts, recallMagpieMemory, syncMagpieMemory, type MagpieSyncResult } from "./src/integrations/magpie-memory.ts";
+import { readStageMethod, workerMethodStages } from "./src/methods/catalog.ts";
+import { methodTool, registerMethodTool } from "./src/methods/tool.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { git, gitOk, readTaskbook, workspace, type Taskbook } from "./taskbook.ts";
-import { nextPhase, restorePhase, stages, titles, type Outcome, type Phase } from "./workflow.ts";
-import { prepareTaskWorktree, readEntryArgument, verifyPreparedEntry, type PreparedEntry } from "./entry.ts";
-import { launchT3Thread, readT3Endpoint } from "./t3.ts";
-import { loadUpstreamInputs, pinUpstreamInputs, usesCurrentInputs, type UpstreamPins } from "./upstream.ts";
+import { git, readTaskbook, workspace } from "./src/taskbook/document.ts";
+import { nextPhase, stages, titles, type Phase } from "./src/workflow/transitions.ts";
+import { prepareTaskLaunch, readEntryArgument } from "./src/taskbook/entry.ts";
+import { launchT3Thread } from "./src/integrations/t3.ts";
+import { loadUpstreamInputs, pinUpstreamInputs } from "./src/methods/upstream.ts";
 
-import { taskMemory, workerContext, validateConflict, parseFactDecision, type FactConflict, type FactDecision } from "./memory.ts";
-import { consultDesign, runIndependentReview, type ReviewResult } from "./reviewer.ts";
-import { checkFacts, factChecksParameter, type Observation, type CheckedFact } from "./fact-check.ts";
+import { validateConflict, parseFactDecision } from "./src/workflow/task-context.ts";
+import { consultDesign, runIndependentReview, type ReviewResult } from "./src/review/reviewer.ts";
+import { checkFacts, factChecksParameter, type Observation } from "./src/facts/fact-check.ts";
 
-import { applyApprovedMemory, historicalProjectFacts, memoryId, pendingMemoryChanges, projectFacts, readProjectMemory, taskbookMemoryChanges, type MemoryChange, type ProjectSnapshot } from "./project-memory.ts";
+import { applyApprovedMemory, historicalProjectFacts, memoryId, pendingMemoryChanges, readProjectMemory, taskbookMemoryChanges, type MemoryChange, type ProjectSnapshot } from "./src/facts/project-memory.ts";
 
-import { acceptPlan, modelKey, modelRoutes, planParameter, resolveModel, reviewerModel, runProbe,
-  type ExecutionPlan, type ModelRoutes, type PlanGap } from "./design-worker.ts";
+import { acceptPlan, modelKey, planParameter, resolveModel, reviewerModel, runProbe } from "./src/workflow/design-worker.ts";
 
 const reportTool = "taskbook_report";
 const designTools = ["taskbook_consult", "taskbook_probe"];
-const setupType = "pi-taskbook-setup";
-const setupApplyType = "pi-taskbook-setup-apply";
 const kickoffType = "pi-taskbook-stage";
-const promptDir = fileURLToPath(new URL("./prompts/", import.meta.url));
-const magpieGuide = readFileSync(new URL("./methods/magpie-memory/SKILL.md", import.meta.url), "utf8").replace(/^---\n[\s\S]*?\n---\n+/, "");
-const localRolePrompts = readdirSync(promptDir).filter(name => name.endsWith(".md")).sort()
-  .map(name => [name, readFileSync(join(promptDir, name), "utf8")]);
-const localPromptDigest = createHash("sha256").update(JSON.stringify([localRolePrompts, magpieGuide])).digest("hex");
-const memoryGuide = readFileSync(join(promptDir, "project-memory.md"), "utf8");
-const common = readFileSync(join(promptDir, "common.md"), "utf8");
-const promptNames = ["fact-check", "fact-check-fix", "fact-check-new", "design", "implement", "performance"];
-const prompts = Object.fromEntries(promptNames.map(name => [name, readFileSync(join(promptDir, name + ".md"), "utf8")]));
-
-type RunObservation = { revision: string; toolName: string; toolCallId: string; input: unknown; isError: boolean; observed: string };
-type Report = { planVersion?: number; plan?: ExecutionPlan; gap?: PlanGap; model?: string; phase: Phase; outcome: Outcome; summary: string; evidence: string[];
-  factChecks?: CheckedFact[]; observations?: RunObservation[]; review?: ReviewResult; candidateId?: string;
-  projectHead?: string | null; conflicts?: FactConflict[]; reviewInput?: string };
-type State = {
-  version: 1;
-  digest: string;
-  session: string;
-  reviewPolicy?: 1;
-  promptDigest?: string;
-  routes?: ModelRoutes;
-  plan?: ExecutionPlan;
-  planGap?: PlanGap & {planVersion?: number; revision?: string; evidence?: string[]; summary?: string};
-  pendingQuestion?: { question: string };
-  userAnswers?: { question: string; answer: string }[];
-  designActions?: { kind: "consult" | "experiment"; version: number; request: unknown; result: unknown }[];
-  candidateId?: string;
-  pendingConflicts?: FactConflict[];
-  decisions?: (FactDecision & { conflict: FactConflict; session: string; at: string; projectChange?: MemoryChange })[];
-  cycleStart?: number;
-  base: string;
-  branch: string;
-  phase: Phase | "exit";
-  exit?: "ready" | "blocked" | "cancelled";
-  stopReason?: string;
-  revision?: string;
-  upstream?: UpstreamPins;
-  reports: Report[];
-};
-type Run = { task: Taskbook; path: string; root: string; state: State };
-
 const reportParameters = Type.Object({
   attempt: Type.String({ description: "当前阶段提示词中给出的执行标识。" }),
   outcome: Type.Union([Type.Literal("pass"), Type.Literal("blocked"), Type.Literal("fact-conflict"), Type.Literal("plan-gap"), Type.Literal("needs-user")]),
@@ -83,143 +38,18 @@ const reportParameters = Type.Object({
   conflicts: Type.Optional(Type.Array(Type.Object({factId: Type.String(), observation: Type.String({minLength: 1, maxLength: 4000})}, {additionalProperties: false}), {minItems: 1, maxItems: 20})),
 }, { additionalProperties: false });
 
-function save(path: string, value: State, taskbook: Taskbook, initial = false) {
-  const temporary = path + "." + randomUUID();
-  try {
-    writeFileSync(temporary, JSON.stringify({ ...value, taskbook }, null, 2) + "\n",
-      { flag: "wx", mode: 0o600 });
-    if (initial) linkSync(temporary, path);
-    else renameSync(temporary, path);
-  } finally {
-    rmSync(temporary, { force: true });
+function requireApprovedFacts(run: Run, snapshot: ProjectSnapshot) {
+  if (run.state.approvedProjectHead !== undefined && snapshot.head !== run.state.approvedProjectHead) {
+    throw new Error("当前 .fact 与本任务已独立审核的版本不同，请恢复已审核版本后重试。");
   }
-}
-
-function checkpoint(run: Run, next: State) {
-  save(run.path, next, run.task);
-  run.state = next;
-}
-
-function openRun(ctx: ExtensionContext, task: Taskbook, prepared?: PreparedEntry): Run {
-  const session = ctx.sessionManager.getSessionId();
-  if (!ctx.sessionManager.getSessionFile()) throw new Error("请在有持久会话记录的 Pi thread 中启动任务。");
-  const preliminary = verifyPreparedEntry(ctx.cwd, task, prepared);
-  const relativePath = ".audit/pi-taskbook/" + task.id + "-" + task.digest.slice(0, 16) + "/state.json";
-  if (!gitOk(preliminary.root, "check-ignore", "-q", "--", relativePath)) {
-    throw new Error("请先将 .audit/pi-taskbook/ 加入 Git 排除配置。");
-  }
-  const path = join(preliminary.root, relativePath);
-  let directory = preliminary.root;
-  for (const component of relativePath.split("/").slice(0, -1)) {
-    directory = join(directory, component);
-    if (!existsSync(directory)) {
-      try { mkdirSync(directory, { mode: 0o700 }); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-    }
-    if (!lstatSync(directory).isDirectory()) throw new Error("审计路径需要真实的目录。");
-  }
-
-  if (!existsSync(path)) {
-    const upstream = pinUpstreamInputs();
-    loadUpstreamInputs(upstream, stages[0], task.type);
-    const initial: State = { version: 1, reviewPolicy: 1, promptDigest: localPromptDigest, digest: task.digest, session, base: preliminary.base, branch: preliminary.branch,
-      phase: stages[0], reports: [],
-      upstream };
-    try { save(path, initial, task, true); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-  }
-  if (!lstatSync(path).isFile()) throw new Error("审计状态需要是普通文件。");
-  const saved = JSON.parse(readFileSync(path, "utf8")) as Omit<State, "phase" | "reports" | "branch"> & {
-    phase: string; branch?: string; reports: (Omit<Report, "phase"> & { phase: string })[];
-  };
-  if (saved.version !== 1 || saved.digest !== task.digest || saved.session !== session || !Array.isArray(saved.reports)) {
-    throw new Error("审计记录不匹配，或任务已绑定到另一个 Pi 会话。");
-  }
-  const state: State = { ...saved,
-    branch: saved.branch ?? preliminary.branch,
-    phase: saved.phase === "exit" ? "exit" : restorePhase(task.type, saved.phase),
-    reports: saved.reports.map(report => ({ ...report, phase: restorePhase(task.type, report.phase) })),
-  };
-  workspace(ctx.cwd, task, state.base, state.branch);
-  if ((state.phase !== "exit" || state.exit === "ready") && (!state.reviewPolicy || state.promptDigest !== localPromptDigest || !usesCurrentInputs(state.upstream))) {
-    const upstream = pinUpstreamInputs();
-    loadUpstreamInputs(upstream, "fact-check", task.type);
-    // Keep the audit trail and all pending human decisions. Approvals, designs
-    // and candidate IDs from the previous policy cannot authorize delivery.
-    Object.assign(state, { reviewPolicy: 1, promptDigest: localPromptDigest, upstream, phase: "fact-check", cycleStart: state.reports.length,
-      exit: undefined, revision: undefined, candidateId: undefined, plan: undefined,
-      planGap: undefined, designActions: undefined });
-    save(path, state, task);
-  }
-  const active = { task, root: preliminary.root, path, state };
-  if (state.exit === "ready" && state.revision !== cleanRevision(active)) {
-    checkpoint(active, { ...state, phase: "implement", exit: undefined, revision: undefined, candidateId: undefined });
-  } else if (state.exit === "ready" && (state.reports.findLast(r => r.phase === "quality")?.projectHead ?? null) !== readProjectMemory(active.root).head) {
-    checkpoint(active, {...state, phase: "correctness", exit: undefined});
-  }
-  if (!active.state.routes) {
-    const routes = modelRoutes(ctx);
-    for (const key of new Set(Object.values(routes))) if (key) resolveModel(ctx, key);
-    checkpoint(active, {...active.state, routes});
-  }
-  if (!active.state.plan && (["implement", "performance", "correctness", "quality"].includes(active.state.phase) ||
-    active.state.exit === "ready")) {
-    checkpoint(active, {...active.state, phase: "design", exit: undefined, revision: undefined, candidateId: undefined});
-  }
-  return active;
-}
-
-function cleanRevision(run: Run) {
-  const revision = git(run.root, "rev-parse", "HEAD");
-  if (git(run.root, "status", "--porcelain", "--untracked-files=all")) {
-    throw new Error("交付快照需要干净的工作区。保留任务外改动，待其妥善处理后重试。");
-  }
-  return revision;
-}
-
-function memory(run: Run, snapshot = readProjectMemory(run.root)) {
-  const decisions = run.state.decisions ?? [];
-  // Old checkpoints may hold user decisions against V IDs. Modern reviews
-  // materialize their facts from the versioned project ledger exactly once.
-  const legacy = run.state.reports.filter(report => report.phase === "fact-review" &&
-    report.outcome === "pass" && report.projectHead === undefined).flatMap(report => report.factChecks ?? []);
-  const result = taskMemory(run.task, decisions.filter(d => !d.factId.startsWith("project:")), legacy);
-  const humanReferences = new Set([...decisions, ...(run.state.pendingConflicts ?? [])].map(item => item.factId));
-  result.facts = result.facts.filter(item => !item.id.startsWith("V") || humanReferences.has(item.id));
-  const latest = run.state.reports.slice(run.state.cycleStart ?? 0).findLast(r => r.phase === "fact-review" && r.outcome === "pass");
-  const accepted = latest?.factChecks?.filter((_, i) => latest.review?.items.find(item => item.id === "P" + (i + 1))?.memoryUse !== "change-evidence");
-  result.facts.push(...projectFacts(snapshot, run.state.base, accepted).map(fact => {
-    const version = snapshot.records[fact.id].version;
-    const decision = decisions.findLast(d => d.factId === fact.id &&
-      (d.conflict.projectVersion === version || (d.projectChange?.expected === version - 1 && d.text === snapshot.records[fact.id].text)));
-    return decision ? { ...fact, userDecision: decision } : fact;
-  }));
-  return result;
-}
-
-function buildPhaseInput(run: Run, phase: Phase, attempt: string, projectSnapshot: ProjectSnapshot, magpieCandidates?: Awaited<ReturnType<typeof recallMagpieMemory>> & {receipts?: string[]}) {
-  const { task, state } = run;
-  const fixed = JSON.stringify({ task: task.id, type: task.type, base: state.base, revision: state.revision,
-    branch: state.branch, phase, attempt, plan: state.plan, planGap: state.planGap,
-    userAnswers: state.userAnswers ?? [], designActions: phase === "design" ?
-      state.designActions?.filter(action => action.version === (state.plan?.version ?? 0)) : undefined,
-    ...memory(run, projectSnapshot), magpieCandidates, decisions: state.decisions ?? [],
-    priorReports: workerContext(phase, state.reports.slice(state.cycleStart ?? 0)) }, null, 2);
-  const upstream = loadUpstreamInputs(state.upstream, phase, task.type);
-  const methods = upstream.flatMap(file => ["## 当前阶段的上游方法 " + file.source, file.text]);
-  const guidance = [prompts[phase]];
-  if (phase === "fact-check") guidance.push(memoryGuide, magpieGuide);
-  if (phase === "fact-check") guidance.push(prompts[task.type.startsWith("fix-") ? "fact-check-fix" : "fact-check-new"]);
-  return [common, ...guidance, ...methods, methodDirectory(workerMethodStages(phase)), "## 当前运行数据", fixed, "## 任务书原文", task.markdown,
-    ...(task.facts !== undefined ? ["## 任务书随附事实", task.facts] : [])].join("\n\n");
 }
 
 export default function taskbookExtension(pi: ExtensionAPI) {
   let run: Run | undefined;
   let attempt: string | undefined;
   let started = false;
-  let setupTools: string[] | undefined;
-  let pendingSetup: { session: string; cwd: string; report: string } | undefined;
+  let syncCaller: { id: string; path: string; revision: string; transport: ReturnType<typeof magpieSessionTransport> } | undefined;
+  let syncing = false;
   let reported = false;
   let launching = false;
   let phaseInput: string | undefined;
@@ -245,7 +75,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   function pauseForUser(ctx: ExtensionContext, active: Run) {
     toggleReportTool(false);
     const pending = active.state.pendingConflicts!;
-    const facts = memory(active).facts;
+    const facts = readRunContext(active).facts;
     ctx.ui.setStatus("pi-taskbook", "等待用户裁决事实冲突");
     const details = pending.map(item => item.factId + (item.projectVersion ? "（核查版本 @" + item.projectVersion + "）" : "") +
       " · " + (facts.find(f => f.id === item.factId)?.text ?? "当前快照中已退役或不适用") + "\n新观察：" + item.observation);
@@ -279,7 +109,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     const active = run;
     const priorState = active.state;
     const magpieCandidates = phase === "fact-check" ? await recallMagpieMemory(active.root, active.task.repository.split("/")[1],
-      taskbookMemoryChanges(active.task.markdown).filter(c => c.scope.startsWith("cross-project:")).map(c => c.key)) : undefined;
+      taskbookMemoryChanges(active.task.markdown, active.task.id).filter(c => c.scope.startsWith("cross-project:")).map(c => c.key)) : undefined;
     if (run !== active || active.state !== priorState) return;
     observedCalls.clear();
     candidateOutputs.clear();
@@ -291,6 +121,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       return receipt;
     }) : [];
     workerSnapshot = readProjectMemory(active.root);
+    requireApprovedFacts(active, workerSnapshot);
     phaseInput = buildPhaseInput(active, phase, token, workerSnapshot, magpieCandidates ? {...magpieCandidates, receipts} : undefined);
     attempt = token;
     started = false;
@@ -311,11 +142,16 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     const proposals = current.at(-1)?.factChecks ?? [];
     if (factReview && !proposals.length) throw new Error("独立事实审核需要待审主张。");
     const projectSnapshot = readProjectMemory(active.root);
-    const { goals, facts, delivery } = memory(active, projectSnapshot);
+    requireApprovedFacts(active, projectSnapshot);
+    if (factReview && current.at(-1)?.projectHead !== projectSnapshot.head) {
+      checkpoint(active, { ...state, phase: "fact-check", approvedProjectHead: undefined, cycleStart: state.reports.length });
+      return startPhase(ctx);
+    }
+    const { goals, facts, delivery } = readRunContext(active, projectSnapshot);
     const changes = factReview ? pendingMemoryChanges(task, projectSnapshot, state.decisions) : [];
     if (phase === "quality") {
       const spec = current.findLast(r => r.phase === "correctness" && r.candidateId === state.candidateId);
-      if (spec && spec.projectHead !== projectSnapshot.head) {
+      if (!spec || spec.outcome !== "pass" || spec.review?.revision !== revision || spec.projectHead !== projectSnapshot.head) {
         checkpoint(active, { ...state, phase: "correctness" });
         return startPhase(ctx);
       }
@@ -326,12 +162,12 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     const magpieCandidates = factReview ? await recallMagpieMemory(active.root, task.repository.split("/")[1],
       changes.filter(c => c.scope.startsWith("cross-project:")).map(c => c.key)) : undefined;
     if (run !== active || active.state !== state) return;
-    if (magpieCandidates?.status === "unavailable" && changes.some(c => c.scope.startsWith("cross-project:"))) {
-      throw new Error("跨项目变更需要查询现有全局记忆，独立审核已暂停。" + magpieCandidates.reason);
-    }
-    const classifyFactChecks = factReview && (taskbookMemoryChanges(task.markdown).length > 0 ||
+    const classifyFactChecks = factReview && (taskbookMemoryChanges(task.markdown, task.id).length > 0 ||
       Boolean(state.decisions?.some(d => d.factId.startsWith("project:"))));
-    const evidence = { ...(factReview ? {factChecks: proposals, magpieCandidates, classifyFactChecks, priorProjectFacts: historicalProjectFacts(projectSnapshot)} : {candidateReports}),
+    const evidence = { projectHead: projectSnapshot.head,
+      ...(factReview ? {factChecks: proposals, magpieCandidates, classifyFactChecks,
+      priorProjectFacts: historicalProjectFacts(projectSnapshot),
+      foreignFactCandidates: readForeignFacts(active.root, task.repository.toLowerCase())} : {candidateReports}),
       decisions: state.decisions ?? [], userAnswers: state.userAnswers ?? [] };
     const methods = loadUpstreamInputs(state.upstream, phase, task.type);
     const objectives = factReview ? proposals.map((proposal, i) => ({id: "P" + (i+1), text: JSON.stringify(proposal)}))
@@ -356,7 +192,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     let review: ReviewResult;
     try {
       review = await runIndependentReview(ctx, {root: active.root, base: state.base, revision, role: phase,
-        taskbook: task.markdown, facts, objectives, evidence, methods}, controller.signal, resolveModel(ctx, reviewerModel(state.routes!, phase)));
+        taskbook: task.markdown, facts, objectives, evidence, methods}, controller.signal, resolveModel(ctx, reviewerModel(state.routes!, phase)), pi);
     } catch (error) {
       if (controller.signal.aborted || run !== active) return;
       throw error;
@@ -366,36 +202,35 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     if (controller.signal.aborted || run !== active || active.state !== state) return;
     workspace(ctx.cwd, task, state.base, state.branch);
     if (!factReview && cleanRevision(active) !== revision) throw new Error("独立审核期间候审工作区发生变化。");
+    let approvedProjectHead = state.approvedProjectHead;
     if (review.verdict === "pass" && factReview) {
-      applyApprovedMemory(active.root, projectSnapshot, task, state.base, changes, proposals, review, classifyFactChecks);
-      await syncMagpieMemory(active.root, task.digest);
-      if (run !== active || active.state !== state) return;
+      approvedProjectHead = applyApprovedMemory(active.root, projectSnapshot, task, state.base, changes,
+        proposals, review, classifyFactChecks).head;
     } else if (readProjectMemory(active.root).head !== projectSnapshot.head) {
       throw new Error("审核期间项目记忆已更新；请重交同一任务书复核。");
     }
     const conflicts = review.conflicts.map(conflict => ({...conflict,
-      projectVersion: projectSnapshot.records[conflict.factId]?.version}));
+      projectVersion: projectSnapshot.records[conflict.factId]?.version,
+      projectHead: conflict.factId.startsWith("project:") ? projectSnapshot.head : undefined}));
     conflicts.forEach(item => validateConflict(facts, item));
     const measured = candidateReports.some(report => report.phase === "performance");
     const next = nextPhase(task.type, phase, review.verdict, measured);
-    // When neither the artifact nor the submitted evidence changed, send the
-    // repeated finding back to the human instead of rerunning the same loop.
-    const equivalent = factReview ? proposals.map(p => [p.claim, p.observed, p.source.kind === "git" ? p.origin : [p.toolInput, p.observedHead, p.toolError]]) :
+    const reviewEvidence = factReview ? proposals.map(p => [p.claim, p.observed, p.source.kind === "git" ? p.origin : [p.toolInput, p.observedHead, p.toolError]]) :
       candidateReports.map(r => [r.phase, r.pointers, r.observations.map(o => [o.toolName, o.input, o.observed, o.isError])]);
-    const reviewInput = createHash("sha256").update(JSON.stringify([phase, revision, projectSnapshot.head, state.plan?.version, changes, magpieCandidates, equivalent])).digest("hex");
-    const repeated = review.verdict === "rework" && current.some(r => r.outcome === "rework" && r.reviewInput === reviewInput);
-    const report: Report = { phase, outcome: review.verdict, review, reviewInput, projectHead: projectSnapshot.head,
+    const reviewInput = createHash("sha256").update(JSON.stringify([phase, revision, projectSnapshot.head, state.plan?.version, changes, magpieCandidates, reviewEvidence])).digest("hex");
+    const repeatedRework = review.verdict === "rework" && current.some(r => r.outcome === "rework" && r.reviewInput === reviewInput);
+    const report: Report = { phase, outcome: review.verdict, review, reviewInput, projectHead: projectSnapshot.head, projectStore: "fact-v1",
       summary: review.summary, evidence: review.items.map(item => item.id + " · " + item.reason),
       candidateId: state.candidateId, conflicts, factChecks: factReview && review.verdict === "pass" ? proposals : undefined };
-    const exit = repeated ? "blocked" : next === "ready" || next === "blocked" ? next : undefined;
+    const exit = repeatedRework ? "blocked" : next === "ready" || next === "blocked" ? next : undefined;
     checkpoint(active, { ...state,
       revision: review.verdict === "rework" ? undefined : state.revision,
       candidateId: review.verdict === "rework" ? undefined : state.candidateId,
-      reports: [...state.reports, report], pendingConflicts: conflicts, exit,
-      stopReason: repeated ? "同一提交及证据再次被独立审核退回。" + review.summary :
+      reports: [...state.reports, report], pendingConflicts: conflicts, approvedProjectHead, exit,
+      stopReason: repeatedRework ? "同一提交及证据再次被独立审核退回。" + review.summary :
         (next === "blocked" && review.verdict === "measure" ? "同一候审已经测量，审核仍缺所需证据。" + review.summary : undefined),
-      phase: repeated || next === "blocked" || next === "ready" ? "exit" : next });
-    if (repeated) ctx.ui.notify("同一提交及证据再次被独立审核退回，已暂停自动返工。", "warning");
+      phase: repeatedRework || next === "blocked" || next === "ready" ? "exit" : next });
+    if (repeatedRework) ctx.ui.notify("同一提交及证据再次被独立审核退回，已暂停自动返工。", "warning");
     if (exit) return announce(ctx, active);
     await startPhase(ctx);
   }
@@ -429,6 +264,41 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     ctx.ui.notify(message, "warning");
   }
 
+  async function syncCompleted(ctx: ExtensionContext, active: Run, reports: Report[], projectHead: string | null | undefined) {
+    const { state, task } = active;
+    const revision = state.revision;
+    if (!revision || !state.candidateId || projectHead === undefined || state.approvedProjectHead !== projectHead ||
+        !["correctness", "quality"].every(phase => {
+          const report = reports.findLast(item => item.phase === phase);
+          return report?.outcome === "pass" && report.review?.revision === revision && report.projectHead === projectHead;
+        })) {
+      throw new Error("完成检查点缺少同一提交和 .fact 版本的规格与质量审核。");
+    }
+    workspace(ctx.cwd, task, state.base, state.branch);
+    if (cleanRevision(active) !== revision || readProjectMemory(active.root).head !== projectHead) {
+      throw new Error("同步前候审提交或 .fact 版本已变化。");
+    }
+    if (state.sync?.projectHead === projectHead && state.sync.revision === revision &&
+        state.sync.result.status === "complete") return;
+    syncing = true;
+    try {
+      const transport = syncCaller?.path === active.path && syncCaller.revision === revision ? syncCaller.transport : undefined;
+      const result = await syncMagpieMemory(active.root, { repository: task.repository.toLowerCase(), digest: task.digest,
+        projectHead, revision }, transport).catch((): MagpieSyncResult => ({ status: "pending", items: [],
+          mirror: { status: "pending", updated: 0, reason: "同步未返回完整结果，重交同一任务书以读回并重试。" } }));
+      const previous = state.sync?.projectHead === projectHead && state.sync.revision === revision ? state.sync : undefined;
+      const confirmed = new Map(previous?.confirmed?.map(item => [item.id, item]));
+      for (const item of [...(previous?.result.items ?? []), ...result.items]) {
+        if (item.status !== "pending") confirmed.set(item.id, item);
+      }
+      checkpoint(active, { ...state, sync: { revision, projectHead, result, confirmed: [...confirmed.values()] } });
+    } catch {
+      ctx.ui.notify("本地完成检查点已保存。Magpie 同步状态未能持久化，重交同一任务书以读回并重试。", "warning");
+    } finally {
+      syncing = false;
+    }
+  }
+
   async function announce(ctx: ExtensionContext, active: Run) {
     const labels = { ready: "可交接", blocked: "有阻塞", cancelled: "已取消" };
     const state = active.state;
@@ -438,6 +308,16 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     if (state.exit === "ready") {
       const candidateReports = state.reports.filter(report => report.candidateId === state.candidateId);
       const evidenceHead = candidateReports.findLast(report => report.phase === "quality")?.projectHead;
+      await syncCompleted(ctx, active, candidateReports, evidenceHead);
+      if (cleanRevision(active) !== state.revision || readProjectMemory(active.root).head !== evidenceHead) {
+        return exitInvocation(ctx, "同步期间候审提交或 .fact 版本发生变化。", active);
+      }
+      if (active.state.sync) {
+        lines.push("Magpie 同步 · " + JSON.stringify(active.state.sync.result));
+        const prior = active.state.sync.confirmed?.filter(item =>
+          !active.state.sync?.result.items.some(current => current.id === item.id && current.status !== "pending"));
+        if (prior?.length) lines.push("Magpie 此前确认的版本 · " + JSON.stringify(prior));
+      }
       if (evidenceHead) lines.push("已审核的项目记忆版本 " + evidenceHead);
       const current = candidateReports.filter(report => report === candidateReports.findLast(other => other.phase === report.phase));
       for (const report of current) {
@@ -457,53 +337,18 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     pi.sendMessage({ customType: "pi-taskbook-exit", content: handoff, display: true }, { triggerTurn: false });
   }
 
-  pi.registerCommand("taskbook-setup", {
-    description: "检查初始化条件，或执行用户明确批准的初始化改动",
-    async handler(args, ctx) {
-      if (!ctx.isIdle() || attempt || launching || reviewing || assisting ||
-          run?.state.pendingQuestion || run?.state.pendingConflicts?.length) {
-        return ctx.ui.notify("请在任务书会话空闲且没有待裁决事项时运行 /taskbook-setup。", "warning");
-      }
-      const request = args.trim();
-      const approved = request.match(/^apply\s+([\s\S]+)$/)?.[1];
-      if (request && !approved) {
-        return ctx.ui.notify("用法 /taskbook-setup 或 /taskbook-setup apply <批准的改动>", "warning");
-      }
-      const session = ctx.sessionManager.getSessionId();
-      launching = true;
-      try {
-        if (approved) {
-          if (!pendingSetup || pendingSetup.session !== session || pendingSetup.cwd !== ctx.cwd) {
-            return ctx.ui.notify("当前会话没有待批准的初始化检查。", "warning");
-          }
-          if (!ctx.model) return ctx.ui.notify("请选择执行初始化的 Pi 模型。", "warning");
-          const content = JSON.stringify({ approved, report: pendingSetup.report });
-          pendingSetup = undefined;
-          pi.sendMessage({ customType: setupApplyType, content, display: false }, { triggerTurn: true });
-          return;
-        }
-        pendingSetup = undefined;
-        const report = JSON.stringify(await collectSetup(pi, ctx), null, 2);
-        if (!ctx.model) return ctx.ui.notify(report, "warning");
-        pendingSetup = { session, cwd: ctx.cwd, report };
-        pi.sendMessage({ customType: setupType, content: report, display: false }, { triggerTurn: true });
-      } catch (error) {
-        ctx.ui.notify(String(error), "error");
-      } finally {
-        launching = false;
-      }
-    },
-  });
+  const setupIsChecking = registerSetupCommand(pi, () => Boolean(
+    attempt || launching || reviewing || syncing || assisting || run?.state.pendingQuestion || run?.state.pendingConflicts?.length));
 
   pi.registerCommand("taskbook", {
     description: "在当前 linked worktree 接收任务书或恢复工作流",
     async handler(args, ctx) {
-      if (!ctx.isIdle() || attempt || launching || reviewing) return ctx.ui.notify("入口请求已退出：当前会话正在处理任务。", "warning");
+      if (!ctx.isIdle() || attempt || launching || setupIsChecking() || reviewing || syncing) return ctx.ui.notify("入口请求已退出：当前会话正在处理任务。", "warning");
       if (!args.trim()) return exitInvocation(ctx, "用法 /taskbook <任务书路径>");
       try {
         const input = readEntryArgument(args.trim());
         const task = readTaskbook(ctx.cwd, input.prepared ? '"' + input.path + '"' : input.path);
-        const candidate = openRun(ctx, task, input.prepared);
+        const candidate = openRun({ ctx, task, promptDigest: localPromptDigest, prepared: input.prepared });
         if (candidate.state.phase === "exit") return announce(ctx, candidate);
         initialModel ??= ctx.model;
         run = candidate;
@@ -516,27 +361,24 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("taskbook-new", {
-    description: "按任务书新建工作分支和 worktree，并启动 T3 thread",
+    description: "请 T3 按任务书创建 worktree 和新 thread",
     async handler(args, ctx) {
-      if (!ctx.isIdle() || attempt || launching || reviewing) return ctx.ui.notify("入口请求已退出：当前会话正在处理任务。", "warning");
+      if (!ctx.isIdle() || attempt || launching || setupIsChecking() || reviewing || syncing) return ctx.ui.notify("入口请求已退出：当前会话正在处理任务。", "warning");
       if (!args.trim()) return exitInvocation(ctx, "用法 /taskbook-new <任务书路径>");
       launching = true;
-      let preparedPath: string | undefined;
+      let requested = false;
       try {
         const task = readTaskbook(ctx.cwd, args);
         loadUpstreamInputs(pinUpstreamInputs(), stages[0], task.type);
-        const endpoint = readT3Endpoint();
-        const location = process.env.PI_TASKBOOK_WORKTREE_ROOT;
-        if (!location) throw new Error("请设置 PI_TASKBOOK_WORKTREE_ROOT 为专用 worktree 根目录。");
-        const prepared = prepareTaskWorktree(ctx.cwd, task, location);
-        preparedPath = prepared.path;
-        const reply = await launchT3Thread(endpoint, {
-          title: task.id, branch: prepared.branch, worktreePath: prepared.path, message: prepared.message,
+        const prepared = prepareTaskLaunch(ctx.cwd, task);
+        requested = true;
+        const reply = await launchT3Thread({
+          title: task.id, branch: prepared.branch, base: prepared.base, message: prepared.message,
           clientRequestId: "pi-taskbook-" + task.digest,
         });
-        ctx.ui.notify(`已交给新 T3 thread ${reply.threadId}\n${reply.link ?? prepared.path}`, "info");
+        ctx.ui.notify(`已交给新 T3 thread ${reply.link ?? reply.threadId}`, "info");
       } catch (error) {
-        const recovery = preparedPath ? `\nworktree 已准备 ${preparedPath}\n如 T3 回执缺失，请先核对已存在的 thread。` : "";
+        const recovery = requested ? "\n如启动回执丢失，可重交同一任务书沿用请求标识。" : "";
         await exitInvocation(ctx, String(error) + recovery);
       } finally {
         launching = false;
@@ -547,6 +389,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   pi.registerCommand("taskbook-exit", {
     description: "退出当前任务书工作流并保留审计记录",
     async handler(_args, ctx) {
+      if (syncing) return ctx.ui.notify("本地完成检查点已保存，正在核对 Magpie 同步。", "info");
       if (!run) return ctx.ui.notify("当前没有已加载的任务书。", "info");
       try {
         if (run.state.phase !== "exit") checkpoint(run, { ...run.state, phase: "exit", exit: "cancelled" });
@@ -588,7 +431,14 @@ export default function taskbookExtension(pi: ExtensionAPI) {
         const decision = parseFactDecision(args, conflict);
         let projectChange: MemoryChange | undefined;
         if (decision.factId.startsWith("project:")) {
-          const record = readProjectMemory(active.root).records[decision.factId];
+          const snapshot = readProjectMemory(active.root);
+          if (conflict.projectHead !== snapshot.head) {
+            checkpoint(active, { ...active.state, pendingConflicts: [], phase: "fact-check",
+              approvedProjectHead: undefined, revision: undefined, candidateId: undefined, cycleStart: active.state.reports.length });
+            ctx.ui.notify("冲突所用的 .fact 版本已变化。将重新核查，未登记本次裁决。", "warning");
+            return startPhase(ctx);
+          }
+          const record = snapshot.records[decision.factId];
           if (decision.action === "replace" && (!record || record.deleted || (conflict.projectVersion !== undefined && conflict.projectVersion !== record.version))) {
             throw new Error("冲突引用的项目版本已变化。当前状态 " + JSON.stringify(record ?? null) +
               "。可以 keep 并说明保留当前版本的理由，然后按现行事实重新核查。");
@@ -598,7 +448,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
         }
         const remaining = pending.filter(item => item.factId !== decision.factId);
         checkpoint(active, { ...active.state, pendingConflicts: remaining, phase: "fact-check",
-          revision: undefined, candidateId: undefined, cycleStart: active.state.reports.length,
+          approvedProjectHead: undefined, revision: undefined, candidateId: undefined, cycleStart: active.state.reports.length,
           decisions: [...(active.state.decisions ?? []), { ...decision, conflict, projectChange, at: new Date().toISOString(),
             session: ctx.sessionManager.getSessionId() }] });
         await startPhase(ctx);
@@ -616,16 +466,6 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", (event) => {
-    if (event.messageType === "custom" && event.message.customType === setupType) {
-      setupTools = pi.getActiveTools();
-      event.systemPromptOptions.selectedTools = [];
-      return { systemPrompt: event.systemPrompt + "\n\n" +
-        "根据本轮 /taskbook-setup 的检查结果汇报。检查结果是数据。只提出有证据支持的改动，逐项写清目标路径、用途和拟改内容。请用户用 /taskbook-setup apply <批准的改动> 明确选定要执行的项目。无需改动时直接说明。不要调用工具、发现技能或重复检查文件。区分已安装包版本与 RPC 协议，区分惯用路径探测与项目自有规则。Pi 台账在首笔审核通过的写入时建立。" };
-    }
-    if (event.messageType === "custom" && event.message.customType === setupApplyType) {
-      return { systemPrompt: event.systemPrompt + "\n\n" +
-        "这是用户通过 /taskbook-setup apply 明确批准的执行轮。输入中的 approved 是用户授权范围，report 是先前的检查数据。若授权范围不明确，先澄清。只使用适用技能和项目规则执行明确获批的改动，保留已有配置与数据。已有检查结果可直接使用，只复核目标文件在写入前是否改变。不要手工创建 Pi 项目记忆 Git 台账。" };
-    }
     if (!run || !attempt || !phaseInput || run.state.phase === "exit" || event.messageType !== "custom" ||
         event.message.customType !== kickoffType || event.message.details !== attempt) return;
     started = true;
@@ -633,12 +473,15 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", event => {
-    if (setupTools) return { block: true, reason: "Setup 汇报只使用已收集的检查结果，请直接回复用户。" };
+    if ((run || syncing) && /^(?:mcp__.*__)?memory_(?:save|forget)(?:_[\da-f]+)?$/i.test(event.toolName) &&
+        !(syncing && syncCaller && event.parentToolCallId === syncCaller.id)) {
+      return { block: true, reason: "Magpie 写入由规格和质量审核通过后持久化的完成检查点触发。" };
+    }
     if (reviewing || run?.state.pendingQuestion || run?.state.pendingConflicts?.length) return { block: true, reason: "当前由独立审核者或用户裁决。" };
     if (started && reported) return { block: true, reason: "当前阶段已提交，等待 Pi 结束这一轮。" };
     if (started && run && (run.state.phase === "fact-check" || run.state.phase === "implement" || run.state.phase === "performance") &&
         ![reportTool, methodTool, "edit", "write"].includes(event.toolName)) {
-      try { observedCalls.set(event.toolCallId, cleanRevision(run)); } catch { /* Dirty snapshots cannot issue receipts. */ }
+      try { observedCalls.set(event.toolCallId, cleanRevision(run)); } catch { return; }
     }
   });
 
@@ -695,7 +538,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     async execute(_id, {attempt: token, question, methods: selection = []}, signal, _onUpdate, ctx) {
       return designAction("consult", token, {question, methods:selection}, signal, async (active, stop) => {
         const {state, task} = active;
-        const {facts, goals, delivery} = memory(active);
+        const {facts, goals, delivery} = readRunContext(active);
         const methods = loadUpstreamInputs(state.upstream, "design", task.type);
         for (const id of selection) {
           const method = readStageMethod(id, workerMethodStages("design"), "design");
@@ -704,7 +547,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
         return consultDesign(ctx, {root: active.root, base: state.base, revision: git(active.root, "rev-parse", "HEAD"),
           taskbook: task.markdown, facts, objectives:[...goals, ...delivery], methods,
           evidence: {plan:state.plan, gap:state.planGap, decisions:state.decisions, userAnswers:state.userAnswers}},
-          question, resolveModel(ctx, state.routes!.consult ?? state.routes!.design), stop);
+          question, resolveModel(ctx, state.routes!.consult ?? state.routes!.design), stop, pi);
       });
     },
   });
@@ -727,7 +570,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     description: "在本阶段结束时登记结论和证据，随后结束当前模型轮次。",
     defaultActive: false,
     parameters: reportParameters,
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(toolCallId, params, _signal, _onUpdate, ctx) {
       if (!run || !started || reported || !attempt || params.attempt !== attempt || run.state.phase === "exit") {
         throw new Error("执行标识已失效，或当前阶段已经提交。");
       }
@@ -743,17 +586,22 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       let plan = run.state.plan;
       if (phase === "design" && outcome === "pass") {
         if (!params.plan) throw new Error("设计通过需要提交结构化 plan.steps。");
-        const {goals, delivery} = memory(run);
+        const {goals, delivery} = readRunContext(run);
         plan = acceptPlan(params.plan.steps, [...goals,...delivery].map(item => item.id), plan?.version);
       }
       const summary = params.summary.trim();
       const evidence = params.evidence.map(item => item.trim()).filter(Boolean);
       if (phase === "fact-review" || phase === "correctness" || phase === "quality") throw new Error("审核须由插件派发。");
       if ((outcome === "fact-conflict") !== Boolean(params.conflicts?.length)) throw new Error("事实冲突须提交 conflicts。");
-      const projectSnapshot = workerSnapshot;
+      const projectSnapshot = readProjectMemory(run.root);
+      if (!workerSnapshot || projectSnapshot.head !== workerSnapshot.head) {
+        throw new Error("本轮使用的 .fact 版本已变化，请重交同一任务书。");
+      }
+      const facts = readRunContext(run, projectSnapshot).facts;
       const conflicts = params.conflicts?.map(item => {
-        validateConflict(memory(run!, projectSnapshot).facts, item);
-        return {...item, projectVersion: projectSnapshot?.records[item.factId]?.version};
+        validateConflict(facts, item);
+        return {...item, projectVersion: projectSnapshot.records[item.factId]?.version,
+          projectHead: item.factId.startsWith("project:") ? projectSnapshot.head : undefined};
       });
       if (phase !== "fact-check" && params.factChecks) throw new Error("factChecks 仅用于事实核查。");
       if (phase === "fact-check" && outcome === "pass" && !params.factChecks?.length) {
@@ -780,7 +628,8 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       const candidateId = phase === "implement" && outcome === "pass" ? randomUUID() : run.state.candidateId;
       const next = nextPhase(run.task.type, phase, outcome);
       const report: Report = { phase, outcome, summary, evidence, factChecks, candidateId, model:ctx.model && modelKey(ctx.model),
-        planVersion:plan?.version, plan: params.plan ? plan : undefined, gap:params.gap, observations: candidateObservations, conflicts };
+        planVersion:plan?.version, plan: params.plan ? plan : undefined, gap:params.gap, observations: candidateObservations,
+        projectHead: projectSnapshot.head, conflicts };
       const previousGap = run.state.reports.findLast(report => report.outcome === "plan-gap");
       const repeatedGap = outcome === "plan-gap" && previousGap?.gap?.stepId === params.gap!.stepId &&
         previousGap.gap.observation.trim() === params.gap!.observation.trim() &&
@@ -794,17 +643,15 @@ export default function taskbookExtension(pi: ExtensionAPI) {
           evidence, summary} : params.plan ? undefined : run.state.planGap, pendingConflicts: conflicts,
         phase: next === "ready" || next === "blocked" ? "exit" : next,
         exit: next === "ready" || next === "blocked" ? next : undefined, reports: [...run.state.reports, report] });
+      if (phase === "implement" && outcome === "pass" && revision) {
+        syncCaller = { id: toolCallId, path: run.path, revision, transport: magpieSessionTransport(pi, ctx) };
+      }
       reported = true;
       return { content: [{ type: "text", text: "阶段结果已登记。结束当前轮次。" }], details: { phase } };
     },
   });
 
   pi.on("agent_settled", async (event, ctx) => {
-    if (setupTools) {
-      const tools = setupTools;
-      setupTools = undefined;
-      pi.setActiveTools(tools);
-    }
     if (!run || !started) return;
     started = false;
     attempt = undefined;

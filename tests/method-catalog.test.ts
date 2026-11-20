@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readStageMethod, type MethodStage } from "../method-catalog.ts";
+import { readStageMethod, type MethodStage } from "../src/methods/catalog.ts";
 
 type Skill = { name: string; path: string; stage: MethodStage[]; status: string; kind: string; adaptation: string };
 for (const [owner, expected] of [["pstack", 58], ["matt", 39]] as const) {

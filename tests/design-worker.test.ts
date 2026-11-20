@@ -4,8 +4,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { acceptPlan, reviewerModel, runProbe } from "../design-worker.ts";
-import { nextPhase } from "../workflow.ts";
+import { acceptPlan, reviewerModel, runProbe } from "../src/workflow/design-worker.ts";
+import { nextPhase } from "../src/workflow/transitions.ts";
 
 const step = {id: "route", action: "Implement route via the public entry.", checks: "Invoke entry with two routes.", targets: ["G1", "D1"]};
 test("plans cover every goal and delivery with stable, unique steps", () => {

@@ -1,4 +1,4 @@
-import type { Taskbook } from "./taskbook.ts";
+import type { Taskbook } from "../taskbook/document.ts";
 
 export const stages = ["fact-check", "fact-review", "design", "implement", "correctness", "quality", "performance"] as const;
 export type Phase = typeof stages[number];

@@ -4,9 +4,10 @@ import { readFileSync } from "node:fs";
 import { posix } from "node:path";
 import {
   createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager, SettingsManager,
-  type ExtensionContext, type ToolDefinition,
+  type ExtensionAPI, type ExtensionContext, type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { dispatchReview } from "./subagent-dispatch.ts";
 
 type Role = "fact-review" | "correctness" | "quality";
 type TaskItem = { id: string; text: string };
@@ -22,11 +23,12 @@ type Inspection = { id: string; view: string; path?: string; start: number; dige
 type RunSource = { id: string; phase: string; revision: string; toolCallId: string; digest: string };
 export type ReviewResult = {
   sessionId: string; revision: string; role: Role; model: string; contextDigest: string;
+  agentId?: string;
   verdict: Verdict; summary: string; items: ReviewItem[]; conflicts: Conflict[]; observations: Inspection[]; runSources: RunSource[];
 };
 
-const designConsultInstruction = readFileSync(new URL("./prompts/design-consult.md", import.meta.url), "utf8");
-const instruction = readFileSync(new URL("./prompts/independent-review.md", import.meta.url), "utf8");
+const designConsultInstruction = readFileSync(new URL("../../prompts/design-consult.md", import.meta.url), "utf8");
+const instruction = readFileSync(new URL("../../prompts/independent-review.md", import.meta.url), "utf8");
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 const parameters = Type.Object({
   view: Type.Union([Type.Literal("changes"), Type.Literal("base"), Type.Literal("candidate"), Type.Literal("diff")]),
@@ -140,7 +142,8 @@ function parseVerdict(text: string, required: string[], facts: TaskItem[], role:
   return { verdict: verdict as Verdict, summary: response.summary, items, conflicts };
 }
 
-export async function runIndependentReview(ctx: ExtensionContext, input: ReviewInput, signal?: AbortSignal, model = ctx.model): Promise<ReviewResult> {
+export async function runIndependentReview(ctx: ExtensionContext, input: ReviewInput, signal?: AbortSignal, model = ctx.model,
+  pi?: ExtensionAPI): Promise<ReviewResult> {
   if (!model) throw new Error("独立审核需要已选定的 Pi 模型。");
   if (![input.base, input.revision].every(value => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(value))) {
     throw new Error("审核需要固定的基线和候审提交。");
@@ -151,28 +154,34 @@ export async function runIndependentReview(ctx: ExtensionContext, input: ReviewI
   const runSources = runSourcesFor(input);
   const packet = JSON.stringify({ ...data, requiredIds, runSources });
   const system = [instruction, ...methods.map(method => "## " + method.source + "\n" + method.text)].join("\n\n");
-  const reply = await readOnlySession(ctx, input, model, system, packet, signal);
+  const reply = await readOnlySession(ctx, input, model, system, packet, signal, pi);
   const result = parseVerdict(reply.text, requiredIds, input.facts, input.role, reply.observations, runSources,
     record(input.evidence) && input.evidence.classifyFactChecks === true);
   return { ...result, revision: input.revision, role: input.role, runSources, observations: reply.observations,
-    contextDigest: reply.contextDigest, model: reply.model, sessionId: reply.sessionId };
+    contextDigest: reply.contextDigest, model: reply.model, sessionId: reply.sessionId,
+    ...("agentId" in reply ? {agentId: reply.agentId} : {}) };
 }
 
 export async function consultDesign(ctx: ExtensionContext, input: Omit<ReviewInput,"role">, question: string,
-  model: NonNullable<ExtensionContext["model"]>, signal?: AbortSignal) {
+  model: NonNullable<ExtensionContext["model"]>, signal?: AbortSignal, pi?: ExtensionAPI) {
   const system = [designConsultInstruction,
     ...input.methods.map(method => "## " + method.source + "\n" + method.text)].join("\n\n");
   const {root: _root, methods: _methods, ...data} = input;
   const packet = JSON.stringify({...data, role:"design-consult", question});
-  const reply = await readOnlySession(ctx, input, model, system, packet, signal);
+  const reply = await readOnlySession(ctx, input, model, system, packet, signal, pi);
   return {answer: reply.text, model: reply.model, sessionId: reply.sessionId, observations: reply.observations,
-    contextDigest: reply.contextDigest, revision: input.revision};
+    contextDigest: reply.contextDigest, revision: input.revision,
+    ...("agentId" in reply ? {agentId: reply.agentId} : {})};
 }
 
 async function readOnlySession(ctx: ExtensionContext, input: Pick<ReviewInput,"root"|"base"|"revision">, model: NonNullable<ExtensionContext["model"]>,
-  system: string, packet: string, signal?: AbortSignal) {
+  system: string, packet: string, signal?: AbortSignal, pi?: ExtensionAPI) {
   const {root} = input;
   const observations: Inspection[] = [];
+  const tool = inspectionTool(input, observations);
+  const contextDigest = digest(JSON.stringify([system, packet]));
+  const delegated = pi && await dispatchReview(pi, ctx, {system, model, tool}, packet, signal);
+  if (delegated) return {...delegated, model: model.provider + "/" + model.id, contextDigest, observations};
   const agentDir = getAgentDir();
   const settingsManager = SettingsManager.inMemory();
   const resourceLoader = new DefaultResourceLoader({
@@ -184,12 +193,16 @@ async function readOnlySession(ctx: ExtensionContext, input: Pick<ReviewInput,"r
   const { session } = await createAgentSession({
     cwd: root, agentDir, model, thinkingLevel: ctx.thinkingLevel,
     sessionManager: SessionManager.inMemory(root), resourceLoader, settingsManager,
-    customTools: [inspectionTool(input, observations)], tools: ["inspect_revision"],
+    customTools: [tool], tools: ["inspect_revision"],
   });
   const abort = () => { void session.abort(); };
   signal?.addEventListener("abort", abort, { once: true });
   try {
     signal?.throwIfAborted();
+    const actual = session.model;
+    if (!actual || actual.provider !== model.provider || actual.id !== model.id) {
+      throw new Error("独立会话未使用指定的角色模型 " + model.provider + "/" + model.id);
+    }
     const activeTools = session.getActiveToolNames();
     if (activeTools.length !== 1 || activeTools[0] !== "inspect_revision") {
       throw new Error("独立会话未获得限定的只读审查工具。");
@@ -200,8 +213,8 @@ async function readOnlySession(ctx: ExtensionContext, input: Pick<ReviewInput,"r
     if (last?.role !== "assistant" || last.stopReason !== "stop") throw new Error("独立审核未正常完成，保留检查点。");
     const reply = session.getLastAssistantText();
     if (!reply) throw new Error("独立审核会话结束但未交回报告。");
-    return {text: reply, sessionId: session.sessionId, model: model.provider + "/" + model.id,
-      contextDigest: digest(JSON.stringify([system, packet])), observations};
+    return {text: reply, sessionId: session.sessionId, model: actual.provider + "/" + actual.id,
+      contextDigest, observations};
   } finally {
     signal?.removeEventListener("abort", abort);
     session.dispose();

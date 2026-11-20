@@ -3,10 +3,18 @@
   "version": "0.7.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.19" },
+  "engines": {
+    "node": ">=22.19"
+  },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.5.2",
     "typebox": "1.3.27"
   },
-  "pi": { "extensions": ["./index.ts"] }
+  "pi": {
+    "extensions": [
+      "./index.ts",
+      "./src/review/taskbook-snapshot-tools.ts"
+    ],
+    "subagents": { "agents": ["./agents"] }
+  }
 }

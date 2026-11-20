@@ -12,7 +12,7 @@ def embed(name, data, mime):
     marker='__ASSET_'+name+'__'
     assert page.count(marker)==1, marker
     page=page.replace(marker,'data:'+mime+';base64,'+base64.b64encode(data).decode('ascii'))
-for file in ["taskbook.ts","project-memory.ts","reviewer.ts","design-worker.ts","index.ts","methods/magpie-memory/SKILL.md"]:
+for file in ["src/taskbook/document.ts","src/facts/project-memory.ts","src/review/reviewer.ts","src/workflow/design-worker.ts","index.ts","methods/magpie-memory/SKILL.md"]:
     source=repo/file
     embed(source.name, source.read_bytes(), "text/plain")
 with tempfile.TemporaryDirectory() as temp:
@@ -20,8 +20,8 @@ with tempfile.TemporaryDirectory() as temp:
     subprocess.run([sys.executable,str(repo/"tools/render-catalog.py"),str(catalog)],check=True)
     embed(catalog.name, catalog.read_bytes(), "text/html")
 data_script="""
-import {pinUpstreamInputs, loadUpstreamInputs} from './upstream.ts';
-import {stages} from './workflow.ts';
+import {pinUpstreamInputs, loadUpstreamInputs} from './src/methods/upstream.ts';
+import {stages} from './src/workflow/transitions.ts';
 const pins=pinUpstreamInputs();
 console.log(JSON.stringify(Object.fromEntries(['new-feature','fix-feature','new-experiment','fix-experiment'].map(t=>[t,
  Object.fromEntries(stages.map(s=>[s,loadUpstreamInputs(pins,s,t)]))]))));

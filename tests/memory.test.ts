@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { taskMemory, parseFactDecision, validateConflict, workerContext } from "../memory.ts";
-import type { CheckedFact } from "../fact-check.ts";
+import { taskMemory, parseFactDecision, validateConflict, workerContext } from "../src/workflow/task-context.ts";
+import type { CheckedFact } from "../src/facts/fact-check.ts";
 
 const document = {
   markdown: [

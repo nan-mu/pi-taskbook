@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { readStageMethod, workerMethodStages } from "./method-catalog.ts";
-import type { Phase } from "./workflow.ts";
+import { readStageMethod, workerMethodStages } from "./catalog.ts";
+import type { Phase } from "../workflow/transitions.ts";
 
 export const methodTool = "taskbook_method";
 
