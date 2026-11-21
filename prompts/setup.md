@@ -1,8 +1,10 @@
-Guide `/taskbook-setup` as a normal conversation. Use diagnostics to show what is ready and identify the changes the user wants or needs to decide.
+Guide `/taskbook-setup` as a normal conversation. Report the current model setup and any capability that affects the user's request. A bare command is a read-only status check. When the model setup is ready, report it and end the turn.
+
+Project instructions are supplied automatically from `.fact/always.tsv` when present. Project facts and terms belong in their topic tables. Leave those files to the fact workflow. Setup never initializes `.fact/facts.tsv` or a glossary, and their absence is expected.
 
 Continue the current Setup across replies and model or reasoning changes. Honor a stage transition when the user invokes a command or skill that explicitly moves the workflow. A follow-up question or tool failure keeps the current stage.
 
-For each proposed change, establish its scope, required choices and explicit approval. Read the command argument and later direct replies together. A bare command starts discovery. A short assent applies to a concrete proposal. Remind the user when approval is empty or vague. Ask only for unresolved choices, then act when the intended set is approved. Respect declined actions and the latest decision.
+For each proposed change, establish its scope, required choices and explicit approval. Read the command argument and later direct replies together. A short assent applies to a concrete proposal. Remind the user when approval is empty or vague. Ask only for unresolved choices, then act when the intended set is approved. Respect declined actions and the latest decision.
 
 Use the Taskbook tools for Setup operations. Complete each approved operation with the named tool and report its receipt. If a required Taskbook tool is absent or cannot be invoked, stop the affected operation, name the tool and the failure, and ask the user how to proceed. This includes a tool reported as unavailable by the runtime. Leave the operation pending. Do not substitute shell commands, scripts, direct writes, or another Pi session.
 
@@ -20,10 +22,10 @@ Use `taskbook_model_catalog` when the user asks to recheck a model or the availa
 
 When offering plans, use one comparison table with `Role`, `Work`, `Plus`, `Pro` and `Pro Plus` columns. Show the model ID and thinking level for `design`, `designMemberA`, `designMemberB` and `implement`. Fact Management uses the executing Pi session's selection. Keep the model assignments stable across tiers unless a specific requirement calls for a change. Keep routine execution effort steady and spend added budget where design or review needs it. Use only IDs and levels in the current catalog. If the catalog supports one useful plan, show that plan and explain the limit.
 
-Show the active source when a config exists. Present the proposed TSV, target path and project Git tracking before requesting approval. Use the columns `role`, `model` and `thinking` with literal tabs and leave the last field empty to inherit the thinking level. Save approved changes through `taskbook_model_setup`.
+Use `models.savePolicy` for the model table path and Git setting. The plugin resolves the path and applies the setting. Treat that decision as settled. Ask about a change to the path or Git setting only when the user requests one and leaves it unclear. A Git status observation does not change the configured policy.
 
-Report the project's staged settings after a model write. A new T3 checkout receives the model location and any tracked model table from the taskbook baseline. Distinguish T3's independent thread launch, current-thread handoff, and current binding. Report Magpie GitHub MCP readiness separately from the local workflow.
+If the user wants a model change, show the proposed TSV and use `taskbook_model_setup` after approval. Use literal tabs in the columns `role`, `model` and `thinking`. Leave the third field empty to inherit the thinking level. Pass location or Git tracking arguments only for a user-requested policy change. Report the saved path and any changes made to Git.
 
-## Legacy data
+## Old audit records
 
-Describe the planned imports, checkpoint copies and archived originals using `legacy`. Call `taskbook_migrate` for the specifically approved sources. Archive `.audit` before cleanup. Deleting the original `.audit` and deleting the old Git ref each need explicit approval.
+When the user requests old audit work, use the audit inventory to describe the archive and any checkpoint copies. Use `taskbook_migrate` for an explicitly approved `.audit` archive. Clearing the original archive sources requires separate approval. Leave legacy fact data intact for explicit classification into topic tables.

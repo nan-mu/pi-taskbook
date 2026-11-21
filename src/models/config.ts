@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import { decodeTsv, encodeTsv } from "../facts/tsv.ts";
-import { legacyProjectModelPath, projectModelPath, projectModelStorage, settingsFile, type ModelStorage } from "./storage.ts";
+import { defaultModelPolicy, legacyProjectModelPath, modelStorage, projectModelPath, projectModelPolicy, projectModelsFile, settingsFile, type ModelStorage } from "./storage.ts";
 
 export const modelRoles = ["design", "designMemberA", "designMemberB", "implement", "consult", "factCheck", "performance", "review", "factReview", "correctness", "quality"] as const;
 export type ModelRole = typeof modelRoles[number];
@@ -99,12 +99,18 @@ export function legacyPersonalModelPath() {
 
 type ModelPaths = {path: string; markdownPath?: string; legacyPath?: string; required: boolean; storage?: ModelStorage};
 export function modelConfigPaths(root?: string): ModelPaths {
-  const storage = root ? projectModelStorage(root) : undefined;
-  if (root && (storage === "project-local" || storage === "project-tracked")) {
-    return {path: projectModelPath(root, storage), markdownPath: legacyProjectModelPath(root, storage), required: true, storage};
+  const policy = root ? projectModelPolicy(root) : undefined;
+  const storage = policy && modelStorage(policy);
+  if (root && policy && (storage === "project-local" || storage === "project-tracked")) {
+    return {path: projectModelPath(root, policy), markdownPath: policy.path === projectModelsFile ? legacyProjectModelPath(root, storage) : undefined,
+      required: true, storage};
   }
   if (storage === "personal") return {path: personalModelPath(), markdownPath: legacyPersonalModelPath(), required: true, storage};
   const override = process.env.PI_TASKBOOK_CONFIG;
+  if (root && !override) {
+    const path = projectModelPath(root, defaultModelPolicy);
+    if (settingsFile(path) !== undefined) return {path, required: true, storage: "project-local"};
+  }
   if (override && /\.json$/i.test(override)) {
     return { path: join(dirname(override), "taskbook-models.tsv"), markdownPath: join(dirname(override), "taskbook-models.md"),
       legacyPath: override, required: true };

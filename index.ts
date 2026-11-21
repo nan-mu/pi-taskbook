@@ -18,8 +18,10 @@ import { consultDesign, runIndependentReview, type ReviewResult } from "./src/re
 import { checkFacts, factChecksParameter, type Observation } from "./src/facts/fact-check.ts";
 import { maxFactMatches, queryProjectFacts } from "./src/facts/query.ts";
 import { importTaskFacts, readTopicFacts, type IntakeDecision } from "./src/facts/taskbook-intake.ts";
+import { alwaysPrompt } from "./src/facts/always.ts";
+import { readFactFile } from "./src/facts/commit-files.ts";
 
-import { applyApprovedMemory, historicalProjectFacts, memoryId, pendingMemoryChanges, readProjectMemory, taskbookMemoryChanges, type MemoryChange, type ProjectSnapshot } from "./src/facts/project-memory.ts";
+import { applyApprovedMemory, historicalProjectFacts, memoryId, pendingMemoryChanges, projectFactsPath, readProjectMemory, taskbookMemoryChanges, type MemoryChange, type ProjectSnapshot } from "./src/facts/project-memory.ts";
 
 import { acceptPlan, planParameter, runProbe } from "./src/workflow/design-worker.ts";
 import { archiveDesign, removeDesignArchive } from "./src/workflow/design-archive.ts";
@@ -326,7 +328,8 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     requireApprovedFacts(active, readProjectMemory(active.root));
     if (!factReview && cleanRevision(active) !== revision) throw new Error("独立审核期间候审工作区发生变化。");
     let approvedProjectHead = state.approvedProjectHead;
-    if (review.verdict === "pass" && factReview) {
+    const legacyFactStore = factReview && readFactFile(active.root, projectFactsPath) !== undefined;
+    if (review.verdict === "pass" && legacyFactStore) {
       approvedProjectHead = applyApprovedMemory(active.root, projectSnapshot, task, state.base, changes,
         proposals, review, classifyFactChecks).head;
     } else if (readProjectMemory(active.root).head !== projectSnapshot.head) {
@@ -342,7 +345,8 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       candidateReports.map(r => [r.phase, r.pointers, r.observations.map(o => [o.toolName, o.input, o.observed, o.isError])]);
     const reviewInput = createHash("sha256").update(JSON.stringify([phase, revision, projectSnapshot.head, state.plan?.version, changes, magpieCandidates, reviewEvidence])).digest("hex");
     const repeatedRework = review.verdict === "rework" && current.some(r => r.outcome === "rework" && r.reviewInput === reviewInput);
-    const report: Report = { phase, outcome: review.verdict, review, reviewInput, projectHead: projectSnapshot.head, projectStore: "fact-v1",
+    const report: Report = { phase, outcome: review.verdict, review, reviewInput,
+      projectHead: factReview && !legacyFactStore && review.verdict === "pass" ? undefined : projectSnapshot.head, projectStore: "fact-v1",
       summary: review.summary, evidence: review.items.map(item => item.id + " · " + item.reason),
       candidateId: state.candidateId, conflicts, factChecks: factReview && review.verdict === "pass" ? proposals : undefined };
     const exit = repeatedRework ? "blocked" : next === "ready" || next === "blocked" ? next : undefined;
@@ -798,15 +802,24 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     return {messages: index < 0 ? [] : event.messages.slice(index)};
   });
 
-  pi.on("before_agent_start", (event) => {
+  pi.on("before_agent_start", (event, ctx) => {
+    let root = run?.root;
+    if (!root) {
+      try { root = git(ctx.cwd, "rev-parse", "--show-toplevel"); } catch {}
+    }
+    const projectInstructions = root ? alwaysPrompt(root) : "";
     if (publishing && event.messageType === "custom" && event.message.customType === publishKickoff && event.message.details === publishing.token) {
       publishing.active = true;
-      return {systemPrompt: "Run the single Taskbook publication tool with the supplied attempt token. End the turn after its receipt."};
+      return {systemPrompt: [projectInstructions,
+        "Run the single Taskbook publication tool with the supplied attempt token. End the turn after its receipt."].filter(Boolean).join("\n\n")};
     }
     if (!run || !attempt || !phaseInput || run.state.phase === "exit" || event.messageType !== "custom" ||
-        event.message.customType !== kickoffType || event.message.details !== attempt) return;
+        event.message.customType !== kickoffType || event.message.details !== attempt) {
+      if (projectInstructions) return {systemPrompt: event.systemPrompt + "\n\n" + projectInstructions};
+      return;
+    }
     started = true;
-    return { systemPrompt: relocated ? phaseInput : event.systemPrompt + "\n\n" + phaseInput };
+    return {systemPrompt: [relocated ? "" : event.systemPrompt, projectInstructions, phaseInput].filter(Boolean).join("\n\n")};
   });
 
   pi.on("tool_call", event => {

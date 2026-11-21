@@ -2,7 +2,7 @@
 
 ## Consult
 
-Read `.fact/always.tsv` when present. For the next decision, open a known topic table or query `taskbook_query_facts` with a registered label or search terms. Check the source when accuracy, scope or freshness matters. Follow [Trace a memory change](project-memory-change-prompt.md#trace-a-memory-change) when the answer needs earlier wording or a reason for change.
+Apply the project instructions supplied from `.fact/always.tsv` when present. For the next decision, open a known topic table or query `taskbook_query_facts` with a registered label or search terms. Check the source when accuracy, scope or freshness matters. Follow [Trace a memory change](project-memory-change-prompt.md#trace-a-memory-change) when the answer needs earlier wording or a reason for change.
 
 ## Write facts
 

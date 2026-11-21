@@ -2,6 +2,7 @@ import { Type, type Static } from "typebox";
 import { posix } from "node:path";
 import { commitFactFiles, readFactFile } from "../facts/commit-files.ts";
 import { readTopicFacts } from "../facts/taskbook-intake.ts";
+import { modelSettingsPath, projectModelPolicy, projectModelsFile } from "../models/storage.ts";
 import { decodeTsv, encodeTsv } from "../facts/tsv.ts";
 import { git } from "../taskbook/document.ts";
 import { cleanRevision, type Run } from "./checkpoint.ts";
@@ -28,6 +29,7 @@ export function reviewedDrafts(run: Run) {
 
 export function validatePlacements(run: Run, placements: FactPlacement[]) {
   const snapshot = readTopicFacts(run.root);
+  const modelPath = projectModelPolicy(run.root)?.path;
   const labels = new Set(decodeTsv(snapshot.labels ?? "").slice(1).map(row => row[0]));
   const drafts = reviewedDrafts(run);
   if (placements.length !== drafts.length || new Set(placements.map(item => item.id)).size !== drafts.length ||
@@ -36,7 +38,8 @@ export function validatePlacements(run: Run, placements: FactPlacement[]) {
   }
   for (const {path, labels: selected} of placements) {
     const filename = path.split("/").at(-1);
-    if (posix.normalize(path) !== path || path.startsWith(".fact/taskbook/") || ["label.tsv", "change.tsv", "settings.tsv", "facts.tsv"].includes(filename!) ||
+    if (posix.normalize(path) !== path || path.startsWith(".fact/taskbook/") || [modelSettingsPath, modelPath, projectModelsFile].includes(path) ||
+        ["label.tsv", "change.tsv", "settings.tsv", "facts.tsv"].includes(filename!) ||
         (filename === "always.tsv" && !snapshot.tables.has(path))) throw new Error("请选择可写入的主题事实表 " + path);
     if (selected.some(label => !labels.has(label))) throw new Error("事实标签须在 .fact/label.tsv 已登记。");
     const current = readFactFile(run.root, path);

@@ -7,11 +7,10 @@ import { fileURLToPath } from "node:url";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { formatModelConfig, getSupportedThinkingLevels, legacyPersonalModelPath, modelConfigPaths, modelKey, modelRoutes, parseModelConfig, personalModelPath,
   readModelConfig, resolveModel, reviewerModel, type ModelRoutes } from "../models/config.ts";
-import { legacyProjectModelPath, modelSettingsPath, projectModelPath, projectModelsFile } from "../models/storage.ts";
-import { formatProjectTsv, legacyProjectFactsPath, readLegacyProjectJson, readProjectMemory, projectFactsPath, projectGlossaryPath } from "../facts/project-memory.ts";
+import { defaultModelPolicy, legacyProjectModelPath, modelSettingsPath, projectModelPath, projectModelPolicy, projectModelsFile } from "../models/storage.ts";
 import { probeSubagents } from "../review/subagent-probe.ts";
 import { inspectMcpCapabilities } from "../integrations/mcp-catalog.ts";
-import { git, gitExclusion } from "../taskbook/document.ts";
+import { git } from "../taskbook/document.ts";
 
 type Status = "ready" | "missing" | "invalid" | "unconfirmed";
 type PathCheck = { path: string; status: Status };
@@ -84,31 +83,36 @@ function modelSetup(ctx: ExtensionContext, root?: string) {
   const catalog = (selected ? [selected, ...available.filter(model => model !== selected)] : available).slice(0, 64)
     .map(model => ({id: modelKey(model), name: model.name,
     thinkingLevels: getSupportedThinkingLevels(model)}));
-  const inspect = (path: string, markdownPath: string) => {
+  const inspect = (path: string, markdownPath?: string) => {
     const preferred = fileStatus(path, "file");
-    const file = preferred.status === "missing" ? fileStatus(markdownPath, "file") : preferred;
+    const file = preferred.status === "missing" && markdownPath ? fileStatus(markdownPath, "file") : preferred;
     if (file.status !== "ready") return preferred.status === "missing" && file.status === "missing" ? preferred : file;
     try {
       const config = readModelConfig({path, markdownPath, required: true});
       return config.kind === "fallback" ? {...file, status: "invalid"} : {...file, roles: config.roles};
     } catch { return {...file, status: "invalid"}; }
   };
-  const detailsForSelection = {catalog, selectedAvailable: Boolean(selected), entryThinking: ctx.thinkingLevel, pstack: pstackSetup(),
-    sources: {personal: inspect(personalModelPath(), legacyPersonalModelPath()), project: root && (() => {
-      try {
-        const paths = modelConfigPaths(root);
-        const storage = paths.storage === "project-local" ? paths.storage : "project-tracked";
-        const result = inspect(projectModelPath(root, storage), legacyProjectModelPath(root, storage));
-        return {...result, stagedOrTracked: Boolean(git(dirname(dirname(result.path)), "ls-files", "--", result.path))};
-      }
-      catch { return {path: projectModelsFile, status: "invalid"}; }
-    })(), settings: root && repoPath(root, modelSettingsPath, "file")}};
+  const detailsForSelection = {catalog, selectedAvailable: Boolean(selected), entryThinking: ctx.thinkingLevel, pstack: pstackSetup()};
   let paths;
-  try { paths = modelConfigPaths(root); }
-  catch {
-    return {...detailsForSelection, scenario: catalog.length ? "existing" : "no-models", file: {path: modelSettingsPath, status: "invalid"},
-      effective: {status: "invalid", reason: "项目的 Taskbook 模型位置设置无效。"}};
+  let savedPolicy;
+  try {
+    savedPolicy = root && projectModelPolicy(root);
+    paths = modelConfigPaths(root);
+  } catch {
+    return {...detailsForSelection, file: {path: modelSettingsPath, status: "invalid"},
+      effective: {status: "invalid", reason: "项目的模型路径或 Git 跟踪设置无效。"}};
   }
+  const policy = root ? savedPolicy || defaultModelPolicy : undefined;
+  const sources = {
+    personal: inspect(personalModelPath(), legacyPersonalModelPath()),
+    project: root && (() => {
+      const projectPolicy = policy?.path.startsWith(".fact/") ? policy : defaultModelPolicy;
+      const path = projectModelPath(root, projectPolicy);
+      return inspect(path, projectPolicy.path === projectModelsFile ?
+        legacyProjectModelPath(root, projectPolicy.gitTracking ? "project-tracked" : "project-local") : undefined);
+    })(),
+    settings: root && repoPath(root, modelSettingsPath, "file"),
+  };
   const file = fileStatus(paths.path, "file");
   const example = fileURLToPath(new URL("../../taskbook-models.example.tsv", import.meta.url));
   const markdown = paths.markdownPath ? fileStatus(paths.markdownPath, "file") : undefined;
@@ -131,15 +135,17 @@ function modelSetup(ctx: ExtensionContext, root?: string) {
     catch { return [role, fallback]; }
   }));
   const details = {
-    ...detailsForSelection, file, example, legacy, storage: paths.storage,
-    scenario: !catalog.length ? "no-models" : paths.storage || file.status !== "missing" || detailsForSelection.sources.personal.status === "ready" ||
-      detailsForSelection.sources.project?.status === "ready" ? "existing" :
+    ...detailsForSelection, file, example, legacy, sources, storage: paths.storage,
+    savePolicy: policy && {...policy, source: savedPolicy ? modelSettingsPath : "default"},
+    scenario: !catalog.length ? "no-models" : paths.storage || file.status !== "missing" || sources.personal.status === "ready" ||
+      sources.project?.status === "ready" ? "existing" :
       legacy?.status === "ready" || detailsForSelection.pstack.status === "ready" ? "reference" : "new",
   };
   function initialization(source?: ReturnType<typeof readModelConfig>) {
     if (file.status !== "missing") return null;
     const prior = source?.kind === "legacy" || source?.kind === "markdown" ? source : undefined;
-    return { operation: "initialize", path: paths.path,
+    const path = root && policy?.path.startsWith(".fact/") ? projectModelPath(root, policy) : personalModelPath();
+    return { operation: "initialize", path,
       content: prior ? formatModelConfig(prior.roles) : proposed ? formatModelConfig(proposed) : null,
       ...(prior ? {source: prior.path} : {}),
       purpose: prior ? "将旧配置中的角色设置转换为 TSV。" : proposed ?
@@ -160,7 +166,7 @@ function modelSetup(ctx: ExtensionContext, root?: string) {
     const status = invalidRoles.length ? "invalid" : !selected ? "unconfirmed" :
       config.kind === "fallback" ? "fallback" : "ready";
     return { ...details, initialization: initialization(config), effective: { status,
-      source: config.kind, routes: safeRoutes, thinkingLevels: routes.levels, invalidRoles,
+      source: config.kind, path: config.kind === "fallback" ? undefined : config.path, routes: safeRoutes, thinkingLevels: routes.levels, invalidRoles,
       reason: !selected ? "正式任务需要选定模型。" : undefined } };
   } catch {
     const missingOverride = file.status === "missing" && paths.required && (!legacy || legacy.status === "missing");
@@ -204,54 +210,11 @@ function subagentManifests(pi: ExtensionAPI, ctx: ExtensionContext) {
   return [...paths].map(packageVersion);
 }
 
-function glossarySetup(root: string) {
-  try {
-    const path = projectGlossaryPath(root);
-    const check = repoPath(root, path, "file");
-    if (check.status === "missing") return { ...check, initialization: {
-      operation: "initialize", path, content: "# Glossary\n", purpose: "建立项目术语清单，Pi 将维护获审的术语区。",
-    } };
-    if (check.status !== "ready") return check;
-    try {
-      const body = new TextDecoder("utf-8", {fatal: true}).decode(readFileSync(join(root, path)));
-      const starts = body.split("<!-- pi-taskbook:terms -->").length - 1;
-      const ends = body.split("<!-- /pi-taskbook:terms -->").length - 1;
-      const valid = !body.includes("\0") && starts === ends && starts < 2 &&
-        (!starts || body.indexOf("<!-- pi-taskbook:terms -->") < body.indexOf("<!-- /pi-taskbook:terms -->"));
-      return { ...check, status: valid ? "ready" : "invalid" };
-    } catch {
-      return { ...check, status: "invalid" };
-    }
-  } catch {
-    return { path: null, status: "invalid", reason: "无法从项目约定解析安全的术语清单路径。" };
-  }
-}
-
-function factsSetup(root: string) {
-  const check = repoPath(root, projectFactsPath, "file");
-  if (check.status !== "ready" && check.status !== "missing") return check;
-  try {
-    const legacy = readLegacyProjectJson(root);
-    if (check.status === "missing" && !legacy) {
-      return { ...check, initialization: { operation: "initialize", path: projectFactsPath,
-        content: formatProjectTsv({ schema: 1, records: {}, applied: {} }), purpose: "建立空的项目事实文件。先盘点旧资料并确认迁移范围。" } };
-    }
-    const { head, records, applied } = readProjectMemory(root, {allowUnmigratedLegacy: true});
-    if (legacy && !applied[legacy.receipt]) {
-      return { ...check, status: "migration-required", source: legacyProjectFactsPath, reason: "正式任务需要先批准迁移旧项目事实。" };
-    }
-    return { ...check, version: head, records: Object.keys(records).length };
-  } catch {
-    return { ...check, status: "invalid", reason: "项目事实格式、版本或术语区对应关系无效，需核对文件。" };
-  }
-}
-
-function auditSetup(root: string, glossaryPath: string | null) {
+function auditSetup(root: string) {
   const audit = repoPath(root, ".audit", "directory");
   const checkpoints = repoPath(root, checkpointDirectory, "directory");
   if (audit.status !== "ready") return { ...audit, checkpoints };
   const known = new Set(["pi-taskbook"]);
-  if (glossaryPath?.startsWith(".audit/")) known.add(glossaryPath.split("/")[1]);
   try {
     const unresolved = readdirSync(join(root, ".audit")).filter(name => !known.has(name)).sort()
       .map(name => ({ path: ".audit/" + name, status: "unconfirmed",
@@ -265,7 +228,7 @@ function auditSetup(root: string, glossaryPath: string | null) {
         }
         return { path, status: "discovered", reason: "符合运行检查点路径约定。旧数据格式由迁移预览核对。" };
       }) : [];
-    return { ...audit, checkpoints, knownFacts: projectFactsPath, knownGlossary: glossaryPath, runCheckpoints, unresolved };
+    return { ...audit, checkpoints, runCheckpoints, unresolved };
   } catch {
     return { ...audit, status: "unconfirmed", checkpoints, reason: "无法完整核对 .audit 目录。" };
   }
@@ -301,30 +264,16 @@ export async function collectSetup(pi: ExtensionAPI, ctx: ExtensionContext) {
       "T3 工作区绑定与本地仓库不一致。" : "当前目录没有可核对的 Git 工作区。" },
       mcp: inspectMcpCapabilities(pi), readiness: { runnable: false, taskbookNew: false, initialized: false, blockers: [mismatch ? "worktreeBinding" : "repository"] } };
   }
-  const facts = factsSetup(root);
-  const glossary = glossarySetup(root);
-  const audit = auditSetup(root, glossary.path);
-  const factsExcluded = gitExclusion(root, projectFactsPath);
-  const exclusions = {
-    projectFacts: { ...factsExcluded, status: factsExcluded.status === "ready" ? "invalid" :
-      factsExcluded.status === "missing" ? "ready" : "unconfirmed",
-      impact: "获准纳入普通项目历史的事实文件必须允许 Git 跟踪。" },
-  };
-  const blockers = [
-    !["ready", "fallback"].includes(models.effective.status) && "modelRoutes",
-    facts.status === "migration-required" ? "projectFactsMigration" :
-      !["missing", "ready"].includes(facts.status) && "projectFactsFormat",
-    !["missing", "ready"].includes(glossary.status) && "glossaryFormat",
-    exclusions.projectFacts.status !== "ready" && "projectFactsTracking",
-  ].filter(Boolean);
+  const audit = auditSetup(root);
+  const blockers = ["ready", "fallback"].includes(models.effective.status) ? [] : ["modelRoutes"];
   return {
     models, subagents, t3, pullRequestDelivery,
-    repository: { status: "ready", root, facts, glossary, audit, exclusions },
+    repository: { status: "ready", root, audit },
     mcp: inspectMcpCapabilities(pi, workflowDeclaration(root)),
     readiness: {
       runnable: !blockers.length,
       taskbookNew: !blockers.length && t3.worktree,
-      initialized: !blockers.length && models.effective.status === "ready" && facts.status === "ready" && glossary.status === "ready",
+      initialized: !blockers.length && models.effective.status === "ready",
       blockers,
     },
   };

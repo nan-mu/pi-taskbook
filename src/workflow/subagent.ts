@@ -7,6 +7,7 @@ import {
 import { Type, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { modelKey, type RoleSelection } from "../models/config.ts";
+import { alwaysPrompt } from "../facts/always.ts";
 import { git } from "../taskbook/document.ts";
 import { privateDirectory } from "./run-paths.ts";
 import { cleanRevision, type Run } from "./checkpoint.ts";
@@ -38,10 +39,11 @@ export async function subagentTurn({ run, ctx, seat, turn, route, tools = [], bu
   const settingsManager = SettingsManager.inMemory();
   const agentDir = getAgentDir();
   const systemPrompt = [
+    alwaysPrompt(root),
     turn.prompt,
     "The plugin owns scheduling. Work only on this assignment and use its tools. Finish by calling " + resultName +
       " exactly once with the state-specific result. Give all evidence in that call and end the turn.",
-  ].join("\n\n");
+  ].filter(Boolean).join("\n\n");
   const resourceLoader = new DefaultResourceLoader({
     cwd: root, agentDir, settingsManager, noExtensions: true, disabledBuiltinExtensions: ["mcp"], noSkills: true,
     noContextFiles: true, noThemes: true, noPromptTemplates: true, systemPrompt, appendSystemPromptOverride: () => [],

@@ -91,7 +91,7 @@ export function readProjectMemory(root: string, options: {allowUnmigratedLegacy?
   if (!options.allowUnmigratedLegacy) {
     const legacy = readLegacyProjectJson(root);
     if (legacy && !applied[legacy.receipt]) {
-      throw new Error("发现尚未迁移的 " + legacyProjectFactsPath + "。请在 /taskbook-setup 中批准迁移。");
+      throw new Error("发现尚未迁移的 " + legacyProjectFactsPath + "。请先核对旧资料，并通过主题 TSV 接续项目事实。");
     }
   }
   if (raw === undefined && currentTerms === undefined && glossary === "GLOSSARY.md") return {head: null, records: {}, applied: {}};

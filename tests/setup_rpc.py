@@ -17,7 +17,8 @@ import uuid
 MODEL_ID = "diagnostic"
 CONFIG_SENTINEL = "PRIVATE_BROKEN_CONFIG_VALUE"
 SETUP_REPORT_PROMPT = "这是 /taskbook-setup 的普通对话"
-MODEL_APPROVAL = "项目模型使用本机保存，不追踪。"
+MODEL_APPROVAL = "保存这组角色模型。"
+MODEL_POLICY = "key\tvalue\nmodelConfig\t.fact/config/models.tsv\nmodelGitTracking\tfalse\n"
 MODEL_RECHECK = "重查新增模型，然后写入。"
 MODEL_TSV = "role\tmodel\tthinking\ndesign\tsetup-fixture/new-model\t\n"
 
@@ -77,7 +78,7 @@ class SetupModel(http.server.BaseHTTPRequestHandler):
             reason = "tool_calls"
         elif latest.get("tool_call_id") == "catalog" and "setup-fixture/new-model" in str(latest):
             delta = self.call("taskbook_model_setup", {
-                "location": "project", "gitTracking": False, "configuration": MODEL_TSV,
+                "configuration": MODEL_TSV,
                 "approvedBy": [MODEL_APPROVAL, MODEL_RECHECK],
             }, "save")
             reason = "tool_calls"
@@ -142,10 +143,15 @@ def test_setup_resume(repo, root, config, model):
                 process.stdin.close()
                 process.wait(timeout=5)
 
-    _, output = run_prompt("/taskbook-setup " + MODEL_APPROVAL)
+    (root / ".fact").mkdir()
+    (root / ".fact/taskbook.tsv").write_text(MODEL_POLICY)
+    (root / ".fact/always.tsv").write_text("id\tfact\tsource\tlabels\nfixture\tAlways inject this fixture rule.\tfixture\t\n")
+    first, output = run_prompt("/taskbook-setup " + MODEL_APPROVAL)
+    assert "Always inject this fixture rule." in str(first["messages"])
+    assert "stagedOrTracked" not in str(first["messages"])
     assert "Setup report generated" in output, output[-1200:]
     assert "t3.test.invalid" not in output
-    assert not (root / ".fact/models.tsv").exists()
+    assert not (root / ".fact/config/models.tsv").exists()
 
     models_file = config / "models.json"
     def add_model():
@@ -157,11 +163,15 @@ def test_setup_resume(repo, root, config, model):
     tools = {tool["function"]["name"] for tool in request["tools"]}
     assert {"taskbook_model_catalog", "taskbook_model_setup", "taskbook_migrate"} <= tools
     assert "cannot be invoked" in json.dumps(request["messages"])
-    assert (root / ".fact/models.tsv").is_file(), output[-2000:]
-    assert (root / ".fact/models.tsv").read_text() == MODEL_TSV
+    assert "Always inject this fixture rule." in str(request["messages"])
+    assert (root / ".fact/config/models.tsv").is_file(), output[-2000:]
+    assert (root / ".fact/config/models.tsv").read_text() == MODEL_TSV
+    assert not (root / ".fact/models.tsv").exists()
+    assert not (root / ".fact/facts.tsv").exists()
+    assert not (root / "GLOSSARY.md").exists()
     assert "project-local" in output
-    assert subprocess.check_output(["git", "show", ":.fact/taskbook.tsv"], cwd=root, text=True) == "key\tvalue\nmodelConfig\tproject-local\n"
-    subprocess.run(["git", "check-ignore", "-q", ".fact/models.tsv"], cwd=root, check=True)
+    assert subprocess.check_output(["git", "show", ":.fact/taskbook.tsv"], cwd=root, text=True) == MODEL_POLICY
+    subprocess.run(["git", "check-ignore", "-q", ".fact/config/models.tsv"], cwd=root, check=True)
 
 
 def read_repository(root):
@@ -253,8 +263,9 @@ def test_setup():
             proposed = missing["models"]["initialization"]["content"]
             assert "design\tsetup-fixture/diagnostic\t" in proposed
             assert missing["readiness"] == {"runnable": True, "taskbookNew": False, "initialized": False, "blockers": []}
-            assert missing["repository"]["facts"]["status"] == "missing"
-            assert missing["repository"]["glossary"]["path"] == "GLOSSARY.md"
+            assert "facts" not in missing["repository"] and "glossary" not in missing["repository"]
+            assert missing["models"]["savePolicy"] == {"path": ".fact/models.tsv", "gitTracking": False, "source": "default"}
+            assert not (root / ".fact/facts.tsv").exists() and not (root / "GLOSSARY.md").exists()
             assert missing["mcp"]["magpie"]["capabilities"]["memory_search"]["status"] == "unconfirmed"
             assert missing["t3"]["status"] == "missing" and not missing["t3"]["worktree"]
 
@@ -265,21 +276,16 @@ def test_setup():
             role_file = models / "taskbook-models.tsv"
             role_file.write_text(proposed)
             (root / ".fact").mkdir()
-            (root / ".fact/facts.tsv").write_text(missing["repository"]["facts"]["initialization"]["content"])
             (root / "docs/agents").mkdir(parents=True)
-            (root / "docs/agents/domain.md").write_text("The glossary lives at `docs/terms.md`.\n")
-            (root / "docs/terms.md").write_text("# Glossary\n")
             (root / "docs/agents/issue-tracker.md").write_text("Use gh issue create, gh issue comment, and gh issue close.")
             (root / ".audit").mkdir()
             (root / ".audit/unknown.txt").write_text("unclassified material")
             describe_servers("magpie", "forge")
             valid = setup_report(repo, root, config, model, mcp_log, ["magpie", "forge"])
             assert valid["readiness"] == {"runnable": True, "taskbookNew": False, "initialized": True, "blockers": []}
-            assert valid["repository"]["glossary"]["path"] == "docs/terms.md"
-            assert "checkpoints" not in valid["repository"]["exclusions"]
             assert valid["models"]["pstack"]["content"] == pstack
-            assert valid["legacy"]["audit"]["status"] == "ready"
-            assert any(item["source"] == ".audit/unknown.txt" for item in valid["legacy"]["facts"]["unresolved"])
+            assert valid["legacy"]["status"] == "ready"
+            assert any(item["path"] == ".audit/unknown.txt" for item in valid["repository"]["audit"]["unresolved"])
             assert all(item["status"] == "discovered" for item in valid["mcp"]["magpie"]["capabilities"].values()), valid["mcp"]
             github = valid["mcp"]["github"]
             assert github["services"] == ["forge"]
@@ -288,23 +294,11 @@ def test_setup():
             assert all(item["status"] == "discovered" for item in github["write"].values())
             assert github["declaredAlternative"] == "gh"
 
-            legacy = root / ".fact/project.json"
-            legacy.write_text(json.dumps({"schema": 1, "records": {}, "applied": {}}))
-            needs_migration = setup_report(repo, root, config, model, mcp_log, ["magpie", "forge"])
-            assert needs_migration["repository"]["facts"]["status"] == "migration-required"
-            assert needs_migration["readiness"]["blockers"] == ["projectFactsMigration"]
-            assert not needs_migration["readiness"]["runnable"]
-            legacy.unlink()
-
             role_file.write_text(CONFIG_SENTINEL)
-            (root / ".fact/facts.tsv").write_text(CONFIG_SENTINEL)
-            (root / "docs/terms.md").write_bytes(b"unterminated\xff")
             describe_servers("reduced-memory", "reduced-forge")
             invalid = setup_report(repo, root, config, model, mcp_log, ["reduced-memory", "reduced-forge"])
             assert invalid["models"]["file"]["status"] == "invalid"
-            assert invalid["repository"]["facts"]["status"] == "invalid"
-            assert invalid["repository"]["glossary"]["status"] == "invalid"
-            assert invalid["readiness"]["blockers"] == ["modelRoutes", "projectFactsFormat", "glossaryFormat"]
+            assert invalid["readiness"]["blockers"] == ["modelRoutes"]
             assert invalid["mcp"]["magpie"]["capabilities"]["memory_forget"]["status"] == "missing"
             github = invalid["mcp"]["github"]
             assert github["read"]["repositoryContents"]["status"] == "missing"

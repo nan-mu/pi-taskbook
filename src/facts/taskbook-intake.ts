@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { git, gitOk, type Taskbook } from "../taskbook/document.ts";
 import type { TaskItem } from "../workflow/task-context.ts";
 import { readFactFile } from "./commit-files.ts";
-import { projectModelsFile } from "../models/storage.ts";
+import { modelSettingsPath, projectModelPolicy, projectModelsFile } from "../models/storage.ts";
 import { commitTaskbookMemory, type MemoryChange, type ProjectSnapshot } from "./project-memory.ts";
 import type { FactMatch } from "./query.ts";
 import { decodeTsv, encodeTsv } from "./tsv.ts";
@@ -18,11 +18,13 @@ export type IntakeConflict = {id: string; reason: string};
 
 export function readTopicFacts(root: string) {
   const tables = new Map<string, FactMatch[]>();
+  const modelPath = projectModelPolicy(root)?.path ?? projectModelsFile;
   function scan(dir: string) {
     for (const entry of readdirSync(join(root, dir), {withFileTypes: true}).sort((a, b) => a.name.localeCompare(b.name))) {
       const path = dir + "/" + entry.name;
       if (entry.isDirectory()) scan(path);
-      if (!entry.isFile() || !entry.name.endsWith(".tsv") || path === labelPath || path === projectModelsFile || entry.name === "change.tsv") continue;
+      if (!entry.isFile() || !entry.name.endsWith(".tsv") || [labelPath, modelSettingsPath, modelPath, projectModelsFile].includes(path) ||
+          entry.name === "change.tsv") continue;
       const [header, ...rows] = decodeTsv(readFactFile(root, path) ?? "");
       if (header?.join("\t") !== columns.join("\t")) continue;
       if (rows.some(row => row.length !== 4 || !row[0].trim() || !row[1].trim())) throw new Error("事实表格式无效：" + path);

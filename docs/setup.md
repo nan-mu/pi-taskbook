@@ -19,7 +19,14 @@ printf '%s\n' '{"type":"get_commands"}' '{"type":"get_available_models"}' |
 
 角色模型表使用 TSV，列为 `role`、`model` 和 `thinking`。用完整的 Pi 模型 ID，例如 `magpie/group/sol`。留空第三列可继承推理档位。[角色配置示例](../taskbook-models.example.tsv)
 
-运行 `/taskbook-setup`，选择个人模型表 `~/.agents/taskbook-models.tsv` 或项目模型表 `.fact/models.tsv`。插件将位置选择暂存到 `.fact/taskbook.tsv`。选择本机保存时，模型表放在主 checkout，同一仓库的 linked worktree 可读取。插件会检查 Git 排除规则，需要时写入本机 `info/exclude`。T3 从包含位置设置的基线启动后即可读取所选位置。
+插件读取 `.fact/taskbook.tsv` 的两个设置。
+
+| 设置 | 默认值 | 用途 |
+| --- | --- | --- |
+| `modelConfig` | `.fact/models.tsv` | 模型表路径。项目表使用仓库内 `.fact/` 下的 TSV 路径。个人表使用 `~/.agents/taskbook-models.tsv`。 |
+| `modelGitTracking` | `false` | `true` 表示随项目暂存。项目表使用 `false` 时保存在主 checkout，同一仓库的 linked worktree 可读取。个人表使用 `false`。 |
+
+运行 `/taskbook-setup` 查看有效配置。修改角色模型时沿用已声明的路径和跟踪方式。没有项目设置时，原有个人配置和环境变量仍可作为运行时来源。Setup 首次保存默认写入本机项目表和上述两项设置。旧单值设置在读取时会解释为等价的路径和跟踪方式。
 
 已有 Markdown 和 JSON 配置仍可读取。Setup 保存时写入 TSV，TSV 优先。Setup 也会参考 `~/.agents/pstack-models.md` 和当前 Pi 的模型目录。
 
@@ -44,9 +51,9 @@ Fact Management 使用执行任务的 Pi 主会话模型和档位。
 
 模型保存和资料迁移使用当前 Pi 进程所在的 Git checkout。T3 的托管 worktree 启动与线程迁移有各自的检查结果。
 
-生成项目模型表时，可一次写清方案、保存位置和 Git 选择，例如 `/taskbook-setup 批准按 Pro 生成项目模型配置，不追踪`。迁移与清理是各自的批准事项，清理前仍需核对迁移结果。[批准与回复示例](design/setup-expected-replies.md#在命令中给出批准)
+只有在你要求改动路径或跟踪方式时，Setup 才会处理对应设置。旧 `.audit` 的归档与清理分别批准。示例见[批准与回复](design/setup-expected-replies.md#在命令中给出批准)。
 
-新的检查点位于当前 Git worktree 的元数据目录。项目事实用 `.fact/facts.tsv`，允许 Git 跟踪。迁移与目录说明见[项目事实与术语](project-memory.md)。
+插件将 `.fact/always.tsv` 的内容注入每轮系统提示，包括 Setup 和独立工作会话。其他事实和术语通过主题表按需查询。Setup 的就绪状态只依赖模型和运行环境。
 
 ## 解读 setup 报告
 
@@ -56,7 +63,7 @@ Fact Management 使用执行任务的 Pi 主会话模型和档位。
 | --- | --- |
 | `readiness.runnable` | 当前模型和仓库满足已有 worktree 的任务配置条件。详细缺项见 `blockers`。 |
 | `readiness.taskbookNew` | 上述条件满足，且当前 Pi 会话发现 T3 的托管 worktree 参数。T3 在实际请求时校验权限和基线。 |
-| `readiness.initialized` | 在可运行的基础上，已配置角色模型，且仓库已有有效的项目事实文件和词汇表。缺少角色配置时仍可使用入口模型回退。 |
+| `readiness.initialized` | 已有有效的角色模型配置。缺少角色配置时仍可使用入口模型回退。 |
 | `subagents` | 安装版本和当前 RPC 响应分别报告。 |
 | `mcp` | Magpie 和 GitHub 在 Pi 工具目录中发现的能力。工具注册状态与调用权限分别核对。 |
 | `t3` | 使用当前会话的 T3 MCP 上下文只读检查 `t3_thread_launch` 及托管 worktree 参数。 |

@@ -8,7 +8,8 @@ import { verifyPreparedEntry, type PreparedEntry } from "../taskbook/entry.ts";
 import type { CheckedFact } from "../facts/fact-check.ts";
 import type { MagpieSyncResult } from "../integrations/magpie-memory.ts";
 import type { FactConflict, FactDecision } from "./task-context.ts";
-import { legacyProjectFactsPath, readProjectMemory, type MemoryChange } from "../facts/project-memory.ts";
+import { legacyProjectFactsPath, projectFactsPath, projectGlossaryPath, readProjectMemory, taskbookMemoryChanges, type MemoryChange } from "../facts/project-memory.ts";
+import { readFactFile } from "../facts/commit-files.ts";
 import type { ReviewResult } from "../review/reviewer.ts";
 import { git, workspace, type Taskbook } from "../taskbook/document.ts";
 import { loadUpstreamInputs, pinUpstreamInputs, usesCurrentInputs, type UpstreamPins } from "../methods/upstream.ts";
@@ -99,6 +100,11 @@ export function openRun({ ctx, cwd = ctx.cwd, task, promptDigest, prepared }: {
   const session = ctx.sessionManager.getSessionId();
   if (!ctx.sessionManager.getSessionFile()) throw new Error("请在有持久会话记录的 Pi thread 中启动任务。");
   const preliminary = verifyPreparedEntry(cwd, task, prepared);
+  const legacyChanges = taskbookMemoryChanges(task.markdown, task.id);
+  if (legacyChanges.length && (readFactFile(preliminary.root, projectFactsPath) === undefined ||
+      (legacyChanges.some(change => change.kind === "term") && !existsSync(join(preliminary.root, projectGlossaryPath(preliminary.root)))))) {
+    throw new Error("任务书使用旧 Project memory 指令。请用 Facts 引用或修改主题 TSV 中的条目。");
+  }
   const key = task.id + "-" + task.digest.slice(0, 16);
   const path = join(runDirectory(preliminary.root), key, "state.json");
   if (!existsSync(path) && lstatSync(join(preliminary.root, ".audit/pi-taskbook", key, "state.json"), {throwIfNoEntry: false})) {

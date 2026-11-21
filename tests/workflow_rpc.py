@@ -464,8 +464,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
                 if argument in (approval_migrate, approval_delete, approval_keep):
                     operation = "migrate" if argument == approval_migrate else "delete-audit"
                     quotes = [argument] if argument != approval_keep else ["同意删除 .audit"]
-                    delta = tool_call("taskbook_migrate", {"operation": operation, "approvedBy": quotes,
-                                     **({"sources": ["audit"]} if operation == "migrate" else {})})
+                    delta = tool_call("taskbook_migrate", {"operation": operation, "approvedBy": quotes})
                     finish = "tool_calls"
                 else:
                     reply = "项目模型表是否由 Git 跟踪？" if argument in (approval_partial, approval_model) else \
@@ -1324,7 +1323,7 @@ Complete the shared stages.
         chosen.settled("项目模型表是否由 Git 跟踪？")
         chosen.command(type="prompt", message="不追踪")
         chosen.settled("setup follow-up complete")
-        assert git(work, "show", ":.fact/taskbook.tsv").endswith("modelConfig\tproject-local")
+        assert git(work, "show", ":.fact/taskbook.tsv").endswith("modelConfig\t.fact/models.tsv\nmodelGitTracking\tfalse")
         assert "review\tfixture/review\tmedium" in (main / ".fact/models.tsv").read_text()
         assert git(main, "check-ignore", "--", ".fact/models.tsv") == ".fact/models.tsv"
         assert not (work / ".gitignore").exists() and not git(work, "ls-files", "--", ".fact/models.tsv")
@@ -1342,7 +1341,7 @@ Complete the shared stages.
         chosen.command(type="prompt", message="保存项目模型并跟踪")
         assert "项目模型表加入 Git" in str(chosen.confirm(True))
         chosen.settled("setup follow-up complete")
-        assert git(work, "show", ":.fact/taskbook.tsv").endswith("modelConfig\tproject-tracked")
+        assert git(work, "show", ":.fact/taskbook.tsv").endswith("modelConfig\t.fact/models.tsv\nmodelGitTracking\ttrue")
         assert "review\tfixture/review\tmedium" in git(work, "show", ":.fact/models.tsv")
     finally:
         chosen.close()

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { alwaysPrompt } from "../facts/always.ts";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { posix } from "node:path";
@@ -182,6 +183,7 @@ export async function consultDesign(ctx: ExtensionContext, input: Omit<ReviewInp
 async function readOnlySession(input: Pick<ReviewInput,"root"|"base"|"revision">, model: NonNullable<ExtensionContext["model"]>,
   thinkingLevel: ExtensionContext["thinkingLevel"], system: string, packet: string, signal?: AbortSignal, pi?: ExtensionAPI) {
   const {root} = input;
+  system = [alwaysPrompt(root, input.revision), system].filter(Boolean).join("\n\n");
   const observations: Inspection[] = [];
   const tool = inspectionTool(input, observations);
   const contextDigest = digest(JSON.stringify([system, packet]));

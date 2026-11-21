@@ -10,7 +10,7 @@ Pi 先同步 Markdown 任务书给出的事实，再设计、实施和审核候�
    pi install https://github.com/nan-mu/pi-taskbook
    ```
 
-2. 打开一个新的 Pi 会话，运行 `/taskbook-setup`，查看模型、仓库和 T3 能力。可在命令后或同一会话中批准生成配置和迁移旧资料。Setup 将模型位置暂存到 `.fact/taskbook.tsv`。提交该设置后，让新的 T3 worktree 从包含设置的基线启动。
+2. 打开一个新的 Pi 会话，运行 `/taskbook-setup`，查看模型、仓库和 T3 能力。可在命令后或同一会话中批准生成配置和迁移旧资料。Setup 从 `.fact/taskbook.tsv` 读取模型表路径和 Git 跟踪设置。保存模型时暂存这两项设置。提交该设置后，让新的 T3 worktree 从包含设置的基线启动。
 3. 按[任务书示例](docs/workflow.md#任务书格式)准备 Markdown 文件。已有 linked worktree 时运行 `/taskbook <任务书路径>`。要让 T3 创建 worktree 和会话时，在 T3 启动的 Pi 中运行 `/taskbook-new <任务书路径>`。
 
 Design 由组长和两名组员独立起草，组长签发两名组员确认的方案。组员 A 初审，组员 B 清理上下文后复核，组长签发审核结果。配置对应 `design`、`designMemberA`、`designMemberB`。`implement` 指定单个 Implementer，涵盖实现、测量、验证和返工。审核通过后，主会话归类草稿事实并准备本地交付说明。

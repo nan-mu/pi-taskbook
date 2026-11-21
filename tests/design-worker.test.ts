@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { acceptPlan, runProbe } from "../src/workflow/design-worker.ts";
-import { formatModelConfig, parseModelConfig, readModelConfig, reviewerModel } from "../src/models/config.ts";
+import { formatModelConfig, modelConfigPaths, parseModelConfig, readModelConfig, reviewerModel } from "../src/models/config.ts";
+import { modelWritePlan, projectModelPolicy, projectModelPath, writeModelSettings } from "../src/models/storage.ts";
 import { nextPhase } from "../src/workflow/transitions.ts";
 
 const step = {id: "route", action: "Implement route via the public entry.", checks: "Invoke entry with two routes.", targets: ["G1", "D1"]};
@@ -61,6 +62,33 @@ test("TSV takes precedence over existing Markdown and JSON routes", t => {
   assert.deepEqual(readModelConfig({path:override, legacyPath:undefined, required:true}),
     {kind:"legacy", path:override, roles:{implement:"fixture/legacy"}});
   assert.equal(readFileSync(legacyPath, "utf8"), '{"implement":"fixture/legacy"}\n');
+});
+
+test("the configured model path and Git tracking policy control the actual write", t => {
+  const root = mkdtempSync(join(tmpdir(), "pi-model-policy-"));
+  t.after(() => rmSync(root, {recursive: true, force: true}));
+  const git = (...args: string[]) => execFileSync("git", args, {cwd: root, encoding: "utf8"}).trimEnd();
+  git("init", "-q");
+  mkdirSync(join(root, ".fact"));
+  const manifest = join(root, ".fact/taskbook.tsv");
+  writeFileSync(manifest, "key\tvalue\nmodelConfig\tproject-local\n");
+  assert.deepEqual(projectModelPolicy(root), {path: ".fact/models.tsv", gitTracking: false});
+
+  const path = ".fact/config/roles.tsv";
+  const saved = `key\tvalue\nmodelConfig\t${path}\nmodelGitTracking\ttrue\n`;
+  writeFileSync(manifest, saved);
+  const policy = projectModelPolicy(root);
+  assert.ok(policy);
+  const file = projectModelPath(root, policy);
+  assert.equal(modelConfigPaths(root).path, file);
+  const content = formatModelConfig({design: "fixture/model @ high"});
+  writeModelSettings(modelWritePlan(root, policy, file), content);
+  assert.equal(git("show", ":" + path) + "\n", content);
+  assert.equal(git("show", ":.fact/taskbook.tsv") + "\n", saved);
+  assert.deepEqual(readModelConfig(modelConfigPaths(root)), {kind: "tsv", path: file, roles: {design: "fixture/model @ high"}});
+
+  writeFileSync(manifest, saved.replace(path, ".fact/../outside.tsv"));
+  assert.throws(() => projectModelPolicy(root), /modelConfig/);
 });
 
 test("probe observes a fixed revision in a disposable checkout and preserves unsuccessful observations", async t => {
