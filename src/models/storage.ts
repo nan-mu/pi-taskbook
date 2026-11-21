@@ -6,7 +6,7 @@ import { decodeTsv, encodeTsv } from "../facts/tsv.ts";
 import { git, gitOk } from "../taskbook/document.ts";
 
 export const modelSettingsPath = ".fact/taskbook.tsv";
-export const projectModelsFile = ".fact/models.md";
+export const projectModelsFile = ".fact/models.tsv";
 export type ModelStorage = "personal" | "project-tracked" | "project-local";
 
 export function settingsFile(path: string) {
@@ -42,6 +42,10 @@ function primaryWorktree(root: string) {
 
 export function projectModelPath(root: string, storage: ModelStorage = "project-tracked") {
   return factFile(storage === "project-local" ? primaryWorktree(root) : root, projectModelsFile);
+}
+
+export function legacyProjectModelPath(root: string, storage: ModelStorage = "project-tracked") {
+  return factFile(storage === "project-local" ? primaryWorktree(root) : root, ".fact/models.md");
 }
 
 function writeFile(path: string, content: string) {
@@ -91,7 +95,7 @@ export function writeModelSettings(plan: ReturnType<typeof modelWritePlan>, conf
       const rule = "/" + projectModelsFile;
       if (!before.split(/\r?\n/).includes(rule)) set(exclude, before + (before && !before.endsWith("\n") ? "\n" : "") + rule + "\n");
       if (!gitOk(primary, "check-ignore", "--no-index", "-q", "--", projectModelsFile)) {
-        throw new Error("项目的 Git 规则覆盖了本机排除，无法私下保存 .fact/models.md。");
+        throw new Error("项目的 Git 规则覆盖了本机排除，无法私下保存 " + projectModelsFile + "。");
       }
     }
     const settings = encodeTsv([["key", "value"], ["modelConfig", storage]]);
@@ -103,7 +107,7 @@ export function writeModelSettings(plan: ReturnType<typeof modelWritePlan>, conf
     if (storage === "project-tracked") updates += stage(projectModelsFile, config);
     if (untrack) {
       if (!gitOk(root, "diff", "--cached", "--quiet", "--", projectModelsFile)) {
-        throw new Error(".fact/models.md 已有暂存改动。先处理该文件的暂存改动，再切换到本机保存。");
+        throw new Error(projectModelsFile + " 已有暂存改动。先处理该文件的暂存改动，再切换到本机保存。");
       }
       const zero = "0".repeat(git(root, "rev-parse", "--show-object-format") === "sha256" ? 64 : 40);
       updates += `0 ${zero}\t${projectModelsFile}\n`;

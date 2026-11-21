@@ -17,27 +17,32 @@ printf '%s\n' '{"type":"get_commands"}' '{"type":"get_available_models"}' |
 
 ## 配置角色模型
 
-使用 `pi --offline --list-models` 核对模型 ID。[角色配置示例](../taskbook-models.example.md)使用每行一个 `角色: provider/model-id` 的 Markdown 格式，支持 `#` 注释和空行。可以用 `design: magpie/group/sol @ high` 为角色指定该模型在 Pi 中支持的推理档位。
+角色模型表使用 TSV，列为 `role`、`model` 和 `thinking`。用完整的 Pi 模型 ID，例如 `magpie/group/sol`。留空第三列可继承推理档位。[角色配置示例](../taskbook-models.example.tsv)
 
-在 `/taskbook-setup` 中选择个人配置 `~/.agents/taskbook-models.md`，或项目配置 `.fact/models.md`。插件把选择暂存到 `.fact/taskbook.tsv`。项目模型表可以同时加入 Git，也可以保存在主 checkout，用仓库的本机 `info/exclude` 排除。同一仓库的 linked worktree 可以使用主 checkout 的本机模型表。提交设置后，从包含该提交的基线启动的新 worktree 才能取得位置选择。其他 clone 使用本机选项时需要自己的模型表。
+运行 `/taskbook-setup`，选择个人模型表 `~/.agents/taskbook-models.tsv` 或项目模型表 `.fact/models.tsv`。插件将位置选择暂存到 `.fact/taskbook.tsv`。选择本机保存时，模型表放在主 checkout，同一仓库的 linked worktree 可读取。插件会检查 Git 排除规则，需要时写入本机 `info/exclude`。T3 从包含位置设置的基线启动后即可读取所选位置。
 
-项目没有保存过位置选择时，Pi 沿用个人配置、`PI_TASKBOOK_CONFIG` 和旧 `pi-taskbook.json` 的读取方式。Setup 会参考已有配置、`~/.agents/pstack-models.md` 与 Pi 当前可用的模型和档位。[Setup 回复示例](design/setup-expected-replies.md)
+已有 Markdown 和 JSON 配置仍可读取。Setup 保存时写入 TSV，TSV 优先。Setup 也会参考 `~/.agents/pstack-models.md` 和当前 Pi 的模型目录。
 
-| 配置键 | 职责 | 默认模型 |
+| 配置键 | 职责 | 省略时 |
 | --- | --- | --- |
-| `factCheck`、`performance` | 主会话取证和正式测量 | 入口模型 |
-| `design`、`implement` | 主会话设计和实施 | 入口模型 |
-| `consult` | 独立只读设计咨询 | `design` |
-| `review` | 共用审核模型 | 入口模型 |
-| `factReview`、`correctness`、`quality` | 独立事实、规格和质量审核 | `review` |
+| `design` | 组长确定方案和验收判据，签发 Design 和 Review 决定。 | 入口模型 |
+| `designMemberA` | 独立起草方案并执行初审。 | `review` 或入口模型 |
+| `designMemberB` | 独立起草方案并执行交叉评审。 | `review` 或入口模型 |
+| `implement` | 修改代码、执行正式测量、验证并提交候审版本。 | 入口模型 |
+
+Fact Management 使用执行任务的 Pi 主会话模型和档位。
 
 历史环境变量仍可设置默认值。对应变量为 `PI_TASKBOOK_DESIGN_MODEL`、`PI_TASKBOOK_IMPLEMENT_MODEL`、`PI_TASKBOOK_REVIEW_MODEL`、`PI_TASKBOOK_FACT_REVIEW_MODEL`、`PI_TASKBOOK_CORRECTNESS_MODEL`、`PI_TASKBOOK_QUALITY_MODEL`。文件中的同名角色优先。文件设置 `review` 后，未在文件单独指定的审核角色都使用它。
 
-省略推理档位时，角色继承入口会话的档位，由 Pi 按目标模型能力适配。共享审核角色和设计咨询的回退同时继承模型与档位。项目已保存位置选择时，插件在每阶段开始及每次独立派发前读取所选配置。现有未设置位置的任务沿用检查点中的模型选择。设计咨询使用 `taskbook_consult`，独立审核由插件自动派发。
+已有配置中的旧角色设置继续可用。模型 ID 和档位由当前 Pi 校验。
 
 ## 生成配置与迁移旧资料
 
-运行 `/taskbook-setup` 开始普通 AI 对话。插件将本次模型、项目和 MCP 探测结果附到消息中，并询问需要你决定的事项。也可以把明确的批准直接写在命令后，例如 `/taskbook-setup 批准迁移旧 .audit，保留原件`。本次要求的事项都批准时直接执行。批准为空、范围不清或缺少选择时，setup 会指出需要补齐的内容。
+运行 `/taskbook-setup`，查看模型、仓库和 MCP 诊断。也可以在命令后写明批准范围，例如 `/taskbook-setup 批准迁移旧 .audit，保留原件`。Setup 会询问尚未决定的事项。
+
+同一 Pi 会话恢复后，插件会保留 Setup 待办和用户决定。新增模型后，在对话中要求重查即可刷新当前 Pi 的目录。批准后，Setup 通过插件工具执行并返回回执。工具不可用时，Setup 会保留待办并询问如何继续。
+
+模型保存和资料迁移使用当前 Pi 进程所在的 Git checkout。T3 的托管 worktree 启动与线程迁移有各自的检查结果。
 
 生成项目模型表时，可一次写清方案、保存位置和 Git 选择，例如 `/taskbook-setup 批准按 Pro 生成项目模型配置，不追踪`。迁移与清理是各自的批准事项，清理前仍需核对迁移结果。[批准与回复示例](design/setup-expected-replies.md#在命令中给出批准)
 

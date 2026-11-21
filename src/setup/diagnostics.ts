@@ -5,9 +5,9 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { formatModelConfig, getSupportedThinkingLevels, modelConfigPaths, modelKey, modelRoutes, parseModelConfig, personalModelPath,
+import { formatModelConfig, getSupportedThinkingLevels, legacyPersonalModelPath, modelConfigPaths, modelKey, modelRoutes, parseModelConfig, personalModelPath,
   readModelConfig, resolveModel, reviewerModel, type ModelRoutes } from "../models/config.ts";
-import { modelSettingsPath, projectModelPath, projectModelsFile } from "../models/storage.ts";
+import { legacyProjectModelPath, modelSettingsPath, projectModelPath, projectModelsFile } from "../models/storage.ts";
 import { formatProjectTsv, legacyProjectFactsPath, readLegacyProjectJson, readProjectMemory, projectFactsPath, projectGlossaryPath } from "../facts/project-memory.ts";
 import { probeSubagents } from "../review/subagent-probe.ts";
 import { inspectMcpCapabilities } from "../integrations/mcp-catalog.ts";
@@ -84,18 +84,23 @@ function modelSetup(ctx: ExtensionContext, root?: string) {
   const catalog = (selected ? [selected, ...available.filter(model => model !== selected)] : available).slice(0, 64)
     .map(model => ({id: modelKey(model), name: model.name,
     thinkingLevels: getSupportedThinkingLevels(model)}));
-  const inspect = (path: string) => {
-    const file = fileStatus(path, "file");
-    if (file.status !== "ready") return file;
+  const inspect = (path: string, markdownPath: string) => {
+    const preferred = fileStatus(path, "file");
+    const file = preferred.status === "missing" ? fileStatus(markdownPath, "file") : preferred;
+    if (file.status !== "ready") return preferred.status === "missing" && file.status === "missing" ? preferred : file;
     try {
-      const config = readModelConfig({path, required: true, storage: "personal"});
-      return config.kind === "markdown" ? {...file, roles: config.roles} : {...file, status: "invalid"};
+      const config = readModelConfig({path, markdownPath, required: true});
+      return config.kind === "fallback" ? {...file, status: "invalid"} : {...file, roles: config.roles};
     } catch { return {...file, status: "invalid"}; }
   };
   const detailsForSelection = {catalog, selectedAvailable: Boolean(selected), entryThinking: ctx.thinkingLevel, pstack: pstackSetup(),
-    factManagement: {session: "main", model: selectedKey ?? null, thinking: ctx.thinkingLevel},
-    sources: {personal: inspect(personalModelPath()), project: root && (() => {
-      try { return {...inspect(projectModelPath(root)), stagedOrTracked: Boolean(git(root, "ls-files", "--", projectModelsFile))}; }
+    sources: {personal: inspect(personalModelPath(), legacyPersonalModelPath()), project: root && (() => {
+      try {
+        const paths = modelConfigPaths(root);
+        const storage = paths.storage === "project-local" ? paths.storage : "project-tracked";
+        const result = inspect(projectModelPath(root, storage), legacyProjectModelPath(root, storage));
+        return {...result, stagedOrTracked: Boolean(git(dirname(dirname(result.path)), "ls-files", "--", result.path))};
+      }
       catch { return {path: projectModelsFile, status: "invalid"}; }
     })(), settings: root && repoPath(root, modelSettingsPath, "file")}};
   let paths;
@@ -105,8 +110,10 @@ function modelSetup(ctx: ExtensionContext, root?: string) {
       effective: {status: "invalid", reason: "项目的 Taskbook 模型位置设置无效。"}};
   }
   const file = fileStatus(paths.path, "file");
-  const example = fileURLToPath(new URL("../../taskbook-models.example.md", import.meta.url));
-  const legacy = paths.legacyPath ? fileStatus(paths.legacyPath, "file") : undefined;
+  const example = fileURLToPath(new URL("../../taskbook-models.example.tsv", import.meta.url));
+  const markdown = paths.markdownPath ? fileStatus(paths.markdownPath, "file") : undefined;
+  const legacy = markdown && markdown.status !== "missing" ? markdown :
+    paths.legacyPath ? fileStatus(paths.legacyPath, "file") : undefined;
   const suggestion = selected ?? available[0] ?? ctx.modelRegistry.getAll()[0];
   const fallbackModel = suggestion && modelKey(suggestion);
   let recommended: ReturnType<typeof parseModelConfig> = {};
@@ -131,11 +138,11 @@ function modelSetup(ctx: ExtensionContext, root?: string) {
   };
   function initialization(source?: ReturnType<typeof readModelConfig>) {
     if (file.status !== "missing") return null;
-    const prior = source?.kind === "legacy" ? source : undefined;
+    const prior = source?.kind === "legacy" || source?.kind === "markdown" ? source : undefined;
     return { operation: "initialize", path: paths.path,
       content: prior ? formatModelConfig(prior.roles) : proposed ? formatModelConfig(proposed) : null,
       ...(prior ? {source: prior.path} : {}),
-      purpose: prior ? "将旧 JSON 中的角色设置生成 Markdown。" : proposed ?
+      purpose: prior ? "将旧配置中的角色设置转换为 TSV。" : proposed ?
         "使用 Pi 已注册模型创建各角色的显式路由。" : "先在 Pi 注册模型，再填写各角色。" };
   }
   try {
@@ -151,7 +158,7 @@ function modelSetup(ctx: ExtensionContext, root?: string) {
     const safeRoutes = Object.fromEntries(Object.entries(routes).map(([role, key]) => [role, registered.get(key) ?? null]));
     const invalidRoles = Object.entries(safeRoutes).filter(([, key]) => !key).map(([role]) => role);
     const status = invalidRoles.length ? "invalid" : !selected ? "unconfirmed" :
-      file.status === "missing" ? "fallback" : "ready";
+      config.kind === "fallback" ? "fallback" : "ready";
     return { ...details, initialization: initialization(config), effective: { status,
       source: config.kind, routes: safeRoutes, thinkingLevels: routes.levels, invalidRoles,
       reason: !selected ? "正式任务需要选定模型。" : undefined } };
@@ -161,7 +168,7 @@ function modelSetup(ctx: ExtensionContext, root?: string) {
     return { ...details, file: file.status === "ready" ? { ...file, status } : file,
       legacy: file.status === "missing" && legacy?.status === "ready" ? { ...legacy, status } : legacy,
       initialization: initialization(), effective: { status, reason: missingOverride ?
-        "显式指定的角色配置文件缺失，正式任务需先补齐。" : "无法读取角色配置，或其 Markdown、旧 JSON、角色模型无效。" } };
+        "显式指定的角色配置文件缺失，正式任务需先补齐。" : "无法读取角色配置，或其格式、角色模型无效。" } };
   }
 }
 
@@ -317,7 +324,7 @@ export async function collectSetup(pi: ExtensionAPI, ctx: ExtensionContext) {
     readiness: {
       runnable: !blockers.length,
       taskbookNew: !blockers.length && t3.worktree,
-      initialized: !blockers.length && models.file.status === "ready" && facts.status === "ready" && glossary.status === "ready",
+      initialized: !blockers.length && models.effective.status === "ready" && facts.status === "ready" && glossary.status === "ready",
       blockers,
     },
   };

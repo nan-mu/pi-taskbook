@@ -1,20 +1,23 @@
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
+import { Value } from "typebox/value";
 import { deleteLegacyProjectMemoryRef, importLegacyProjectMemory, inspectLegacyProjectMemory } from "../facts/project-memory-migration.ts";
 import { inspectLegacyMagpieMirror, migrateLegacyMagpieMirror } from "../integrations/magpie-memory.ts";
 import { git, repositoryIdentity } from "../taskbook/document.ts";
 import { deleteMigratedAudit, inspectAuditMigration, migrateAudit } from "./audit-migration.ts";
 import { collectSetup } from "./diagnostics.ts";
-import { formatModelConfig, modelKey, modelRoles, modelRoutes, parseModelConfig, personalModelPath } from "../models/config.ts";
+import { formatModelConfig, getSupportedThinkingLevels, modelKey, modelRoles, modelRoutes, parseModelConfig, personalModelPath } from "../models/config.ts";
 import { modelSettingsPath, modelWritePlan, projectModelPath, writeModelSettings } from "../models/storage.ts";
-import { readT3Workspace } from "../integrations/t3.ts";
 
 const setupType = "pi-taskbook-setup";
+const stateType = "pi-taskbook-setup-state";
 const migrationTool = "taskbook_migrate";
 const modelSetupTool = "taskbook_model_setup";
-const instructions = "这是 /taskbook-setup 的普通对话。\n" +
-  readFileSync(new URL("../../prompts/setup.md", import.meta.url), "utf8").trim();
+const modelCatalogTool = "taskbook_model_catalog";
+const setupTools = [modelCatalogTool, modelSetupTool, migrationTool];
+const instructions = readFileSync(new URL("../../prompts/setup.md", import.meta.url), "utf8").trim();
 const approvedBy = Type.Optional(Type.Array(Type.String({minLength: 1}), {minItems: 1, maxItems: 12, uniqueItems: true}));
 type MigrationOperation = "migrate" | "delete-audit" | "delete-legacy-ref";
 const migrationSources = ["audit", "project-json", "legacy-ref", "mirror"] as const;
@@ -37,13 +40,18 @@ function inventory(root: string, repository: string) {
 }
 
 type SetupInventory = ReturnType<typeof inventory>;
-type SetupSession = { root: string; repository: string; session: string; inventory: SetupInventory };
+type MigrationSession = {root: string; repository: string; inventory: SetupInventory};
+const setupState = Type.Object({
+  root: Type.String(), session: Type.String(), models: Type.Boolean(), inputs: Type.Array(Type.String()),
+  migration: Type.Optional(Type.Object({repository: Type.String(), digest: Type.String()})),
+});
+type SetupState = Static<typeof setupState>;
 
-async function setupRoot(cwd: string) {
-  return (await readT3Workspace(cwd))?.root ?? git(cwd, "rev-parse", "--show-toplevel");
+function inventoryDigest(value: SetupInventory) {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-function migrationPlan(run: SetupSession, operation: MigrationOperation, sources: readonly MigrationSource[] = migrationSources) {
+function migrationPlan(run: MigrationSession, operation: MigrationOperation, sources: readonly MigrationSource[] = migrationSources) {
   const {root, repository} = run;
   const {audit, facts, mirrors} = run.inventory;
   const inScope = ({source}: {source: string}) => sources.includes(source.startsWith(".audit/") ? "audit" :
@@ -106,25 +114,29 @@ function migrationPlan(run: SetupSession, operation: MigrationOperation, sources
 
 export function registerSetupCommand(pi: ExtensionAPI, workflowIsBusy: () => boolean) {
   let checking = false;
-  let pending: SetupSession | undefined;
-  let models: {root: string; session: string} | undefined;
-  let userInputs: string[] = [];
 
-  function closeModelSetup() {
-    models = undefined;
-    const tools = pi.getActiveTools();
-    if (tools.includes(modelSetupTool)) pi.setActiveTools(tools.filter(tool => tool !== modelSetupTool));
+  function currentSetup(ctx: ExtensionContext): SetupState | undefined {
+    const entry = ctx.sessionManager.getBranch().findLast(item => item.type === "custom" && item.customType === stateType);
+    if (entry?.type === "custom" && Value.Check(setupState, entry.data) &&
+        entry.data.session === ctx.sessionManager.getSessionId()) return entry.data;
   }
 
-  function closeSetup() {
-    pending = undefined;
-    userInputs = [];
-    closeModelSetup();
-    const tools = pi.getActiveTools();
-    if (tools.includes(migrationTool)) pi.setActiveTools(tools.filter(tool => tool !== migrationTool));
+  function requireSetup(ctx: ExtensionContext) {
+    const setup = currentSetup(ctx);
+    if (!setup || checking || workflowIsBusy() || git(ctx.cwd, "rev-parse", "--show-toplevel") !== setup.root) {
+      throw new Error("请在空闲的当前项目会话先运行 /taskbook-setup。");
+    }
+    return setup;
   }
 
-  async function authorize(ctx: ExtensionContext, quotes: string[] | undefined, operation: SetupOperation, title: string, description: string) {
+  function exposeSetupTools() {
+    const active = pi.getActiveTools();
+    const missing = setupTools.filter(name => !active.includes(name));
+    if (missing.length) pi.setActiveTools([...active, ...missing]);
+  }
+
+  async function authorize(ctx: ExtensionContext, userInputs: string[], quotes: string[] | undefined,
+      operation: SetupOperation, title: string, description: string) {
     if (quotes?.length) {
       if (!userInputs.length || !quotes.every(quote => userInputs.includes(quote.trim())) ||
           !quotes.some(quote => quote.trim() === userInputs.at(-1))) {
@@ -166,12 +178,6 @@ export function registerSetupCommand(pi: ExtensionAPI, workflowIsBusy: () => boo
     return ctx.ui.confirm(title, description);
   }
 
-  function applyMigration(run: SetupSession, plan: ReturnType<typeof migrationPlan>) {
-    const result = plan.apply();
-    pending = {...run, inventory: inventory(run.root, run.repository)};
-    return result;
-  }
-
   pi.registerCommand("taskbook-setup", {
     description: "将 Pi 和项目诊断附到普通会话，协助初始化或迁移",
     async handler(args, ctx) {
@@ -179,19 +185,19 @@ export function registerSetupCommand(pi: ExtensionAPI, workflowIsBusy: () => boo
         return ctx.ui.notify("请在任务书会话空闲且没有待裁决事项时运行 /taskbook-setup。", "warning");
       }
       checking = true;
-      closeSetup();
       try {
-        if (args.trim()) userInputs.push(args.trim());
         const checks = await collectSetup(pi, ctx);
         let legacy: SetupInventory | {status: "unconfirmed"; reason: string} | undefined;
-        if (typeof checks.repository.root === "string") {
+        let setup: SetupState | undefined;
+        if (typeof checks.repository.root === "string" &&
+            checks.repository.root === git(ctx.cwd, "rev-parse", "--show-toplevel")) {
           const root = checks.repository.root;
-          if (checks.models.catalog.length) models = {root, session: ctx.sessionManager.getSessionId()};
+          setup = {root, session: ctx.sessionManager.getSessionId(), models: true, inputs: args.trim() ? [args.trim()] : []};
           const repository = repositoryIdentity(root);
           if (repository) {
             try {
               legacy = inventory(root, repository);
-              pending = {root, repository, session: ctx.sessionManager.getSessionId(), inventory: legacy};
+              setup.migration = {repository, digest: inventoryDigest(legacy)};
             } catch {
               legacy = {status: "unconfirmed", reason: "无法核对旧事实或 .audit 的迁移来源。"};
             }
@@ -204,8 +210,9 @@ export function registerSetupCommand(pi: ExtensionAPI, workflowIsBusy: () => boo
           return ctx.ui.notify((checks.models.catalog.length ? "请先在 Pi 选择一个可用模型。" :
             "当前没有可用的 Pi 模型。请先注册或认证模型，再运行 /taskbook-setup。") + "\n\n" + report, "info");
         }
-        if (pending || models) pi.setActiveTools([...pi.getActiveTools(), ...(pending ? [migrationTool] : []), ...(models ? [modelSetupTool] : [])]);
-        pi.sendMessage({customType: setupType, content: [instructions, "## Runtime diagnostics\n" + report,
+        if (setup) pi.appendEntry(stateType, setup);
+        exposeSetupTools();
+        pi.sendMessage({customType: setupType, content: ["这是 /taskbook-setup 的普通对话。", "## Runtime diagnostics\n" + report,
           ...(args.trim() ? ["## User command argument\n" + args.trim()] : [])].join("\n\n"),
           display: false}, {triggerTurn: true});
       } catch (error) {
@@ -215,26 +222,38 @@ export function registerSetupCommand(pi: ExtensionAPI, workflowIsBusy: () => boo
   });
 
   pi.registerTool({
-    name: modelSetupTool, label: "保存 Taskbook 模型设置", defaultActive: false,
+    name: modelCatalogTool, label: "刷新 Taskbook 模型目录",
+    description: "从当前 Pi 会话刷新可用模型及其推理档位。用于 Setup 中核对新增模型或重查档位。",
+    parameters: Type.Object({}, {additionalProperties: false}),
+    async execute(_id, _input, signal, _update, ctx) {
+      requireSetup(ctx);
+      await ctx.modelRegistry.refresh({signal});
+      signal?.throwIfAborted();
+      const catalog = ctx.modelRegistry.getAvailable().map(model => ({
+        id: modelKey(model), thinkingLevels: getSupportedThinkingLevels(model),
+      }));
+      return {content: [{type: "text" as const, text: JSON.stringify(catalog)}], details: {catalog}};
+    },
+  });
+
+  pi.registerTool({
+    name: modelSetupTool, label: "保存 Taskbook 模型设置",
     executionMode: "sequential",
-    description: "保存用户选定的 Taskbook 模型配置和 Git 跟踪方式。当前 setup 会话内使用。",
+    description: "保存用户在 Setup 中批准的 Taskbook 模型配置和 Git 跟踪方式。",
     parameters: Type.Object({
       location: Type.Union([Type.Literal("personal"), Type.Literal("project")]),
       gitTracking: Type.Optional(Type.Boolean()),
       approvedBy,
-      configuration: Type.String({minLength: 1, maxLength: 16384, description: "用户审阅的角色配置，每行 role: provider/model-id，可加 @ thinking-level。"}),
+      configuration: Type.String({minLength: 1, maxLength: 16384, description: "用户审阅的 TSV，列为 role、model、thinking。省略档位时留空第三列。"}),
     }, {additionalProperties: false}),
     async execute(_id, {location, gitTracking, configuration, approvedBy: quotes}, signal, _update, ctx) {
-      const setup = models;
-      if (!setup || checking || workflowIsBusy() || ctx.sessionManager.getSessionId() !== setup.session ||
-          await setupRoot(ctx.cwd) !== setup.root) {
-        throw new Error("请在空闲的当前项目会话先运行 /taskbook-setup。");
-      }
+      const setup = requireSetup(ctx);
+      if (!setup.models) throw new Error("这次 Setup 已保存角色模型。再次修改前运行 /taskbook-setup。");
       if ((location === "project") !== (gitTracking !== undefined)) throw new Error("使用项目模型表时请明确选择是否由 Git 跟踪。");
       const storage = location === "personal" ? "personal" : gitTracking ? "project-tracked" : "project-local";
       const target = storage === "personal" ? personalModelPath() : projectModelPath(setup.root, storage);
       const roles = parseModelConfig(configuration);
-      const routes = modelRoutes(ctx, {kind: "markdown", path: target, roles});
+      const routes = modelRoutes(ctx, {kind: "tsv", path: target, roles});
       const available = new Set(ctx.modelRegistry.getAvailable().map(modelKey));
       const unavailable = modelRoles.find(role => roles[role] && !available.has(routes[role] ?? ""));
       if (unavailable) throw new Error(`角色 ${unavailable} 的模型当前不可用。`);
@@ -245,7 +264,7 @@ export function registerSetupCommand(pi: ExtensionAPI, workflowIsBusy: () => boo
         "使用仓库的本机 Git 排除。若 Git 正在跟踪项目模型表，将暂存移除并保留本机文件。";
       checking = true;
       try {
-        if (!await authorize(ctx, quotes, {kind: "models", storage}, "保存 Taskbook 模型设置", `${target}\n${effect}\n暂存 ${modelSettingsPath}。\n\n${content}`)) {
+        if (!await authorize(ctx, setup.inputs, quotes, {kind: "models", storage}, "保存 Taskbook 模型设置", `${target}\n${effect}\n暂存 ${modelSettingsPath}。\n\n${content}`)) {
           return {content: [{type: "text" as const, text: "用户未批准，配置保留。"}], details: {}};
         }
         signal?.throwIfAborted();
@@ -253,7 +272,7 @@ export function registerSetupCommand(pi: ExtensionAPI, workflowIsBusy: () => boo
           throw new Error("设置在确认期间已变化，请重新运行 /taskbook-setup。");
         }
         const result = writeModelSettings(preview, content);
-        closeModelSetup();
+        pi.appendEntry(stateType, {...setup, models: false});
         return {content: [{type: "text" as const, text: JSON.stringify(result)}], details: result};
       } finally { checking = false; }
     },
@@ -263,7 +282,6 @@ export function registerSetupCommand(pi: ExtensionAPI, workflowIsBusy: () => boo
     name: migrationTool,
     label: "Taskbook 旧资料迁移",
     description: "按同一 Pi 会话最近一次 setup 盘点迁移，或单独清理已核对的旧资料。用 sources 指定本次批准迁移的来源。",
-    defaultActive: false,
     executionMode: "sequential",
     parameters: Type.Object({
       operation: Type.Union([Type.Literal("migrate"), Type.Literal("delete-audit"), Type.Literal("delete-legacy-ref")]),
@@ -272,29 +290,40 @@ export function registerSetupCommand(pi: ExtensionAPI, workflowIsBusy: () => boo
       approvedBy,
     }, {additionalProperties: false}),
     async execute(_id, {operation, sources, approvedBy: quotes}, signal, _update, ctx) {
-      const run = pending;
-      if (!run || checking || workflowIsBusy() || ctx.sessionManager.getSessionId() !== run.session ||
-          await setupRoot(ctx.cwd) !== run.root || repositoryIdentity(run.root) !== run.repository) {
-        throw new Error("请在空闲的当前项目会话先运行 /taskbook-setup。");
-      }
+      const setup = requireSetup(ctx);
+      const prepared = setup.migration;
+      if (!prepared || repositoryIdentity(setup.root) !== prepared.repository) throw new Error("请先在当前项目盘点迁移来源。");
+      const current = inventory(setup.root, prepared.repository);
+      if (inventoryDigest(current) !== prepared.digest) throw new Error("旧资料已变化，需重新盘点并批准。");
+      const run = {root: setup.root, repository: prepared.repository, inventory: current};
       if (operation === "migrate" && quotes?.length && !sources?.length) throw new Error("请给出本次获批迁移的来源。");
       const plan = migrationPlan(run, operation, sources);
       checking = true;
       try {
         const authorization = operation === "migrate" ? {kind: operation, sources: sources ?? migrationSources} : {kind: operation};
-        if (!await authorize(ctx, quotes, authorization, plan.title, plan.description)) return {content: [{type: "text" as const, text: "用户未批准，原件保留。"}], details: {}};
+        if (!await authorize(ctx, setup.inputs, quotes, authorization, plan.title, plan.description)) return {content: [{type: "text" as const, text: "用户未批准，原件保留。"}], details: {}};
         signal?.throwIfAborted();
-        const result = applyMigration(run, plan);
+        const result = plan.apply();
+        pi.appendEntry(stateType, {...setup, migration: {...prepared, digest: inventoryDigest(inventory(run.root, run.repository))}});
         return {content: [{type: "text" as const, text: JSON.stringify(result)}], details: {}};
       } finally { checking = false; }
     },
   });
   pi.on("input", (event, ctx) => {
-    if (!checking && !workflowIsBusy() && event.source !== "extension" && event.text.trim() && !event.text.trimStart().startsWith("/") &&
-        (models?.session === ctx.sessionManager.getSessionId() || pending?.session === ctx.sessionManager.getSessionId())) {
-      userInputs.push(event.text.trim());
-    }
+    if (checking || workflowIsBusy() || event.source === "extension" || !event.text.trim() || event.text.trimStart().startsWith("/")) return;
+    const setup = currentSetup(ctx);
+    if (setup) pi.appendEntry(stateType, {...setup, inputs: [...setup.inputs, event.text.trim()]});
   });
-  pi.on("session_start", closeSetup);
-  return {isChecking: () => checking, closeModels: () => { closeModelSetup(); userInputs = []; }};
+  pi.on("before_agent_start", (event, ctx) => {
+    const setup = currentSetup(ctx);
+    if (!setup || workflowIsBusy()) return;
+    const active = pi.getActiveTools();
+    const missing = setupTools.filter(name => !active.includes(name));
+    return {systemPrompt: [event.systemPrompt, instructions,
+      ...(missing.length ? ["Unavailable Setup tools in this turn: " + missing.join(", ")] : [])].join("\n\n")};
+  });
+  pi.on("session_start", () => exposeSetupTools());
+  return {isChecking: () => checking, close: (ctx: ExtensionContext) => {
+    if (currentSetup(ctx)) pi.appendEntry(stateType, null);
+  }};
 }

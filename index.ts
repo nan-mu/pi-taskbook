@@ -588,7 +588,6 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   async function enterTaskbook(args: string, ctx: ExtensionContext) {
     if (entryBusy(ctx)) return ctx.ui.notify("入口请求已退出：当前会话正在处理任务。", "warning");
     if (!args.trim()) return exitInvocation(ctx, "用法 /taskbook <任务书路径>");
-    setup.closeModels();
     launching = true;
     try {
       const cwd = await taskbookCwd(ctx);
@@ -597,6 +596,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       selectedPlaybook(task.markdown);
       const prepared = input.prepared ?? savedT3Continuation(ctx, task.digest)?.prepared;
       const candidate = openRun({ctx, cwd, task, promptDigest: localPromptDigest, prepared});
+      setup.close(ctx);
       if (candidate.state.phase === "exit") return await announce(ctx, candidate);
       initialModel ??= ctx.model;
       initialThinking ??= pi.getThinkingLevel();
@@ -616,7 +616,6 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     async handler(args, ctx) {
       if (entryBusy(ctx)) return ctx.ui.notify("入口请求已退出：当前会话正在处理任务。", "warning");
       if (!args.trim()) return exitInvocation(ctx, "用法 /taskbook-new <任务书路径>");
-      setup.closeModels();
       launching = true;
       let requested = false;
       try {
@@ -644,7 +643,6 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     async handler(args, ctx) {
       if (entryBusy(ctx) || run) return ctx.ui.notify("请在空闲的 T3 线程中发起工作区迁移。", "warning");
       if (!args.trim()) return ctx.ui.notify("用法 /taskbook-handoff <任务书路径>", "info");
-      setup.closeModels();
       launching = true;
       let reuse: string | undefined;
       let resume: string | undefined;
@@ -659,6 +657,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
         const reply = await handoffT3Thread({root: git(ctx.cwd, "rev-parse", "--show-toplevel"), ...launch});
         if (reply.kind === "reused") reuse = launch.message.slice(taskbookPrefix.length);
         else {
+          setup.close(ctx);
           const continuation = reply.continuation;
           const script = reply.setupScript;
           ctx.ui.notify(["T3 工作区 · " + reply.worktreePath,
@@ -690,7 +689,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
         const task = readTaskbook(cwd, args);
         const candidate = openRun({ctx, cwd, task, promptDigest: localPromptDigest, prepared: savedT3Continuation(ctx, task.digest)?.prepared});
         if (candidate.state.exit !== "ready") return ctx.ui.notify("PR 交付需要已通过审核的本地交付。", "warning");
-        setup.closeModels();
+        setup.close(ctx);
         queuePublication(ctx, candidate);
       } catch (error) { ctx.ui.notify(String(error), "warning"); }
     },

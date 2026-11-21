@@ -2,7 +2,8 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
-import { projectModelPath, projectModelStorage, settingsFile, type ModelStorage } from "./storage.ts";
+import { decodeTsv, encodeTsv } from "../facts/tsv.ts";
+import { legacyProjectModelPath, projectModelPath, projectModelStorage, settingsFile, type ModelStorage } from "./storage.ts";
 
 export const modelRoles = ["design", "designMemberA", "designMemberB", "implement", "consult", "factCheck", "performance", "review", "factReview", "correctness", "quality"] as const;
 export type ModelRole = typeof modelRoles[number];
@@ -13,7 +14,7 @@ export type ModelRoutes = ModelConfig & { initial: string; design: string; imple
   initialThinking?: ThinkingLevel; levels?: Partial<Record<ModelRole, ThinkingLevel>> };
 export type RoleSelection = { model: Model; thinkingLevel: ThinkingLevel };
 type ModelConfigSource =
-  | { kind: "markdown" | "legacy"; path: string; roles: ModelConfig }
+  | { kind: "tsv" | "markdown" | "legacy"; path: string; roles: ModelConfig }
   | { kind: "fallback" };
 
 export function modelKey(model: NonNullable<ExtensionContext["model"]>) {
@@ -46,7 +47,7 @@ function setModelRoute(roles: ModelConfig, role: string, value: unknown) {
   } catch { throw new Error("角色 " + role + " 需要 provider/model-id，可加 @ thinking-level。"); }
 }
 
-export function parseModelConfig(text: string) {
+function parseMarkdownModelConfig(text: string) {
   const roles: ModelConfig = {};
   for (const [index, raw] of text.split(/\r?\n/u).entries()) {
     const line = raw.trim();
@@ -58,27 +59,58 @@ export function parseModelConfig(text: string) {
   return roles;
 }
 
+const modelColumns = ["role", "model", "thinking"];
+
+export function parseModelConfig(text: string) {
+  const [header, ...rows] = decodeTsv(text);
+  if (header?.length !== modelColumns.length || modelColumns.some((column, index) => column !== header[index])) {
+    throw new Error("角色配置需要 TSV 表头 role、model、thinking。");
+  }
+  const roles: ModelConfig = {};
+  for (const row of rows) {
+    const [role, model, thinking] = row;
+    if (row.length !== modelColumns.length || !model || /\s/u.test(model) || (thinking && !thinkingLevels.some(level => level === thinking))) {
+      throw new Error("角色模型每行需要三个 TSV 字段。");
+    }
+    setModelRoute(roles, role, thinking ? model + " @ " + thinking : model);
+  }
+  return roles;
+}
+
 export function formatModelConfig(roles: ModelConfig) {
-  return "# Taskbook model configuration. One line per role.\n" +
-    modelRoles.flatMap(role => roles[role] ? [role + ": " + roles[role] + "\n"] : []).join("");
+  const rows = [modelColumns];
+  for (const role of modelRoles) {
+    const value = roles[role];
+    if (value) {
+      const {model, thinking} = splitRoute(value);
+      rows.push([role, model, thinking ?? ""]);
+    }
+  }
+  return encodeTsv(rows);
 }
 
 export function personalModelPath() {
+  return join(homedir(), ".agents", "taskbook-models.tsv");
+}
+
+export function legacyPersonalModelPath() {
   return join(homedir(), ".agents", "taskbook-models.md");
 }
 
-type ModelPaths = {path: string; legacyPath?: string; required: boolean; storage?: ModelStorage};
+type ModelPaths = {path: string; markdownPath?: string; legacyPath?: string; required: boolean; storage?: ModelStorage};
 export function modelConfigPaths(root?: string): ModelPaths {
   const storage = root ? projectModelStorage(root) : undefined;
   if (root && (storage === "project-local" || storage === "project-tracked")) {
-    return {path: projectModelPath(root, storage), required: true, storage};
+    return {path: projectModelPath(root, storage), markdownPath: legacyProjectModelPath(root, storage), required: true, storage};
   }
-  if (storage === "personal") return {path: personalModelPath(), required: true, storage};
+  if (storage === "personal") return {path: personalModelPath(), markdownPath: legacyPersonalModelPath(), required: true, storage};
   const override = process.env.PI_TASKBOOK_CONFIG;
   if (override && /\.json$/i.test(override)) {
-    return { path: join(dirname(override), "taskbook-models.md"), legacyPath: override, required: true };
+    return { path: join(dirname(override), "taskbook-models.tsv"), markdownPath: join(dirname(override), "taskbook-models.md"),
+      legacyPath: override, required: true };
   }
   return { path: override || personalModelPath(),
+    markdownPath: override ? undefined : legacyPersonalModelPath(),
     legacyPath: override ? undefined : join(getAgentDir(), "pi-taskbook.json"), required: Boolean(override) };
 }
 
@@ -95,15 +127,16 @@ function legacyModelConfig(path: string, text: string): ModelConfigSource {
 }
 
 export function readModelConfig(paths = modelConfigPaths()): ModelConfigSource {
-  const markdown = settingsFile(paths.path);
-  if (markdown !== undefined) {
-    if (paths.required && !paths.legacyPath && markdown.trimStart().startsWith("{")) {
-      return legacyModelConfig(paths.path, markdown);
+  for (const path of [paths.path, paths.markdownPath]) {
+    if (!path) continue;
+    const text = settingsFile(path);
+    if (text === undefined) continue;
+    const kind = /\.tsv$/iu.test(path) ? "tsv" : "markdown";
+    if (kind === "markdown" && paths.required && !paths.legacyPath && path === paths.path && text.trimStart().startsWith("{")) {
+      return legacyModelConfig(path, text);
     }
-    let roles: ModelConfig;
-    try { roles = parseModelConfig(markdown); }
-    catch (error) { throw new Error("角色配置无效 " + paths.path + "。 " + (error instanceof Error ? error.message : "")); }
-    return { kind: "markdown", path: paths.path, roles };
+    try { return {kind, path, roles: kind === "tsv" ? parseModelConfig(text) : parseMarkdownModelConfig(text)}; }
+    catch (error) { throw new Error("角色配置无效 " + path + "。 " + (error instanceof Error ? error.message : "")); }
   }
   const legacy = paths.legacyPath && settingsFile(paths.legacyPath);
   if (paths.legacyPath && legacy !== undefined) return legacyModelConfig(paths.legacyPath, legacy);

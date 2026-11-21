@@ -1,0 +1,5 @@
+role	model	thinking
+design	magpie/group/sol	medium
+designMemberA	magpie/group/deepseek-flash	high
+designMemberB	magpie/group/qwen4	high
+implement	magpie/group/terra	medium

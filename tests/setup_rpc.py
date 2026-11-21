@@ -11,11 +11,15 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 
 
 MODEL_ID = "diagnostic"
 CONFIG_SENTINEL = "PRIVATE_BROKEN_CONFIG_VALUE"
 SETUP_REPORT_PROMPT = "这是 /taskbook-setup 的普通对话"
+MODEL_APPROVAL = "项目模型使用本机保存，不追踪。"
+MODEL_RECHECK = "重查新增模型，然后写入。"
+MODEL_TSV = "role\tmodel\tthinking\ndesign\tsetup-fixture/new-model\t\n"
 
 
 def run_mcp_fixture(path, profile):
@@ -62,18 +66,102 @@ class SetupModel(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         self.server.requests.put(request)
+        latest = request["messages"][-1]
+        content = latest.get("content", "")
+        if isinstance(content, list):
+            content = "".join(part.get("text", "") for part in content)
+        delta = {"content": "Setup report generated"}
+        reason = "stop"
+        if content == MODEL_RECHECK:
+            delta = self.call("taskbook_model_catalog", {}, "catalog")
+            reason = "tool_calls"
+        elif latest.get("tool_call_id") == "catalog" and "setup-fixture/new-model" in str(latest):
+            delta = self.call("taskbook_model_setup", {
+                "location": "project", "gitTracking": False, "configuration": MODEL_TSV,
+                "approvedBy": [MODEL_APPROVAL, MODEL_RECHECK],
+            }, "save")
+            reason = "tool_calls"
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
         finish = [
-            {"delta": {"role": "assistant", "content": "Setup report generated"}, "finish_reason": None},
-            {"delta": {}, "finish_reason": "stop"},
+            {"delta": {"role": "assistant", **delta}, "finish_reason": None},
+            {"delta": {}, "finish_reason": reason},
         ]
         for event in finish:
             chunk = {"id": "setup-fixture", "object": "chat.completion.chunk",
                      "created": 1, "model": MODEL_ID, "choices": [{"index": 0, **event}]}
             self.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode())
         self.wfile.write(b"data: [DONE]\n\n")
+
+    @staticmethod
+    def call(name, args, call_id):
+        return {"tool_calls": [{"index": 0, "id": call_id, "type": "function",
+                                "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)}}]}
+
+
+def test_setup_resume(repo, root, config, model):
+    session = str(uuid.uuid4())
+    env = {"PATH": os.environ["PATH"], "HOME": str(config.parent), "PI_CODING_AGENT_DIR": str(config),
+           "T3_MCP_URL": "https://t3.test.invalid/mcp", "T3_MCP_BEARER_TOKEN": "fixture-token"}
+    pi = os.getenv("PI_BIN") or shutil.which("pi")
+
+    def run_prompt(message, update_models=None):
+        with subprocess.Popen([pi, "--mode", "rpc", "--offline", "--no-mcp", "--no-approve", "--no-skills",
+                               "--no-context-files", "--session-id", session, "--provider", "setup-fixture", "--model",
+                               MODEL_ID, "-e", str(repo / "index.ts")], cwd=root, env=env, stdin=subprocess.PIPE,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
+            events = queue.Queue()
+            def read_events():
+                for line in process.stdout:
+                    events.put(line)
+
+            threading.Thread(target=read_events, daemon=True).start()
+
+            def send(**command):
+                process.stdin.write(json.dumps(command) + "\n")
+                process.stdin.flush()
+
+            try:
+                if update_models:
+                    send(type="get_available_models")
+                    loaded = json.loads(events.get(timeout=10))
+                    assert loaded["success"] and "new-model" not in str(loaded)
+                    update_models()
+                send(type="prompt", message=message)
+                first = model.requests.get(timeout=10)
+                observed = []
+                while True:
+                    event = json.loads(events.get(timeout=10))
+                    if event["type"] in ("tool_execution_end", "agent_end"):
+                        observed.append(event)
+                    if event["type"] == "agent_end":
+                        break
+                return first, json.dumps(observed, ensure_ascii=False)
+            finally:
+                process.stdin.close()
+                process.wait(timeout=5)
+
+    _, output = run_prompt("/taskbook-setup " + MODEL_APPROVAL)
+    assert "Setup report generated" in output, output[-1200:]
+    assert "t3.test.invalid" not in output
+    assert not (root / ".fact/models.tsv").exists()
+
+    models_file = config / "models.json"
+    def add_model():
+        model_config = json.loads(models_file.read_text())
+        model_config["providers"]["setup-fixture"]["models"].append({"id": "new-model"})
+        models_file.write_text(json.dumps(model_config))
+
+    request, output = run_prompt(MODEL_RECHECK, update_models=add_model)
+    tools = {tool["function"]["name"] for tool in request["tools"]}
+    assert {"taskbook_model_catalog", "taskbook_model_setup", "taskbook_migrate"} <= tools
+    assert "cannot be invoked" in json.dumps(request["messages"])
+    assert (root / ".fact/models.tsv").is_file(), output[-2000:]
+    assert (root / ".fact/models.tsv").read_text() == MODEL_TSV
+    assert "project-local" in output
+    assert subprocess.check_output(["git", "show", ":.fact/taskbook.tsv"], cwd=root, text=True) == "key\tvalue\nmodelConfig\tproject-local\n"
+    subprocess.run(["git", "check-ignore", "-q", ".fact/models.tsv"], cwd=root, check=True)
 
 
 def read_repository(root):
@@ -163,7 +251,7 @@ def test_setup():
             assert missing["models"]["file"]["status"] == "missing"
             assert missing["models"]["effective"]["status"] == "fallback"
             proposed = missing["models"]["initialization"]["content"]
-            assert "design: setup-fixture/diagnostic" in proposed
+            assert "design\tsetup-fixture/diagnostic\t" in proposed
             assert missing["readiness"] == {"runnable": True, "taskbookNew": False, "initialized": False, "blockers": []}
             assert missing["repository"]["facts"]["status"] == "missing"
             assert missing["repository"]["glossary"]["path"] == "GLOSSARY.md"
@@ -174,7 +262,7 @@ def test_setup():
             models.mkdir()
             pstack = "judgment and prose: setup-fixture/diagnostic\n"
             (models / "pstack-models.md").write_text(pstack)
-            role_file = models / "taskbook-models.md"
+            role_file = models / "taskbook-models.tsv"
             role_file.write_text(proposed)
             (root / ".fact").mkdir()
             (root / ".fact/facts.tsv").write_text(missing["repository"]["facts"]["initialization"]["content"])
@@ -226,10 +314,14 @@ def test_setup():
             assert github["write"]["issueCreate"]["status"] == "discovered"
             assert github["write"]["issueComment"]["status"] == "missing"
             assert github["write"]["issueClose"]["status"] == "missing"
+            model.requests = queue.Queue()
+            resumed_root = fixture / "resumed"
+            subprocess.run(["git", "init", "-q", str(resumed_root)], check=True)
+            test_setup_resume(repo, resumed_root, config, model)
         finally:
             model.shutdown()
             model.server_close()
-    print("Pi setup RPC: missing, valid and damaged configuration, four Magpie capabilities, GitHub aliases, no writes")
+    print("Pi setup RPC passed: read-only diagnostics, resumed approval, live model refresh, local TSV write")
 
 
 if __name__ == "__main__":

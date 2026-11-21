@@ -1,6 +1,6 @@
 # pi-taskbook
 
-Pi 先同步 Markdown 任务书给出的事实，再设计、实施和审核候审 Git 提交。Fact Management 使用执行任务的 Pi 主会话模型和推理档位。由 T3 创建 checkout 时，以新 checkout 中 Pi 的选择为准。`/taskbook-setup` 会显示当前会话的选择。通过审核后，Pi 显示「可交接」和交付提交。
+Pi 先同步 Markdown 任务书给出的事实，再设计、实施和审核候审 Git 提交。Fact Management 使用执行任务的 Pi 主会话模型和推理档位。由 T3 创建 checkout 时，以新 checkout 中 Pi 的选择为准。通过审核后，Pi 显示「可交接」和交付提交。
 
 ## 开始运行
 
@@ -36,7 +36,7 @@ Design 由组长和两名组员独立起草，组长签发两名组员确认的�
 
 ## 文档
 
-- [角色模型示例](taskbook-models.example.md)列出当前工作流的四个子代理配置键。模型可放在 `~/.agents/taskbook-models.md` 或项目 `.fact/models.md`，后者可选择由 Git 跟踪。
+- [角色模型示例](taskbook-models.example.tsv)列出当前工作流的四个子代理配置键。模型可放在 `~/.agents/taskbook-models.tsv` 或项目 `.fact/models.tsv`，后者可选择由 Git 跟踪。
 - [任务书与执行流程](docs/workflow.md)提供格式示例，说明审核、交付和恢复。
 - [项目事实与迁移](docs/project-memory.md)说明事实版本、术语和旧资料迁移。[Magpie 同步接口](docs/magpie-sync.md)列出远端写入与镜像条件。
 - [代码审阅指南](docs/review-guide.md)指出各模块的职责和建议阅读顺序。[验收记录](docs/project-facts-verification.md)列出测试环境和复跑命令。

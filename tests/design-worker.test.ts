@@ -27,30 +27,33 @@ test("each role controls its specific escalation and reviewer override", () => {
   assert.equal(reviewerModel(routes, "quality"), "pi/quality");
 });
 
-test("Markdown routes accept separate roles, comments, and nested Pi model IDs", () => {
-  const roles = parseModelConfig("# Taskbook routes\r\n\r\ndesign: magpie/group/sol\r\nreview: fixture/review\r\n");
-  assert.deepEqual(roles, {design: "magpie/group/sol", review: "fixture/review"});
-  assert.match(formatModelConfig(roles), /^design: magpie\/group\/sol$/mu);
-  assert.deepEqual(parseModelConfig(formatModelConfig(roles)), roles);
-  assert.deepEqual(parseModelConfig("design: magpie/group/sol @ high\n"), {design:"magpie/group/sol @ high"});
-  assert.throws(() => parseModelConfig("design: magpie/group/sol @ unknown\n"), /thinking-level/);
-  assert.throws(() => parseModelConfig("design: auto"), /provider\/model-id/);
-  assert.throws(() => parseModelConfig("design: pi/first\ndesign: pi/second"), /重复字段/);
-  assert.throws(() => parseModelConfig("unexpected: pi/base"), /未知字段/);
+test("TSV routes preserve thinking levels and reject unknown roles", () => {
+  const header = "role\tmodel\tthinking\n";
+  const content = header + "design\tmagpie/group/sol\thigh\nreview\tfixture/review\t\n";
+  const roles = parseModelConfig(content);
+  assert.deepEqual(roles, {design: "magpie/group/sol @ high", review: "fixture/review"});
+  assert.equal(formatModelConfig(roles), content);
+  assert.throws(() => parseModelConfig(header + "design\tmagpie/group/sol\tunknown\n"), /TSV/);
+  assert.throws(() => parseModelConfig(header + "design\tauto\t\n"), /provider\/model-id/);
+  assert.throws(() => parseModelConfig(header + "design\tpi/first\t\ndesign\tpi/second\t\n"), /重复字段/);
+  assert.throws(() => parseModelConfig(header + "factManagement\tpi/base\t\n"), /未知字段/);
 });
 
-test("a missing Markdown config preserves legacy settings until the Markdown file is created", t => {
+test("TSV takes precedence over existing Markdown and JSON routes", t => {
   const root = mkdtempSync(join(tmpdir(), "pi-model-config-"));
   t.after(() => rmSync(root, {recursive: true, force: true}));
-  const path = join(root, "taskbook-models.md");
+  const path = join(root, "taskbook-models.tsv");
+  const markdownPath = join(root, "taskbook-models.md");
   const legacyPath = join(root, "pi-taskbook.json");
-  const paths = {path, legacyPath, required: false};
+  const paths = {path, markdownPath, legacyPath, required: false};
   assert.deepEqual(readModelConfig(paths), {kind:"fallback"});
   assert.throws(() => readModelConfig({...paths, required: true}), /找不到角色配置/);
   writeFileSync(legacyPath, '{"implement":"fixture/legacy"}\n');
   assert.deepEqual(readModelConfig(paths), {kind:"legacy", path:legacyPath, roles:{implement:"fixture/legacy"}});
-  writeFileSync(path, "implement: fixture/current\n");
-  assert.deepEqual(readModelConfig(paths), {kind:"markdown", path, roles:{implement:"fixture/current"}});
+  writeFileSync(markdownPath, "implement: fixture/markdown\n");
+  assert.deepEqual(readModelConfig(paths), {kind:"markdown", path:markdownPath, roles:{implement:"fixture/markdown"}});
+  writeFileSync(path, formatModelConfig({implement: "fixture/current"}));
+  assert.deepEqual(readModelConfig(paths), {kind:"tsv", path, roles:{implement:"fixture/current"}});
   writeFileSync(path, "invalid-role: future/model\n");
   assert.throws(() => readModelConfig(paths), /角色配置无效/);
   const override = join(root, "custom-routes");

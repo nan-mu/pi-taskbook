@@ -479,7 +479,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
                 elif latest.startswith("保存项目模型") or latest == "不追踪":
                     assert any(t["function"]["name"] == "taskbook_model_setup" for t in body["tools"])
                     delta = tool_call("taskbook_model_setup", {"location": "project", "gitTracking": latest.endswith("跟踪"),
-                                     "configuration": "review: fixture/review @ medium\n",
+                                     "configuration": "role\tmodel\tthinking\nreview\tfixture/review\tmedium\n",
                                      **({"approvedBy": [approval_model, latest]} if latest == "不追踪" else {})})
                 else:
                     delta = tool_call("taskbook_migrate", {"operation": "migrate" if latest.startswith("请迁移") else "delete-audit"})
@@ -1319,15 +1319,15 @@ Complete the shared stages.
         assert "本机 Git 排除" in str(chosen.confirm(False))
         chosen.settled("setup follow-up complete")
         assert not (work / ".fact/taskbook.tsv").exists()
-        assert not (main / ".fact/models.md").exists()
+        assert not (main / ".fact/models.tsv").exists()
         chosen.command(type="prompt", message="/taskbook-setup " + approval_model)
         chosen.settled("项目模型表是否由 Git 跟踪？")
         chosen.command(type="prompt", message="不追踪")
         chosen.settled("setup follow-up complete")
         assert git(work, "show", ":.fact/taskbook.tsv").endswith("modelConfig\tproject-local")
-        assert "review: fixture/review @ medium" in (main / ".fact/models.md").read_text()
-        assert git(main, "check-ignore", "--", ".fact/models.md") == ".fact/models.md"
-        assert not (work / ".gitignore").exists() and not git(work, "ls-files", "--", ".fact/models.md")
+        assert "review\tfixture/review\tmedium" in (main / ".fact/models.tsv").read_text()
+        assert git(main, "check-ignore", "--", ".fact/models.tsv") == ".fact/models.tsv"
+        assert not (work / ".gitignore").exists() and not git(work, "ls-files", "--", ".fact/models.tsv")
         git(work, "commit", "-m", "Select the project-local model file")
 
         submit(chosen, taskfile(d, "project-model-settings"))
@@ -1343,7 +1343,7 @@ Complete the shared stages.
         assert "项目模型表加入 Git" in str(chosen.confirm(True))
         chosen.settled("setup follow-up complete")
         assert git(work, "show", ":.fact/taskbook.tsv").endswith("modelConfig\tproject-tracked")
-        assert "review: fixture/review @ medium" in git(work, "show", ":.fact/models.md")
+        assert "review\tfixture/review\tmedium" in git(work, "show", ":.fact/models.tsv")
     finally:
         chosen.close()
         server.shutdown()
