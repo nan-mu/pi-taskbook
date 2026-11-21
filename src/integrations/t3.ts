@@ -1,4 +1,5 @@
 import { realpathSync } from "node:fs";
+import { networkInterfaces } from "node:os";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type Static, type TSchema } from "typebox";
 import { Value } from "typebox/value";
@@ -35,11 +36,19 @@ function readT3Endpoint(): T3 {
   const token = process.env.T3_MCP_BEARER_TOKEN;
   if (!raw || !token) throw new Error("当前 Pi 会话缺少 T3 MCP。");
   const url = new URL(raw);
-  if (url.protocol !== "http:" || !["127.0.0.1", "[::1]", "localhost"].includes(url.hostname) ||
-      url.username || url.password || url.hash || url.search) {
+  if (url.protocol !== "http:" || url.pathname !== "/mcp" || url.username || url.password || url.hash || url.search ||
+      !isLocalT3Host(url.hostname)) {
     throw new Error("T3 MCP 必须是 T3 注入的本地 HTTP 端点。");
   }
   return { url, token };
+}
+
+function isLocalT3Host(host: string) {
+  if (["127.0.0.1", "[::1]", "localhost"].includes(host)) return true;
+  return Object.values(networkInterfaces()).some(addresses => addresses?.some(({address, family}) => {
+    if (family === "IPv4") return host === address;
+    return host.startsWith("[") && host === new URL("http://[" + address.split("%", 1)[0] + "]").hostname;
+  }));
 }
 
 function decode(text: string, sse: boolean, id: number): RpcResponse {
@@ -174,7 +183,7 @@ export async function inspectT3() {
   try { endpoint = readT3Endpoint(); }
   catch {
     return {...gate, status: "unconfirmed", transport: "rejected",
-      reason: "会话注入的 T3 端点不符合插件的本地 HTTP 接入条件。", impact};
+      reason: "会话注入的 T3 端点不是本机的 HTTP /mcp 地址。", impact};
   }
   try {
     const rpc = await connectT3(endpoint);
@@ -190,10 +199,18 @@ export async function inspectT3() {
 }
 
 export function t3SessionTools(pi: ExtensionAPI) {
-  return pi.getAllTools().flatMap(tool => {
+  return [...new Set(pi.getAllTools().flatMap(tool => {
     const match = /^mcp__t3[-_]code__(t3_\w+)$/u.exec(tool.name);
-    return tool.exposure !== "hidden" && match && workspaceTools.includes(match[1]) ? [{name: tool.name, exposure: tool.exposure}] : [];
-  });
+    return tool.exposure !== "hidden" && match && workspaceTools.includes(match[1]) ? [match[1]] : [];
+  }))];
+}
+
+export function t3ForgeSessionTools(pi: ExtensionAPI) {
+  const methods = ["pull_request_read", "pull_request_list", "pull_request_create", "pull_request_update", "list_issues", "read_issue"];
+  return [...new Set(pi.getAllTools().flatMap(tool => {
+    const match = /^mcp__t3[-_]code__(\w+)$/u.exec(tool.name);
+    return tool.exposure !== "hidden" && match && methods.includes(match[1]) ? [match[1]] : [];
+  }))];
 }
 
 export async function launchT3Thread(args: {

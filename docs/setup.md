@@ -68,4 +68,8 @@ Fact Management 使用执行任务的 Pi 主会话模型和档位。
 | `availability.github` 和 `availability.magpieMemory` | 列出当前会话发现的能力。仓库访问和远端权限留待实际任务核对。 |
 | `availability.t3` | 分开报告 Pi 工具注册情况、插件的 T3 直接接口和两个命令的预检结果。 |
 
+T3 使用服务器监听的地址注册当前线程的 HTTP `/mcp` 端点。Taskbook 接受回环地址和操作系统已分配给本机的接口地址。Setup 只读取目录和线程绑定。
+
+Pi 在后台连接配置为 `codemode` 的 MCP 服务。Setup 最多等候两秒，随后报告已启用的 Magpie 服务有没有注册工具。T3 的 Issue 和 PR 工具单列。PR 交付使用通过 Taskbook 参数检查的 Magpie GitHub 工具。Memory 可用性来自实际目录。
+
 使用 `/taskbook-new` 时，从 T3 启动的 Pi 会话运行 setup。T3 为该会话注入 MCP 上下文，并管理 worktree 路径。已有 linked worktree 可以使用 `/taskbook` 独立运行。

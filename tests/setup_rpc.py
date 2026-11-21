@@ -29,7 +29,7 @@ def run_mcp_fixture(path, profile):
         "forge": ["get_file_contents", "search_issues", "pull_request_read", "issue_write", "add_issue_comment"],
         "reduced-memory": ["memory_context", "memory_search", "memory_save"],
         "reduced-forge": ["get_pr_diff", "get_pull_request", "create_issue"],
-        "t3-code": ["t3_thread_launch", "t3_worktree_handoff", "t3_worktree_status", "t3_worktree_list"],
+        "t3-code": ["t3_thread_launch", "t3_worktree_handoff", "t3_worktree_status", "t3_worktree_list", "pull_request_read", "list_issues"],
     }[profile]
     operations = {
         "pull_request_read": ["get", "get_files"],
@@ -49,6 +49,8 @@ def run_mcp_fixture(path, profile):
                 "serverInfo": {"name": profile, "version": "1.0.0"},
             }
         elif method == "tools/list":
+            if profile == "magpie":
+                time.sleep(.3)
             result = {"tools": [{
                 "name": "github__" + name if profile == "forge" else name,
                 "description": name,
@@ -100,6 +102,109 @@ class SetupModel(http.server.BaseHTTPRequestHandler):
     def call(name, args, call_id):
         return {"tool_calls": [{"index": 0, "id": call_id, "type": "function",
                                 "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)}}]}
+
+
+class T3Endpoint(http.server.BaseHTTPRequestHandler):
+    launch = {"properties": {"workspaceStrategy": {"properties": {
+        "type": {"enum": ["root", "existing_worktree", "worktree"]}, "baseRef": {}, "branch": {}, "startFromOrigin": {},
+    }}}}
+    handoff = {"properties": {name: {} for name in ("branch", "baseRef", "startFromOrigin", "continuationPrompt")}}
+
+    def log_message(self, *_):
+        pass
+
+    def do_POST(self):
+        request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        assert self.path == "/mcp" and self.headers["Authorization"] == "Bearer fixture-token"
+        method = request["method"]
+        if method == "notifications/initialized":
+            self.send_response(202)
+            self.end_headers()
+            return
+        if method == "initialize":
+            result = {"protocolVersion": "2025-06-18"}
+        elif method == "tools/list":
+            result = {"tools": [{"name": name, "inputSchema": schema} for name, schema in [
+                ("t3_thread_launch", self.launch), ("t3_worktree_handoff", self.handoff),
+                ("t3_worktree_status", {}), ("t3_worktree_list", {}),
+            ]]}
+        else:
+            assert method == "tools/call"
+            name, args = request["params"]["name"], request["params"]["arguments"]
+            self.server.calls.append((name, args))
+            if name == "t3_worktree_status":
+                data = {"attached": False, "worktreePath": None, "branch": "main",
+                        "projectWorkspaceRoot": str(self.server.root), "defaultStartFromOrigin": False}
+            elif name == "t3_thread_launch":
+                data = {"threadId": "fixture-thread", "link": "t3://fixture/thread"}
+            elif name == "t3_worktree_list":
+                data = {"refs": [], "nextCursor": None}
+            else:
+                assert name == "t3_worktree_handoff"
+                data = {"worktreePath": "/fixture/linked", "branch": args["branch"], "baseRef": args["baseRef"],
+                        "startedFromOrigin": False, "continuation": {"status": "scheduled", "delivery": "queued"},
+                        "setupScript": {"status": "no-script"}}
+            result = {"structuredContent": data}
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}).encode())
+
+
+def test_t3_endpoint(repo, root, config, model, mcp_log):
+    host = subprocess.check_output(["node", "-p",
+        "Object.values(require('node:os').networkInterfaces()).flat().find(x => x.family === 'IPv4' && !x.internal)?.address ?? '127.0.0.1'"],
+        text=True).strip()
+    server = http.server.ThreadingHTTPServer((host, 0), T3Endpoint)
+    server.root = root.resolve()
+    server.calls = []
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        endpoint = f"http://{host}:{server.server_port}/mcp"
+        checks = setup_report(repo, root, config, model, mcp_log, [], t3_endpoint=endpoint)
+        assert checks["availability"]["t3"]["directTransport"] == "responding"
+        assert checks["availability"]["t3"]["taskbookNew"] and checks["availability"]["t3"]["taskbookHandoff"]
+        assert [name for name, _ in server.calls] == ["t3_worktree_status"]
+
+        base = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+        task = root.parent / "test-task.md"
+        task.write_text(f"# Fixture\n\nTaskbook ID: t3-fixture\nRepository: fixture/repo\nBase commit: {base}\nEntry: Fix feature\n\n## Goal\n\nFix fixture.\n\n## Delivery\n\nLocal only.\n")
+        env = {"PATH": os.environ["PATH"], "HOME": str(config.parent), "PI_CODING_AGENT_DIR": str(config),
+               "T3_MCP_URL": endpoint, "T3_MCP_BEARER_TOKEN": "fixture-token"}
+        pi = os.getenv("PI_BIN") or shutil.which("pi")
+        for command, expected in [("taskbook-new", "已交给新 T3 thread"), ("taskbook-handoff", "T3 工作区")]:
+            with subprocess.Popen([pi, "--mode", "rpc", "--offline", "--no-mcp", "--no-skills",
+                                   "--session-id", str(uuid.uuid4()), "-e", str(repo / "index.ts")],
+                                  cwd=root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, text=True) as process:
+                events = queue.Queue()
+
+                def read_events():
+                    for line in process.stdout:
+                        if line.startswith("{"):
+                            events.put(json.loads(line))
+
+                threading.Thread(target=read_events, daemon=True).start()
+                try:
+                    process.stdin.write(json.dumps({"type": "prompt", "message": f'/{command} "{task}"'}) + "\n")
+                    process.stdin.flush()
+                    while True:
+                        event = events.get(timeout=10)
+                        if event.get("method") == "notify":
+                            assert expected in event["message"], event
+                            break
+                finally:
+                    process.stdin.close()
+                    process.wait(timeout=5)
+        assert [name for name, _ in server.calls] == [
+            "t3_worktree_status", "t3_thread_launch", "t3_worktree_status", "t3_worktree_list", "t3_worktree_handoff"]
+        launch = server.calls[1][1]
+        assert launch["workspaceStrategy"] == {"type": "worktree", "baseRef": base, "branch": "agent/t3-fixture", "startFromOrigin": False}
+        handoff = server.calls[-1][1]
+        assert handoff["baseRef"] == base and handoff["continuationPrompt"].startswith("/taskbook --prepared ")
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_setup_resume(repo, root, config, model):
@@ -258,7 +363,7 @@ def test_setup():
         def describe_servers(*profiles, unavailable=False):
             mcp_log.unlink(missing_ok=True)
             servers = {profile: {"command": sys.executable, "args": [__file__, str(mcp_log), profile],
-                                 "exposure": "direct"} for profile in profiles}
+                                 "exposure": "codemode" if profile == "magpie" else "direct"} for profile in profiles}
             if unavailable:
                 servers["magpie-unavailable"] = {"command": str(fixture / "missing-server")}
             (config / "mcp.json").write_text(json.dumps({"mcpServers": servers}))
@@ -293,18 +398,20 @@ def test_setup():
             (root / ".audit/unknown.txt").write_text("unclassified material")
             profiles = ["magpie", "forge", "t3-code"]
             describe_servers(*profiles)
-            valid = setup_report(repo, root, config, model, mcp_log, profiles, t3_endpoint="https://fixture.invalid/mcp")
+            valid = setup_report(repo, root, config, model, mcp_log, ["forge", "t3-code"], t3_endpoint="https://fixture.invalid/mcp")
             assert valid["readiness"] == {"runnable": True, "taskbookNew": False, "initialized": True, "blockers": []}
             assert valid["models"]["pstack"]["content"] == pstack
             assert valid["legacy"]["status"] == "ready"
             preflight = valid["availability"]
-            assert {name.rsplit("__", 1)[1] for name in preflight["t3"]["sessionTools"]} == {
+            assert set(preflight["t3"]["sessionTools"]) == {
                 "t3_thread_launch", "t3_worktree_handoff", "t3_worktree_status", "t3_worktree_list"}
             assert preflight["t3"]["directTransport"] == "rejected"
             assert not preflight["t3"]["taskbookNew"] and not preflight["t3"]["taskbookHandoff"]
             assert "fixture.invalid" not in str(valid)
             assert preflight["github"]["repositoryAccess"] == "not-tested"
             assert "pullRequestMetadata" in preflight["github"]["read"]
+            assert set(preflight["github"]["t3Tools"]) == {"pull_request_read", "list_issues"}
+            assert preflight["magpieCatalogue"] == "registered"
             assert preflight["magpieMemory"]["access"] == "not-tested"
             assert set(preflight["magpieMemory"]["tools"]) == {"memory_context", "memory_search", "memory_save", "memory_forget"}
             assert any(item["path"] == ".audit/unknown.txt" for item in valid["repository"]["audit"]["unresolved"])
@@ -315,6 +422,10 @@ def test_setup():
             assert github["read"]["repositoryContents"]["tools"][0]["name"] == "mcp__forge__github__get_file_contents"
             assert all(item["status"] == "discovered" for item in github["write"].values())
             assert github["declaredAlternative"] == "gh"
+
+            subprocess.run(["git", "-C", str(root), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                            "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-qm", "Base"], check=True)
+            test_t3_endpoint(repo, root, config, model, mcp_log)
 
             role_file.write_text(CONFIG_SENTINEL)
             describe_servers("reduced-memory", "reduced-forge")
@@ -337,7 +448,7 @@ def test_setup():
         finally:
             model.shutdown()
             model.server_close()
-    print("Pi setup RPC passed: read-only diagnostics, resumed approval, live model refresh, local TSV write")
+    print("Pi RPC passed: Setup diagnostics, delayed Magpie, local T3 preflight/launch/handoff, resumed model save")
 
 
 if __name__ == "__main__":

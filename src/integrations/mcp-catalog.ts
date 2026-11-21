@@ -1,4 +1,7 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { setTimeout } from "node:timers/promises";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const magpieMethods = ["memory_context", "memory_search", "memory_save", "memory_forget"] as const;
 export type MagpieCapability = typeof magpieMethods[number];
@@ -29,6 +32,33 @@ function sessionCatalogue(pi: ExtensionAPI) {
     else servers.set(server, [entry]);
   }
   return servers;
+}
+
+function magpieConfig(path: string): boolean | undefined {
+  try {
+    const config: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (!config || typeof config !== "object" || !("mcpServers" in config)) return;
+    const servers = config.mcpServers;
+    if (!servers || typeof servers !== "object" || !("magpie" in servers)) return;
+    const server = servers.magpie;
+    if (server && typeof server === "object") return !("enabled" in server) || server.enabled !== false;
+  } catch {}
+}
+
+export async function waitForMagpieCatalogue(pi: ExtensionAPI, ctx: ExtensionContext, root?: string) {
+  const registered = () => sessionCatalogue(pi).get("magpie")?.some(tool => tool.exposure !== "hidden") ?? false;
+  if (registered()) return "registered";
+  if (!pi.getCommands().some(command => command.name === "mcp")) return "not-discovered";
+  const project = root && ctx.isProjectTrusted() ? magpieConfig(join(root, ".pi/mcp.json")) : undefined;
+  const enabled = project ?? magpieConfig(join(getAgentDir(), "mcp.json")) ??
+    pi.getMcpServers().some(server => server.name === "magpie" && server.config.enabled !== false);
+  if (!enabled) return "not-discovered";
+  const deadline = Date.now() + 2000;
+  while (!ctx.signal?.aborted && Date.now() < deadline) {
+    await setTimeout(100);
+    if (registered()) return "registered";
+  }
+  return "configured-no-tools";
 }
 
 function magpieCatalogue(servers: Map<string, SessionMcpTool[]>) {
@@ -114,6 +144,7 @@ function githubMatches(tool: SessionMcpTool, spec: {methods: string[]; combined?
 }
 
 function githubServer(server: string, tools: SessionMcpTool[]) {
+  if (server === "t3-code" || server === "t3_code") return false;
   return /github/i.test(server) || tools.some(tool => tool.method.startsWith("github__") ||
     ["get_file_contents", "issue_read", "pull_request_read", "get_pull_request", "get_pull_request_diff", "get_pr_diff"].includes(tool.method));
 }

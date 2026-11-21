@@ -1,4 +1,4 @@
-import { boundT3Worktree, inspectT3, t3SessionTools } from "../integrations/t3.ts";
+import { boundT3Worktree, inspectT3, t3ForgeSessionTools, t3SessionTools } from "../integrations/t3.ts";
 import { githubHandoffTools } from "../integrations/github-handoff.ts";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -9,7 +9,7 @@ import { formatModelConfig, getSupportedThinkingLevels, legacyPersonalModelPath,
   readModelConfig, resolveModel, reviewerModel, type ModelRoutes } from "../models/config.ts";
 import { defaultModelPolicy, legacyProjectModelPath, modelSettingsPath, projectModelPath, projectModelPolicy, projectModelsFile } from "../models/storage.ts";
 import { probeSubagents } from "../review/subagent-probe.ts";
-import { inspectMcpCapabilities } from "../integrations/mcp-catalog.ts";
+import { inspectMcpCapabilities, waitForMagpieCatalogue } from "../integrations/mcp-catalog.ts";
 import { git } from "../taskbook/document.ts";
 
 type Status = "ready" | "missing" | "invalid" | "unconfirmed";
@@ -247,7 +247,9 @@ export async function collectSetup(pi: ExtensionAPI, ctx: ExtensionContext) {
   let root: string | undefined;
   try { root = git(ctx.cwd, "rev-parse", "--show-toplevel"); } catch { }
   const installed = subagentManifests(pi, ctx);
-  const [probe, t3] = await Promise.all([probeSubagents(pi).catch(() => null), inspectT3()]);
+  const [probe, t3, magpieCatalogue] = await Promise.all([
+    probeSubagents(pi).catch(() => null), inspectT3(), waitForMagpieCatalogue(pi, ctx, root),
+  ]);
   let mismatch = false;
   if (t3.binding?.attached) {
     try { root = boundT3Worktree(ctx.cwd, t3.binding)?.root; }
@@ -264,10 +266,11 @@ export async function collectSetup(pi: ExtensionAPI, ctx: ExtensionContext) {
   const availability = {
     subagents: {builtinSdk: runtime.status, installedVersions: [...new Set(installed.flatMap(item => item.version ? [item.version] : []))],
       externalRpcResponded: runtime.externalRpcResponded, rpcVersion: runtime.legacyReviewTransport},
-    t3: {sessionTools: t3SessionTools(pi).map(tool => tool.name), directTransport: t3.transport, reason: t3.reason,
+    t3: {sessionTools: t3SessionTools(pi), directTransport: t3.transport, reason: t3.reason,
       taskbookNew: t3.worktree && Boolean(root), taskbookHandoff: t3.handoff && Boolean(root) && t3.binding !== undefined},
     github: {read: Object.entries(mcp.github.read).filter(([, value]) => value.status === "discovered").map(([name]) => name),
-      pullRequestDeliveryTools: pullRequestDelivery.tools, repositoryAccess: "not-tested"},
+      t3Tools: t3ForgeSessionTools(pi), pullRequestDeliveryTools: pullRequestDelivery.tools, repositoryAccess: "not-tested"},
+    magpieCatalogue: Object.hasOwn(mcp.magpie.byService, "magpie") ? "registered" : magpieCatalogue,
     magpieMemory: {tools: Object.entries(mcp.magpie.capabilities).filter(([, value]) => value.status === "discovered").map(([name]) => name),
       access: "not-tested"},
   };
