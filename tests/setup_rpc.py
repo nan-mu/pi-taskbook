@@ -29,6 +29,7 @@ def run_mcp_fixture(path, profile):
         "forge": ["get_file_contents", "search_issues", "pull_request_read", "issue_write", "add_issue_comment"],
         "reduced-memory": ["memory_context", "memory_search", "memory_save"],
         "reduced-forge": ["get_pr_diff", "get_pull_request", "create_issue"],
+        "t3-code": ["t3_thread_launch", "t3_worktree_handoff", "t3_worktree_status", "t3_worktree_list"],
     }[profile]
     operations = {
         "pull_request_read": ["get", "get_files"],
@@ -181,9 +182,11 @@ def read_repository(root):
     return files, refs
 
 
-def setup_report(repo, root, config, model, mcp_log, profiles):
+def setup_report(repo, root, config, model, mcp_log, profiles, t3_endpoint=None):
     before = read_repository(root)
     env = {"PATH": os.environ["PATH"], "HOME": str(config.parent), "PI_CODING_AGENT_DIR": str(config)}
+    if t3_endpoint:
+        env.update(T3_MCP_URL=t3_endpoint, T3_MCP_BEARER_TOKEN="fixture-token")
     pi = os.getenv("PI_BIN") or shutil.which("pi")
     if not pi:
         raise SystemExit("Set PI_BIN to Pi 1.5.2.")
@@ -221,7 +224,12 @@ def setup_report(repo, root, config, model, mcp_log, profiles):
         assert before == read_repository(root), "Setup changed project files or refs"
         if mcp_log.exists():
             assert not any(line.endswith("tools/call") for line in mcp_log.read_text().splitlines())
-        return json.loads(reports[0].split("\n\n## Runtime diagnostics\n", 1)[1])
+        diagnostics = json.loads(reports[0].split("\n\n## Runtime diagnostics\n", 1)[1])
+        content = request["messages"][-1]["content"]
+        if isinstance(content, list):
+            content = "".join(part.get("text", "") for part in content)
+        assert json.loads(content.split("## Runtime diagnostics\n", 1)[1])["availability"] == diagnostics["availability"]
+        return diagnostics
     finally:
         if process.poll() is None:
             process.terminate()
@@ -268,6 +276,9 @@ def test_setup():
             assert not (root / ".fact/facts.tsv").exists() and not (root / "GLOSSARY.md").exists()
             assert missing["mcp"]["magpie"]["capabilities"]["memory_search"]["status"] == "unconfirmed"
             assert missing["t3"]["status"] == "missing" and not missing["t3"]["worktree"]
+            assert missing["availability"]["t3"]["sessionTools"] == []
+            assert missing["availability"]["t3"]["directTransport"] == "missing"
+            assert missing["availability"]["magpieMemory"]["tools"] == []
 
             models = config.parent / ".agents"
             models.mkdir()
@@ -280,11 +291,22 @@ def test_setup():
             (root / "docs/agents/issue-tracker.md").write_text("Use gh issue create, gh issue comment, and gh issue close.")
             (root / ".audit").mkdir()
             (root / ".audit/unknown.txt").write_text("unclassified material")
-            describe_servers("magpie", "forge")
-            valid = setup_report(repo, root, config, model, mcp_log, ["magpie", "forge"])
+            profiles = ["magpie", "forge", "t3-code"]
+            describe_servers(*profiles)
+            valid = setup_report(repo, root, config, model, mcp_log, profiles, t3_endpoint="https://fixture.invalid/mcp")
             assert valid["readiness"] == {"runnable": True, "taskbookNew": False, "initialized": True, "blockers": []}
             assert valid["models"]["pstack"]["content"] == pstack
             assert valid["legacy"]["status"] == "ready"
+            preflight = valid["availability"]
+            assert {name.rsplit("__", 1)[1] for name in preflight["t3"]["sessionTools"]} == {
+                "t3_thread_launch", "t3_worktree_handoff", "t3_worktree_status", "t3_worktree_list"}
+            assert preflight["t3"]["directTransport"] == "rejected"
+            assert not preflight["t3"]["taskbookNew"] and not preflight["t3"]["taskbookHandoff"]
+            assert "fixture.invalid" not in str(valid)
+            assert preflight["github"]["repositoryAccess"] == "not-tested"
+            assert "pullRequestMetadata" in preflight["github"]["read"]
+            assert preflight["magpieMemory"]["access"] == "not-tested"
+            assert set(preflight["magpieMemory"]["tools"]) == {"memory_context", "memory_search", "memory_save", "memory_forget"}
             assert any(item["path"] == ".audit/unknown.txt" for item in valid["repository"]["audit"]["unresolved"])
             assert all(item["status"] == "discovered" for item in valid["mcp"]["magpie"]["capabilities"].values()), valid["mcp"]
             github = valid["mcp"]["github"]

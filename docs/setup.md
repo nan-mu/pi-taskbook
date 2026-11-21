@@ -57,15 +57,15 @@ Fact Management 使用执行任务的 Pi 主会话模型和档位。
 
 ## 解读 setup 报告
 
-`/taskbook-setup` 一次收集当前会话与仓库的数据。报告阶段只使用当次采集结果。
+`/taskbook-setup` 在调用模型前检查当前 Pi 会话。插件读取工具目录，向已加载的子代理插件发出 RPC ping，并对 T3 直接接口做只读检查。模型根据结果生成报告。
 
 | 检查项 | 如何解读 |
 | --- | --- |
 | `readiness.runnable` | 当前模型和仓库满足已有 worktree 的任务配置条件。详细缺项见 `blockers`。 |
 | `readiness.taskbookNew` | 上述条件满足，且当前 Pi 会话发现 T3 的托管 worktree 参数。T3 在实际请求时校验权限和基线。 |
 | `readiness.initialized` | 已有有效的角色模型配置。缺少角色配置时仍可使用入口模型回退。 |
-| `subagents` | 安装版本和当前 RPC 响应分别报告。 |
-| `mcp` | Magpie 和 GitHub 在 Pi 工具目录中发现的能力。工具注册状态与调用权限分别核对。 |
-| `t3` | 使用当前会话的 T3 MCP 上下文只读检查 `t3_thread_launch` 及托管 worktree 参数。 |
+| `availability.subagents` | 区分内置 SDK 加载、已安装版本和当前 RPC 回应。 |
+| `availability.github` 和 `availability.magpieMemory` | 列出当前会话发现的能力。仓库访问和远端权限留待实际任务核对。 |
+| `availability.t3` | 分开报告 Pi 工具注册情况、插件的 T3 直接接口和两个命令的预检结果。 |
 
 使用 `/taskbook-new` 时，从 T3 启动的 Pi 会话运行 setup。T3 为该会话注入 MCP 上下文，并管理 worktree 路径。已有 linked worktree 可以使用 `/taskbook` 独立运行。

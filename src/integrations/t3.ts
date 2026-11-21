@@ -1,4 +1,5 @@
 import { realpathSync } from "node:fs";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type Static, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { git } from "../taskbook/document.ts";
@@ -9,6 +10,7 @@ const launchTool = "t3_thread_launch";
 const statusTool = "t3_worktree_status";
 const listTool = "t3_worktree_list";
 const handoffTool = "t3_worktree_handoff";
+const workspaceTools = [launchTool, statusTool, listTool, handoffTool];
 const nullable = Type.Union([Type.String(), Type.Null()]);
 const bindingSchema = Type.Object({attached: Type.Boolean(), worktreePath: nullable, branch: nullable,
   projectWorkspaceRoot: Type.String(), defaultStartFromOrigin: Type.Boolean()});
@@ -111,7 +113,7 @@ async function discoverTools(rpc: Awaited<ReturnType<typeof connectT3>>) {
     if (typeof page !== "object" || page === null || !("tools" in page) || !Array.isArray(page.tools)) {
       throw new Error("T3 工具目录格式无效。");
     }
-    for (const tool of page.tools) if ([launchTool, statusTool, listTool, handoffTool].includes(tool?.name)) tools.set(tool.name, tool.inputSchema);
+    for (const tool of page.tools) if (workspaceTools.includes(tool?.name)) tools.set(tool.name, tool.inputSchema);
     cursor = "nextCursor" in page && typeof page.nextCursor === "string" ? page.nextCursor : undefined;
     if (cursor) {
       if (seen.has(cursor) || seen.size >= 9) throw new Error("T3 工具目录未完整读取。");
@@ -162,22 +164,36 @@ export async function readT3Workspace(cwd: string) {
 }
 
 export async function inspectT3() {
+  const gate = {tool: launchTool, worktree: false, handoff: false};
   const impact = "/taskbook-new 启动独立线程，/taskbook-handoff 迁移当前 T3 线程。普通 Pi 中可在已有 linked worktree 使用 /taskbook。";
   if (!process.env.T3_MCP_URL || !process.env.T3_MCP_BEARER_TOKEN) {
-    return { status: "missing", tool: launchTool, worktree: false, handoff: false,
+    return { ...gate, status: "missing", transport: "missing",
       reason: "当前 Pi 会话缺少 T3 注入的 MCP 上下文。", impact };
   }
+  let endpoint;
+  try { endpoint = readT3Endpoint(); }
+  catch {
+    return {...gate, status: "unconfirmed", transport: "rejected",
+      reason: "会话注入的 T3 端点不符合插件的本地 HTTP 接入条件。", impact};
+  }
   try {
-    const rpc = await connectT3(readT3Endpoint());
+    const rpc = await connectT3(endpoint);
     const tools = await discoverTools(rpc);
     const worktree = hasWorktreeStrategy(tools.get(launchTool));
     const handoff = tools.has(statusTool) && tools.has(listTool) && canHandoff(tools.get(handoffTool));
     const binding = tools.has(statusTool) ? await callT3(rpc, statusTool, {}, bindingSchema).catch(() => undefined) : undefined;
-    return {status: worktree ? "discovered" : tools.has(launchTool) ? "unconfirmed" : "missing", tool: launchTool, worktree,
+    return {status: worktree ? "discovered" : tools.has(launchTool) ? "unconfirmed" : "missing", transport: "responding", tool: launchTool, worktree,
       handoff, binding, reason: tools.has(launchTool) && !worktree ? "工具已注册，但目录未确认托管 worktree 参数。" : undefined, impact};
   }
-  catch { return { status: "unconfirmed", tool: launchTool, worktree: false, handoff: false,
-    reason: "无法只读核对 T3 MCP 工具目录。", impact }; }
+  catch { return { ...gate, status: "unconfirmed", transport: "unavailable",
+    reason: "插件未能通过 T3 直接接口取得工具目录。", impact }; }
+}
+
+export function t3SessionTools(pi: ExtensionAPI) {
+  return pi.getAllTools().flatMap(tool => {
+    const match = /^mcp__t3[-_]code__(t3_\w+)$/u.exec(tool.name);
+    return tool.exposure !== "hidden" && match && workspaceTools.includes(match[1]) ? [{name: tool.name, exposure: tool.exposure}] : [];
+  });
 }
 
 export async function launchT3Thread(args: {

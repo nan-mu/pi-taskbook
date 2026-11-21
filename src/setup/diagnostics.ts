@@ -1,4 +1,4 @@
-import { boundT3Worktree, inspectT3 } from "../integrations/t3.ts";
+import { boundT3Worktree, inspectT3, t3SessionTools } from "../integrations/t3.ts";
 import { githubHandoffTools } from "../integrations/github-handoff.ts";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -254,22 +254,34 @@ export async function collectSetup(pi: ExtensionAPI, ctx: ExtensionContext) {
     catch { mismatch = true; root = undefined; }
   }
   const models = modelSetup(ctx, root);
-  const runtime = {status: "ready", mode: "独立 Pi SDK 会话", legacyReviewTransport: probe?.responding ? probe.protocol : null};
+  const runtime = {status: "loaded", mode: "独立 Pi SDK 会话", externalRpcResponded: probe?.responding === true,
+    legacyReviewTransport: probe?.protocol ?? null};
   const subagents = { installed, runtime, testedPackageVersions };
   const github = githubHandoffTools(pi);
   const pullRequestDelivery = {transport: "Magpie GitHub MCP", tools: [...github.keys()],
     scope: "Session tool discovery. Handoff verifies repository access when it previews publication."};
+  const mcp = inspectMcpCapabilities(pi, root && workflowDeclaration(root));
+  const availability = {
+    subagents: {builtinSdk: runtime.status, installedVersions: [...new Set(installed.flatMap(item => item.version ? [item.version] : []))],
+      externalRpcResponded: runtime.externalRpcResponded, rpcVersion: runtime.legacyReviewTransport},
+    t3: {sessionTools: t3SessionTools(pi).map(tool => tool.name), directTransport: t3.transport, reason: t3.reason,
+      taskbookNew: t3.worktree && Boolean(root), taskbookHandoff: t3.handoff && Boolean(root) && t3.binding !== undefined},
+    github: {read: Object.entries(mcp.github.read).filter(([, value]) => value.status === "discovered").map(([name]) => name),
+      pullRequestDeliveryTools: pullRequestDelivery.tools, repositoryAccess: "not-tested"},
+    magpieMemory: {tools: Object.entries(mcp.magpie.capabilities).filter(([, value]) => value.status === "discovered").map(([name]) => name),
+      access: "not-tested"},
+  };
   if (!root) {
     return { models, subagents, t3, pullRequestDelivery, repository: { status: "unconfirmed", reason: mismatch ?
       "T3 工作区绑定与本地仓库不一致。" : "当前目录没有可核对的 Git 工作区。" },
-      mcp: inspectMcpCapabilities(pi), readiness: { runnable: false, taskbookNew: false, initialized: false, blockers: [mismatch ? "worktreeBinding" : "repository"] } };
+      mcp, availability, readiness: { runnable: false, taskbookNew: false, initialized: false, blockers: [mismatch ? "worktreeBinding" : "repository"] } };
   }
   const audit = auditSetup(root);
   const blockers = ["ready", "fallback"].includes(models.effective.status) ? [] : ["modelRoutes"];
   return {
     models, subagents, t3, pullRequestDelivery,
     repository: { status: "ready", root, audit },
-    mcp: inspectMcpCapabilities(pi, workflowDeclaration(root)),
+    mcp, availability,
     readiness: {
       runnable: !blockers.length,
       taskbookNew: !blockers.length && t3.worktree,

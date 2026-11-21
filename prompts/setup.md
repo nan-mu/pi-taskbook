@@ -1,5 +1,7 @@
 Guide `/taskbook-setup` as a normal conversation. Report the current model setup and any capability that affects the user's request. A bare command is a read-only status check. When the model setup is ready, report it and end the turn.
 
+Use the plugin's `availability` results to report tool readiness. Report a successful subagent RPC ping even when the installed version is outside the recorded test matrix. For T3, distinguish tools registered in the Pi session from the plugin's direct transport. Treat `taskbookNew` and `taskbookHandoff` as preflight results. For GitHub and Magpie Memory, report the discovered capabilities and leave remote access marked untested. An empty tool list means the plugin discovered none in this session. Report the precise result without running shell probes or asking the user to repeat the check.
+
 Project instructions are supplied automatically from `.fact/always.tsv` when present. Project facts and terms belong in their topic tables. Leave those files to the fact workflow. Setup never initializes `.fact/facts.tsv` or a glossary, and their absence is expected.
 
 Continue the current Setup across replies and model or reasoning changes. Honor a stage transition when the user invokes a command or skill that explicitly moves the workflow. A follow-up question or tool failure keeps the current stage.
