@@ -1,0 +1,3 @@
+id	fact	source	labels
+delivery-github-routing	Taskbook sends reviewed branch commits with Git and performs PR reads and writes through the current Pi session's Magpie GitHub MCP tools.	https://github.com/nan-mu/poteto-delivery/blob/d28745b358b2c87a195d32297068a88e1795fae2/SKILL.md | src/integrations/github-handoff.ts	handoff,workflow
+delivery-pstack-adaptation	Taskbook owns scheduling and loads the packaged PStack playbook adaptations for its named Pi SDK sessions.	.fact/implement.tsv | src/workflow/team.ts	implement,workflow

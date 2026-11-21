@@ -1,0 +1,1 @@
+Answer the recorded question using the supplied facts and evidence. Return a decision within the Designer's authority with its basis and any reusable draft facts. Report `needs-user` with the relevant fact or requirement when resolving it requires user authority.

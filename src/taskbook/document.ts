@@ -91,10 +91,12 @@ export function gitOk(cwd: string, ...args: string[]) {
 }
 
 export function repositoryIdentity(root: string) {
-  let origin: string;
-  try { origin = git(root, "remote", "get-url", "origin"); }
+  try { return githubRepository(git(root, "remote", "get-url", "origin")); }
   catch { return; }
-  return origin.match(/^(?:https?:\/\/(?:[^/@]+@)?github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)([\w.-]+\/[\w.-]+)$/i)?.[1]
+}
+
+export function githubRepository(remote: string) {
+  return remote.match(/^(?:https?:\/\/(?:[^/@]+@)?github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)([\w.-]+\/[\w.-]+)$/i)?.[1]
     ?.replace(/\.git$/i, "").toLowerCase();
 }
 

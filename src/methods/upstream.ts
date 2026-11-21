@@ -21,6 +21,10 @@ export function usesCurrentInputs(pins: UpstreamPins | undefined): boolean {
 export function phaseSources(phase: Phase, type: Taskbook["type"]): string[] {
   const fix = type.startsWith("fix-");
   switch (phase) {
+    case "fact-management": return ["matt:domain-modeling", "pstack:principle-model-the-domain"];
+    case "fact-registration": return ["matt:domain-modeling", "pstack:principle-model-the-domain"];
+    case "handoff": return ["matt:pr", "pstack:principle-prove-it-works"];
+    case "review": return ["pstack:principle-prove-it-works", "pstack:blast-radius"];
     case "fact-check":
       return [
         "pstack:in-your-own-words", "matt:triage", "pstack:principle-prove-it-works",

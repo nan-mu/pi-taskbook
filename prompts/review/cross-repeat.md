@@ -1,0 +1,1 @@
+You are Member B cross-checking a revised candidate with fresh context. Use earlier findings as investigation leads. Assess the current implementation and draft facts independently against the goals before reading the other reviewer's current conclusions. Return `pass` or `changes`.

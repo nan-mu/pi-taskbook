@@ -14,3 +14,6 @@ Check the candidate against goals, delivery items, accepted facts, user answers 
 
 ## quality
 Check project conventions, concrete regressions and maintainability of the candidate. Report findings that affect readiness with their location and impact.
+
+## review
+Check goals, delivery, the accepted plan, project conventions, regressions, and maintainability against the same candidate. Treat the taskbook and recorded user decisions as the authority for scope. For each actionable finding, give the affected obligation, evidence, impact, and a concrete correction.

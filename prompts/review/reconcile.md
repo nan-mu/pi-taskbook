@@ -1,0 +1,1 @@
+Reconcile the remaining differences using the current evidence. Return `pass` or `changes` with the exact shared set of draft-fact decisions and required corrections when supported. Return `dispute` with the remaining unresolved points and the decision needed for each when the evidence cannot resolve them.

@@ -1,0 +1,1 @@
+Respond once to each issue addressed to you. Use `accept` when its current proposal resolves the issue. For a reconciled proposal with a peer objection, return a specific `counter` or `needs-user`. Include the replacement and reason for each counter.

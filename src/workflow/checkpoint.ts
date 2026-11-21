@@ -15,6 +15,11 @@ import { loadUpstreamInputs, pinUpstreamInputs, usesCurrentInputs, type Upstream
 import { inspectAuditMigration } from "../setup/audit-migration.ts";
 import { ensureRunDirectory, runDirectory } from "./run-paths.ts";
 import { restorePhase, stages, type Outcome, type Phase } from "./transitions.ts";
+import type { IntakeConflict, IntakeDecision } from "../facts/taskbook-intake.ts";
+import type { TaskItem } from "./task-context.ts";
+import { isArchiveRemoval } from "./design-archive.ts";
+import type { Team } from "./team.ts";
+import type { Publication, PublicationReceipt } from "./publication.ts";
 
 export type RunObservation = { revision: string; toolName: string; toolCallId: string; input: unknown; isError: boolean; observed: string };
 export type Report = { planVersion?: number; plan?: ExecutionPlan; gap?: PlanGap; model?: string; phase: Phase; outcome: Outcome; summary: string; evidence: string[];
@@ -39,6 +44,7 @@ type State = {
   pendingQuestion?: { question: string };
   userAnswers?: { question: string; answer: string }[];
   designActions?: { kind: "consult" | "experiment"; version: number; request: unknown; result: unknown }[];
+  designConsult?: {question: string; methods: string[]};
   candidateId?: string;
   pendingConflicts?: FactConflict[];
   decisions?: (FactDecision & { conflict: FactConflict; session: string; at: string; projectChange?: MemoryChange })[];
@@ -50,8 +56,18 @@ type State = {
   stopReason?: string;
   approvedProjectHead?: string | null;
   sync?: CompletedSync;
+  taskFacts?: TaskItem[];
+  intakeConflicts?: IntakeConflict[];
+  intakeDecisions?: IntakeDecision[];
+  intakeVersion?: {topics: string; project: string | null};
+  topicFactsHead?: string;
+  factBase?: string;
   revision?: string;
+  deliveryRevision?: string;
+  publication?: Publication;
+  publications?: PublicationReceipt[];
   upstream?: UpstreamPins;
+  team?: Team;
   reports: Report[];
 };
 export type Run = { task: Taskbook; path: string; root: string; state: State };
@@ -73,15 +89,16 @@ export function checkpoint(run: Run, next: State) {
   run.state = next;
 }
 
-export function openRun({ ctx, task, promptDigest, prepared }: {
+export function openRun({ ctx, cwd = ctx.cwd, task, promptDigest, prepared }: {
   ctx: ExtensionContext;
+  cwd?: string;
   task: Taskbook;
   promptDigest: string;
   prepared?: PreparedEntry;
 }): Run {
   const session = ctx.sessionManager.getSessionId();
   if (!ctx.sessionManager.getSessionFile()) throw new Error("请在有持久会话记录的 Pi thread 中启动任务。");
-  const preliminary = verifyPreparedEntry(ctx.cwd, task, prepared);
+  const preliminary = verifyPreparedEntry(cwd, task, prepared);
   const key = task.id + "-" + task.digest.slice(0, 16);
   const path = join(runDirectory(preliminary.root), key, "state.json");
   if (!existsSync(path) && lstatSync(join(preliminary.root, ".audit/pi-taskbook", key, "state.json"), {throwIfNoEntry: false})) {
@@ -110,7 +127,7 @@ export function openRun({ ctx, task, promptDigest, prepared }: {
     phase: saved.phase === "exit" ? "exit" : restorePhase(task.type, saved.phase),
     reports: saved.reports.map(report => ({ ...report, phase: restorePhase(task.type, report.phase) })),
   };
-  workspace(ctx.cwd, task, state.base, state.branch);
+  workspace(cwd, task, state.base, state.branch);
   if (saved.version === 1) {
     if (state.reports.some(report => report.phase === "fact-review" && report.outcome === "pass") ||
         [...(state.pendingConflicts ?? []), ...(state.decisions ?? [])].some(item => item.factId.startsWith("project:"))) {
@@ -119,33 +136,43 @@ export function openRun({ ctx, task, promptDigest, prepared }: {
     }
     save(path, state, task);
   }
-  if ((state.phase !== "exit" || state.exit === "ready") && (saved.version < 3 || !state.reviewPolicy || state.promptDigest !== promptDigest || !usesCurrentInputs(state.upstream))) {
+  if ((state.phase !== "exit" || (state.exit === "ready" && !state.team?.handoff)) &&
+      (saved.version < 3 || !state.reviewPolicy || state.promptDigest !== promptDigest || !usesCurrentInputs(state.upstream))) {
     const upstream = pinUpstreamInputs();
-    loadUpstreamInputs(upstream, "fact-check", task.type);
-    Object.assign(state, { reviewPolicy: 1, promptDigest, upstream, phase: "fact-check", cycleStart: state.reports.length,
+    loadUpstreamInputs(upstream, stages[0], task.type);
+    Object.assign(state, { reviewPolicy: 1, promptDigest, upstream, phase: stages[0], cycleStart: state.reports.length,
       exit: undefined, revision: undefined, candidateId: undefined, plan: undefined, approvedProjectHead: undefined, sync: undefined,
-      planGap: undefined, designActions: undefined });
+      planGap: undefined, designActions: undefined, designConsult: undefined, topicFactsHead: undefined, taskFacts: undefined, team: undefined });
     save(path, state, task);
   }
   const active = { task, root: preliminary.root, path, state };
   if (state.approvedProjectHead !== undefined && state.approvedProjectHead !== readProjectMemory(active.root).head) {
     throw new Error("当前 .fact 与检查点中已独立审核的版本不同。核对已接受的项目事实版本，恢复该版本后重试，或使用新 Taskbook ID 重新核查。");
   }
-  if (state.exit === "ready" && state.revision !== cleanRevision(active)) {
+  const head = state.exit === "ready" ? cleanRevision(active) : undefined;
+  const deliveryHead = head && matchesDeliveryHead(active, head);
+  if (state.exit === "ready" && !deliveryHead) {
+    if (state.team) throw new Error("这个任务已经交付，当前提交已变化。请为后续变更使用新的 Taskbook ID。");
     checkpoint(active, { ...state, phase: "implement", exit: undefined, revision: undefined, candidateId: undefined, sync: undefined });
-  } else if (state.exit === "ready" && (state.reports.findLast(r => r.phase === "quality")?.projectHead ?? null) !== readProjectMemory(active.root).head) {
-    checkpoint(active, {...state, phase: "correctness", exit: undefined, sync: undefined});
+  } else if (state.exit === "ready" && (state.reports.findLast(r => r.phase === "review" || r.phase === "quality")?.projectHead ?? null) !== readProjectMemory(active.root).head) {
+    checkpoint(active, {...state, phase: state.taskFacts ? "review" : "correctness", exit: undefined, sync: undefined});
   }
   if (!active.state.routes) {
     const routes = modelRoutes(ctx, readModelConfig(modelConfigPaths(active.root)));
     for (const key of new Set(modelRoles.map(role => routes[role]))) if (key) resolveModel(ctx, key);
     checkpoint(active, {...active.state, routes});
   }
-  if (!active.state.plan && (["implement", "performance", "correctness", "quality"].includes(active.state.phase) ||
+  if (!active.state.plan && (["implement", "performance", "correctness", "quality", "review", "fact-registration", "handoff"].includes(active.state.phase) ||
     active.state.exit === "ready")) {
     checkpoint(active, {...active.state, phase: "design", exit: undefined, revision: undefined, candidateId: undefined});
   }
   return active;
+}
+
+export function matchesDeliveryHead(run: Run, head: string) {
+  const {state, root, task} = run;
+  const reviewed = state.team?.registered?.revision ?? state.revision;
+  return reviewed !== undefined && (head === reviewed || isArchiveRemoval(root, task, reviewed, head));
 }
 
 export function cleanRevision(run: Run) {

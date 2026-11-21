@@ -241,6 +241,20 @@ export function applyApprovedMemory(root: string, snapshot: ProjectSnapshot, tas
     if (use !== "independent" && use !== "change-evidence") throw new Error("事实审核须逐项确定独立观察或变更证据。");
     return use === "independent";
   });
+  const document = prepareProjectChanges(snapshot, task, base, changes, review.sessionId, proposals, ordinary, review.items);
+  return commitProjectMemory(root, snapshot, document, "Review project facts · " + task.id, document.modified);
+}
+
+export function commitTaskbookMemory(root: string, snapshot: ProjectSnapshot, task: Taskbook, base: string,
+  changes: MemoryChange[], sessionId: string, topics: Map<string, string>, validate: () => void) {
+  const document = prepareProjectChanges(snapshot, task, base, changes, sessionId);
+  const message = "Import taskbook facts · " + task.id + "\n\nTaskbook-Input: " + task.digest;
+  return commitProjectMemory(root, snapshot, document, message, document.modified, undefined, {mutations: topics, validate});
+}
+
+function prepareProjectChanges(snapshot: ProjectSnapshot, task: Pick<Taskbook, "repository" | "id" | "digest">,
+  base: string, changes: MemoryChange[], sessionId: string, proposals: CheckedFact[] = [], ordinary: CheckedFact[] = [],
+  items: ReviewReceipt["items"] = []) {
   const records = { ...snapshot.records };
   const applied = { ...snapshot.applied };
   let modified = false;
@@ -248,7 +262,7 @@ export function applyApprovedMemory(root: string, snapshot: ProjectSnapshot, tas
     throw new Error("项目事实文件包含归属不同项目的记录，请核对 .fact。");
   }
   const source = { repository: task.repository, taskId: task.id, taskDigest: task.digest, base,
-    reviewSession: review.sessionId, evidence: proposals.map((p, i) => "P" + (i + 1) + " · " + p.origin + "\n摘录 SHA-256 " + hash(p.observed)) };
+    reviewSession: sessionId, evidence: proposals.map((p, i) => "P" + (i + 1) + " · " + p.origin + "\n摘录 SHA-256 " + hash(p.observed)) };
   for (const [index, change] of changes.entries()) {
     const id = memoryId(change.kind, change.key);
     const mutation = hash(JSON.stringify([task.digest, change]));
@@ -256,7 +270,7 @@ export function applyApprovedMemory(root: string, snapshot: ProjectSnapshot, tas
     const prior = records[id];
     validateChange(records, change);
     const sharedSince = prior?.sharedSince ?? (sharedScopes.has(change.scope) && change.action !== "delete" ? change.expected + 1 : undefined);
-    const rationale = review.items.find(i => i.id === "M" + (index + 1))?.reason;
+    const rationale = items.find(i => i.id === "M" + (index + 1))?.reason;
     const type = change.type ?? prior?.type;
     const factId = change.factId ?? prior?.source.factId;
     records[id] = { kind: change.kind, ...(type ? {type} : {}), key: change.key, version: change.expected + 1, scope: change.scope, ...(prior ? {history: [...(prior.history ?? []), priorValue(prior)]} : {}), ...(sharedSince ? {sharedSince} : {}),
@@ -284,7 +298,7 @@ export function applyApprovedMemory(root: string, snapshot: ProjectSnapshot, tas
       source: { ...source, observationFingerprint: fp, evidence: [proposal.origin + "\n摘录 SHA-256 " + hash(proposal.observed)] } };
     modified = true;
   }
-  return commitProjectMemory(root, snapshot, {schema: 1, records, applied}, "Review project facts · " + task.id, modified);
+  return {schema: 1 as const, records, applied, modified};
 }
 
 function replaceFile(path: string, text: string) {
@@ -320,7 +334,7 @@ export function lockProjectMemory(root: string) {
 }
 
 export function commitProjectMemory(root: string, snapshot: ProjectSnapshot, document: ProjectDocument, message: string, modified = true,
-  migration?: {projectJsonVersion?: string}) {
+  migration?: {projectJsonVersion?: string}, extra?: {mutations: Map<string, string>; validate: () => void}) {
   const unlock = lockProjectMemory(root);
   try {
     const options = {allowUnmigratedLegacy: migration !== undefined};
@@ -330,30 +344,34 @@ export function commitProjectMemory(root: string, snapshot: ProjectSnapshot, doc
     if (migration?.projectJsonVersion !== undefined && readLegacyProjectJson(root)?.revision !== migration.projectJsonVersion) {
       throw new Error("旧 JSON 版本已变化，请重新盘点。");
     }
-    if (!modified) return snapshot;
-    const content = formatProjectTsv(document);
-    parseProjectTsv(content);
-    const mutations = new Map([[projectFactsPath, content]]);
-    if (Object.values(document.records).some(record => record.kind === "term")) {
+    extra?.validate();
+    const mutations = new Map(extra?.mutations);
+    if (modified) {
+      const content = formatProjectTsv(document);
+      parseProjectTsv(content);
+      mutations.set(projectFactsPath, content);
+    }
+    if (modified && Object.values(document.records).some(record => record.kind === "term")) {
       const glossary = projectGlossaryPath(root);
       const previous = regularFile(root, glossary);
       const next = synchronizeGlossary(previous, document.records);
       if (next !== previous) mutations.set(glossary, next);
     }
-    const paths = [...mutations.keys()];
+    const paths = [...mutations.keys()].filter(path => regularFile(root, path) !== mutations.get(path));
+    if (!paths.length) return snapshot;
     const untracked = new Set(git(root, ["ls-files", "--others", "--exclude-standard", "-z", "--", ...paths]).split("\0"));
     const previous = new Map(paths.map(path => [path, regularFile(root, path)]));
     for (const path of paths) {
       const status = git(root, ["status", "--porcelain", "--untracked-files=all", "--ignored", "--", path]);
-      if (status && !untracked.has(path)) throw new Error("请先处理已修改或被排除的项目事实文件：" + path);
+      if (status && (extra?.mutations.has(path) || !untracked.has(path))) throw new Error("请先处理已修改或被排除的项目事实文件：" + path);
     }
     const revision = git(root, ["rev-parse", "HEAD"]);
     const plannedAdds = paths.filter(path => untracked.has(path) || previous.get(path) === undefined);
     try {
-      for (const [path, body] of mutations) {
+      for (const path of paths) {
         const absolute = join(root, path);
         mkdirSync(dirname(absolute), {recursive: true});
-        replaceFile(absolute, body);
+        replaceFile(absolute, mutations.get(path)!);
       }
       if (plannedAdds.length) git(root, ["add", "-N", "--", ...plannedAdds]);
       git(root, ["-c", "user.name=Pi Taskbook", "-c", "user.email=pi-taskbook@localhost", "-c", "commit.gpgsign=false",

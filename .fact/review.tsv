@@ -1,0 +1,9 @@
+id	fact	source	labels
+review-input-version	The plugin binds review tools and receipts to the current candidate and round. Review prompt input includes the taskbook Goal, and agents retrieve additional evidence through tools.	User workflow design decisions	review,workflow
+review-initial-turn	Member Designer A starts with Initial Review and returns either changes requested or permission to cross-check.	User workflow design decisions	review,prompts
+review-cross-check-turn	Member Designer B performs cross-check after Member Designer A permits it.	User workflow design decisions	review,prompts
+review-reconcile-turn	The Member Designers respond and reconcile disagreements. The Lead Designer receives their conclusion or unresolved evidence and signs the decision before the plugin redirects work.	Taskbook state machine design	review,workflow
+review-agreed-pass	The Lead Designer issues the final Review decision after both Member Designers confirm the current material and resolve their findings.	User workflow design decisions	review,workflow,facts
+review-context-handoff	Before dispatching a cross-check, the plugin compacts Member Designer B's context and removes irrelevant facts, skills, and planning history. It then injects the current Review prompt, goal and review tools.	User workflow design decisions	review,prompts
+review-fact-lookup	A Review skill directs agents to query facts by tags for draft status, taskbook provenance, or producing Work State when they need those facts.	User workflow design decisions	review,prompts,facts
+review-rework-version	An Implementer rework result returns to Initial Review. Cross-check for the revised candidate starts after its Initial Review passes.	User workflow design decisions	review,workflow

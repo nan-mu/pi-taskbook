@@ -1,0 +1,1 @@
+Read your draft and both peer drafts. Return one `reviews` entry for each peer. In each `changes` list, cite the Goal or Facts passage, give the exact proposed change, and explain its effect. Use an empty list when the peer draft needs no changes.

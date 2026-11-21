@@ -4,7 +4,7 @@ import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-ag
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import { projectModelPath, projectModelStorage, settingsFile, type ModelStorage } from "./storage.ts";
 
-export const modelRoles = ["design", "implement", "consult", "factCheck", "performance", "review", "factReview", "correctness", "quality"] as const;
+export const modelRoles = ["design", "designMemberA", "designMemberB", "implement", "consult", "factCheck", "performance", "review", "factReview", "correctness", "quality"] as const;
 export type ModelRole = typeof modelRoles[number];
 export type ModelConfig = Partial<Record<ModelRole, string>>;
 type ThinkingLevel = ExtensionContext["thinkingLevel"];
@@ -164,7 +164,8 @@ export function reviewerModel(routes: ModelRoutes, phase: "fact-review" | "corre
 export function roleSelection(ctx: ExtensionContext, root: string, pinned: ModelRoutes, role: ModelRole): RoleSelection {
   const paths = modelConfigPaths(root);
   const routes = paths.storage ? modelRoutes(ctx, readModelConfig(paths), pinned.initial, pinned.initialThinking) : pinned;
-  const fallback = role === "consult" ? "design" : role === "factReview" || role === "correctness" || role === "quality" ? "review" : undefined;
+  const fallback = role === "consult" ? "design" : role === "factReview" || role === "correctness" || role === "quality" ||
+    role === "designMemberA" || role === "designMemberB" ? "review" : undefined;
   const model = resolveModel(ctx, routes[role] ?? (fallback ? routes[fallback] : undefined) ?? routes.initial);
   const thinking = routes.levels?.[role] ?? (fallback && !routes[role] ? routes.levels?.[fallback] : undefined);
   return {model, thinkingLevel: thinking ?? clampThinkingLevel(routes.initialThinking ?? ctx.thinkingLevel, getSupportedThinkingLevels(model))};

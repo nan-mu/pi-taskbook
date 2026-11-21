@@ -1,4 +1,5 @@
-import { inspectT3 } from "../integrations/t3.ts";
+import { boundT3Worktree, inspectT3 } from "../integrations/t3.ts";
+import { githubHandoffTools } from "../integrations/github-handoff.ts";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
@@ -49,9 +50,10 @@ function effectiveRoutes(routes: ModelRoutes) {
 function configuredRoles(routes: ModelRoutes) {
   return {
     design: routes.design,
+    designMemberA: routes.designMemberA ?? routes.review,
+    designMemberB: routes.designMemberB ?? routes.review,
     implement: routes.implement,
     consult: routes.consult ?? routes.design,
-    factCheck: routes.factCheck ?? routes.initial,
     performance: routes.performance ?? routes.initial,
     review: routes.review,
     factReview: reviewerModel(routes, "fact-review"),
@@ -91,6 +93,7 @@ function modelSetup(ctx: ExtensionContext, root?: string) {
     } catch { return {...file, status: "invalid"}; }
   };
   const detailsForSelection = {catalog, selectedAvailable: Boolean(selected), entryThinking: ctx.thinkingLevel, pstack: pstackSetup(),
+    factManagement: {session: "main", model: selectedKey ?? null, thinking: ctx.thinkingLevel},
     sources: {personal: inspect(personalModelPath()), project: root && (() => {
       try { return {...inspect(projectModelPath(root)), stagedOrTracked: Boolean(git(root, "ls-files", "--", projectModelsFile))}; }
       catch { return {path: projectModelsFile, status: "invalid"}; }
@@ -114,7 +117,8 @@ function modelSetup(ctx: ExtensionContext, root?: string) {
   const initial = fallbackModel && configuredRoles({
     initial: fallbackModel, design: fallbackModel, implement: fallbackModel, review: fallbackModel,
   });
-  const proposed = initial && Object.fromEntries(Object.entries(initial).map(([role, fallback]) => {
+  const proposed = initial && Object.fromEntries(Object.entries(initial)
+    .filter(([role]) => ["design", "designMemberA", "designMemberB", "implement"].includes(role)).map(([role, fallback]) => {
     const preference = Object.getOwnPropertyDescriptor(recommended, role)?.value;
     try { return [role, typeof preference === "string" ? modelKey(resolveModel(ctx, preference)) : fallback]; }
     catch { return [role, fallback]; }
@@ -272,16 +276,23 @@ function workflowDeclaration(root: string) {
 export async function collectSetup(pi: ExtensionAPI, ctx: ExtensionContext) {
   let root: string | undefined;
   try { root = git(ctx.cwd, "rev-parse", "--show-toplevel"); } catch { }
-  const models = modelSetup(ctx, root);
   const installed = subagentManifests(pi, ctx);
   const [probe, t3] = await Promise.all([probeSubagents(pi).catch(() => null), inspectT3()]);
-  const runtime = { status: probe?.responding ? "ready" : probe ? "fallback" : "unconfirmed",
-    responding: probe?.responding ?? false, protocol: probe?.protocol ?? null,
-    mode: probe?.responding ? "pi-subagents RPC" : "独立 Pi SDK 会话" };
+  let mismatch = false;
+  if (t3.binding?.attached) {
+    try { root = boundT3Worktree(ctx.cwd, t3.binding)?.root; }
+    catch { mismatch = true; root = undefined; }
+  }
+  const models = modelSetup(ctx, root);
+  const runtime = {status: "ready", mode: "独立 Pi SDK 会话", legacyReviewTransport: probe?.responding ? probe.protocol : null};
   const subagents = { installed, runtime, testedPackageVersions };
+  const github = githubHandoffTools(pi);
+  const pullRequestDelivery = {transport: "Magpie GitHub MCP", tools: [...github.keys()],
+    scope: "Session tool discovery. Handoff verifies repository access when it previews publication."};
   if (!root) {
-    return { models, subagents, t3, repository: { status: "unconfirmed", reason: "当前目录没有可核对的 Git 工作区。" },
-      mcp: inspectMcpCapabilities(pi), readiness: { runnable: false, taskbookNew: false, initialized: false, blockers: ["repository"] } };
+    return { models, subagents, t3, pullRequestDelivery, repository: { status: "unconfirmed", reason: mismatch ?
+      "T3 工作区绑定与本地仓库不一致。" : "当前目录没有可核对的 Git 工作区。" },
+      mcp: inspectMcpCapabilities(pi), readiness: { runnable: false, taskbookNew: false, initialized: false, blockers: [mismatch ? "worktreeBinding" : "repository"] } };
   }
   const facts = factsSetup(root);
   const glossary = glossarySetup(root);
@@ -300,7 +311,7 @@ export async function collectSetup(pi: ExtensionAPI, ctx: ExtensionContext) {
     exclusions.projectFacts.status !== "ready" && "projectFactsTracking",
   ].filter(Boolean);
   return {
-    models, subagents, t3,
+    models, subagents, t3, pullRequestDelivery,
     repository: { status: "ready", root, facts, glossary, audit, exclusions },
     mcp: inspectMcpCapabilities(pi, workflowDeclaration(root)),
     readiness: {

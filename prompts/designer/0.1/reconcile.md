@@ -1,0 +1,1 @@
+Review each counter with the original request and the current proposal. Respond once per issue. Accept when the proposal resolves the concern. Otherwise give a specific counter with its reason, or report `needs-user` if the decision belongs to the user.

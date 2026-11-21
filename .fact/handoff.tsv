@@ -1,0 +1,4 @@
+id	fact	source	labels
+handoff-approval	PR publication binds user approval to an exact GitHub repository, work branch, reviewed delivery commit, and outgoing text.	src/workflow/publication.ts | index.ts	handoff
+handoff-pr-actions	Handoff can create a draft PR, update its Taskbook summary section, or append discussion comments for a signed delivery.	src/workflow/publication.ts | src/integrations/github-handoff.ts	handoff
+handoff-pr-facts	Handoff posts the committed fact diff to the PR discussion and uses deterministic comment markers to recover from an interrupted send.	src/workflow/publication.ts	handoff,facts

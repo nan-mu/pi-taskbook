@@ -1,0 +1,1 @@
+Respond to the other member's latest assessment. Address every disputed finding or draft-fact decision. Accept a supported correction or state the specific evidence that sustains the disagreement. Return your resulting judgment as `pass`, `changes`, or `dispute`. Reuse the issue name and wording of any accepted correction. Report the resulting draft-fact decisions.

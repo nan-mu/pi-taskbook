@@ -45,6 +45,7 @@ export function phaseMethod(id: string, phase: Phase) {
 
 export function workerMethodStages(phase: Phase, type?: Taskbook["type"]): MethodStage[] {
   switch (phase) {
+    case "fact-management": return ["fact", "memory", "design"];
     case "fact-check": return ["intake", "fact", "memory"];
     case "design": return ["design", "experiment", "escalate"];
     case "implement": return type?.endsWith("-experiment") ? ["implement", "exit", "experiment"] : ["implement", "exit"];

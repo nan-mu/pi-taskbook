@@ -1,0 +1,1 @@
+Produce one final `draft` and executable `plan`. Account for every resolved issue in `appliedIssues`. Give each step an observable check and cover the original goal and delivery IDs. Report `needs-user` with the issue IDs if accepted changes conflict.

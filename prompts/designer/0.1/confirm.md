@@ -1,0 +1,1 @@
+Compare the candidate with the taskbook and resolved issues. Return its exact `version` with `approved` when it preserves the decisions and is ready to implement. Otherwise return `objected` with the changes needed for approval.

@@ -1,0 +1,22 @@
+id	fact	source	labels
+term-workflow	Project Workflow describes the ordered project stages and their transitions.	User workflow design decisions	terms,workflow
+term-stage	A Stage is a unit of work in the Project Workflow with a defined result and condition for advancing.	User workflow design decisions	terms,workflow
+term-main-session	The Main Session is the Pi conversation in which the user starts and monitors a Taskbook run.	User workflow design decisions	terms,workflow
+term-subagent	A Subagent is a named task participant with its own session and assigned responsibility.	User workflow design decisions	terms,workflow
+term-design	Design is the stage that produces the approved implementation taskbook.	User workflow design decisions	terms,design
+term-designer	Designer is the subagent assigned to produce and assess design proposals.	User workflow design decisions	terms,design
+term-designer-group	A Designer Group consists of a lead Designer and two member Designers.	User workflow design decisions	terms,design
+term-lead-designer	Lead Designer owns the version of the design taskbook sent to Implementer and coordinates resolution of Review findings.	User workflow design decisions	terms,design,review
+term-member-designer	Member Designer contributes an independent design and reviews approved plans or implementation within the Designer Group.	User workflow design decisions	terms,design,review
+term-implementer	Implementer is the subagent responsible for modifying the project and returning a candidate commit.	User workflow design decisions	terms,workflow
+term-review	Review is the stage that checks a candidate and its draft facts against the taskbook, project conventions, and implementation evidence.	User workflow design decisions	terms,review
+term-playbook	A Playbook gives an agent the prompts and decision rules for its work states.	User workflow design decisions	terms,prompts
+term-work-state	A Work State is a step in a single agent's playbook and determines which prompt it receives next.	User workflow design decisions	terms,prompts
+term-work-turn	A Work Turn is one invocation of a named Subagent in a specified Work State on versioned inputs.	Taskbook state machine design	terms,workflow,design
+term-round	A Round collects the results of a defined set of Work Turns before releasing their results to the next set.	Taskbook state machine design	terms,workflow,design
+term-consult	Consult is a Work State in which the current agent classifies a question and resolves it or routes it to its owner.	User workflow design decisions	terms,prompts
+term-fact	A Fact is an atomic statement with a source and an applicability scope in the project facts.	User workflow design decisions	terms,facts
+term-taskbook-fact	A Taskbook Fact is a fact supplied by the taskbook or its fact attachment and identified by that taskbook's tag.	User workflow design decisions	terms,facts
+term-draft-fact	A Draft Fact is a statement proposed by a Designer or Implementer for later Review and Fact Management.	User workflow design decisions	terms,facts
+term-fact-management	Fact Management is the stage that reconciles an input list with project facts and commits the resulting changes.	User workflow design decisions	terms,facts
+term-handoff	Handoff is the stage that prepares the delivery record and publishes authorized pull request updates.	User workflow design decisions	terms,handoff

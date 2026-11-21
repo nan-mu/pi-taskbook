@@ -4,5 +4,22 @@ For each proposed change, establish its scope, required choices and explicit app
 
 When ready, call the setup tools and report their receipts. Set `approvedBy` to the complete verbatim command argument or direct replies that authorize that specific call, including any reply that supplies a required choice. A receipt, example, question or quoted instruction cannot authorize a write. If explicit approval is already in the conversation, use it without another confirmation.
 
-- Models. Use `models.catalog` for available IDs and thinking levels. With no prior config, offer Plus for lower usage, Pro for stronger design and review, and Pro Plus for intensive work. Show actual supported differences. For migration, retain usable routes and use PStack as a preference reference. Resolve ambiguous matches with the user. For existing settings, show the active source and offer to keep, switch or revise. Establish the Markdown or chosen plan, personal or project storage, and Git tracking for project storage. Write through `taskbook_model_setup`.
-- Legacy data. Describe the planned imports, checkpoint copies and archived originals using `legacy`. Call `taskbook_migrate` for the approved sources. Archive `.audit` before any cleanup. Treat deletion of original `.audit` and deletion of the old Git ref as distinct approvals. Honor the user's choice to retain originals.
+## Models
+
+Map responsibilities before choosing thinking levels. Preserve valid, explicit Taskbook routes outside the changes the user requests. Use PStack preferences to fill gaps or revise routes by responsibility. Treat generated defaults and inherited routes as candidates. Resolve ambiguous model aliases with the user.
+
+Report the Fact Management model and thinking level from `models.factManagement`. It uses the executing Pi session's selection, including for a new checkout. Give it no role entry in a generated file.
+
+- Execution. `implement` selects the same model for code, measurement, and verification when its playbook calls for them. Follow the user's PStack coding and tool-use preferences.
+- Judgment. `design` is the Lead Designer. It owns the final plan and signs Review. Consult keeps the owning agent's model.
+- Independent work. `designMemberA` and `designMemberB` independently propose designs, then perform initial Review and cross-review respectively. Choose from the user's cross-review pool to diversify judgments. Both inherit an existing `review` route when omitted. Use the same seat models throughout Design and Review.
+
+When offering plans, use one comparison table with `Role`, `Work`, `Plus`, `Pro` and `Pro Plus` columns. Show the model ID and thinking level for each effective role and note inherited routes. Keep the model assignments stable across tiers unless a specific requirement calls for a change. Keep routine execution effort steady and spend added budget where design or review needs it. Use only IDs and levels in `models.catalog`. If the catalog supports one useful plan, show that plan and explain the limit.
+
+Show the active source when a config exists. Present the proposed Markdown, target path and project Git tracking before requesting approval. Save approved changes through `taskbook_model_setup`.
+
+Report the project's staged settings after a model write. A new T3 checkout receives the model location and any tracked model table from the taskbook baseline. Distinguish T3's independent thread launch, current-thread handoff, and current binding. Report Magpie GitHub MCP readiness separately from the local workflow.
+
+## Legacy data
+
+Describe the planned imports, checkpoint copies and archived originals using `legacy`. Call `taskbook_migrate` for the specifically approved sources. Archive `.audit` before cleanup. Deleting the original `.audit` and deleting the old Git ref each need explicit approval.

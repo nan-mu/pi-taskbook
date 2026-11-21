@@ -4,3 +4,12 @@ t3	T3 interfaces used by Pi Taskbook.
 migration	Migration from legacy project data.
 audit	Handling of legacy PStack .audit data.
 setup	Pi Taskbook setup decisions.
+terms	Taskbook domain vocabulary.
+workflow	Project stage sequence and agent lifecycle.
+facts	Fact intake, review, and persistence.
+design	Designer group, approved plans, and design artifacts.
+review	Review scope, context, and approval.
+handoff	Delivery artifacts and pull request communication.
+prompts	Agent playbooks and stage prompt responsibilities.
+future	Agreed follow-up work outside the current version.
+implement	Implementation playbooks, evidence, and rework.

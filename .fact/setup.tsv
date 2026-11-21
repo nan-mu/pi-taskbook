@@ -1,0 +1,5 @@
+id	fact	source	labels
+setup-discovery	Running /taskbook-setup attaches Pi model, repository, and tool diagnostics to the current conversation.	prompts/setup.md | src/setup/diagnostics.ts	setup,workflow
+setup-approval	Setup requires a scoped approval for each migration source and a separate explicit approval to delete the archived original.	src/setup/command.ts	setup,migration,audit
+setup-model-location	Setup stages the project’s model location in .fact/taskbook.tsv. A T3 worktree gets the tracked setting from its taskbook baseline.	src/models/storage.ts | src/taskbook/entry.ts	setup,worktree
+setup-model-local	Setup uses the common Git info/exclude to retain the project’s local model table outside Git tracking.	src/models/storage.ts	setup

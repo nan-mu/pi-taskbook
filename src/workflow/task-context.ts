@@ -2,7 +2,7 @@ import type { Taskbook } from "../taskbook/document.ts";
 import type { CheckedFact } from "../facts/fact-check.ts";
 import type { Phase } from "./transitions.ts";
 
-export type TaskItem = { id: string; text: string; userDecision?: FactDecision };
+export type TaskItem = { id: string; text: string; userDecision?: FactDecision; topicFact?: {path: string; id: string} };
 export type FactConflict = { factId: string; observation: string; projectVersion?: number; projectHead?: string | null };
 export type FactDecision = { factId: string; action: "keep" | "replace"; text: string };
 
@@ -114,7 +114,7 @@ export function workerContext<T extends PhaseReport>(phase: Phase, reports: T[])
   const chosen: (T | undefined)[] = [];
   if (phase !== "design") chosen.push(latest("design"));
   if (phase === "implement") {
-    const lastReview = reports.findLast(report => report.phase === "correctness" || report.phase === "quality");
+    const lastReview = reports.findLast(report => report.phase === "review" || report.phase === "correctness" || report.phase === "quality");
     if (lastReview?.outcome === "rework") chosen.push(lastReview);
   }
   if (phase === "performance") {
@@ -122,7 +122,7 @@ export function workerContext<T extends PhaseReport>(phase: Phase, reports: T[])
     if (implementation >= 0) {
       chosen.push(reports[implementation]);
       const request = reports.slice(implementation + 1).findLast(report =>
-        (report.phase === "correctness" || report.phase === "quality") && report.outcome === "measure");
+        (report.phase === "review" || report.phase === "correctness" || report.phase === "quality") && report.outcome === "measure");
       if (request) chosen.push(request);
     }
   }

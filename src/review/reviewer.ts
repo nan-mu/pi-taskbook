@@ -9,7 +9,7 @@ import {
 import { Type } from "typebox";
 import { dispatchReview } from "./subagent-dispatch.ts";
 
-type Role = "fact-review" | "correctness" | "quality";
+type Role = "fact-review" | "correctness" | "quality" | "review";
 type TaskItem = { id: string; text: string };
 export type ReviewInput = {
   root: string; base: string; revision: string; role: Role;
@@ -19,7 +19,7 @@ export type ReviewInput = {
 type Verdict = "pass" | "rework" | "blocked" | "measure" | "fact-conflict";
 type ReviewItem = { id: string; status: "pass" | "gap" | "blocked" | "fact-conflict"; reason: string; evidence: string; memoryUse?: "independent" | "change-evidence"; runEvidence?: string[] };
 type Conflict = { factId: string; observation: string };
-type Inspection = { id: string; view: string; path?: string; start: number; digest: string; characters: number };
+export type Inspection = { id: string; view: string; path?: string; start: number; digest: string; characters: number };
 type RunSource = { id: string; phase: string; revision: string; toolCallId: string; digest: string };
 export type ReviewResult = {
   sessionId: string; revision: string; role: Role; model: string; contextDigest: string;
@@ -38,7 +38,7 @@ const parameters = Type.Object({
   start: Type.Optional(Type.Integer({ minimum: 1, description: "首行，从 1 计数" })),
 }, { additionalProperties: false });
 
-function inspectionTool(input: Pick<ReviewInput,"root"|"base"|"revision">, observations: Inspection[]): ToolDefinition<typeof parameters> {
+export function inspectionTool(input: Pick<ReviewInput,"root"|"base"|"revision">, observations: Inspection[]): ToolDefinition<typeof parameters> {
   return {
     name: "inspect_revision", label: "检查固定 Git 提交", description: "changes 列出改变的路径。base 和 candidate 读取指定版本文件。diff 读取两版差异，允许按文件过滤。响应带观察编号和分页位置。",
     parameters,

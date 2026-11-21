@@ -1,0 +1,7 @@
+id	fact	source	labels
+implement-owner	One persistent Pi subagent runs the Implement stage, including its measurements, verification, and review rework.	src/workflow/team.ts | src/workflow/subagent.ts	implement,workflow
+implement-playbook	Implementer dispatch selects a versioned playbook from the task type or the Taskbook Playbook field and loads its prompt for each Work State.	src/workflow/implement/v0.1.ts | prompts/implementer/0.1/	implement,prompts
+implement-verify	Implementer hands off a clean local Git commit after running a successful acceptance command at that revision.	src/workflow/team.ts | prompts/implementer/0.1/verify.md	implement,review
+implement-consult	Implementer Consult resolves decisions within the approved plan and gives design or scope questions to the Lead Designer.	src/workflow/team.ts | prompts/implementer/0.1/consult.md	implement,prompts
+implement-hillclimb	Hillclimb runs one experiment at a time against a frozen baseline, then keeps a verified trial commit or rolls it back before the next attempt.	src/workflow/implement/v0.1.ts | prompts/implementer/0.1/	implement,workflow
+implement-rework	Lead-authorized Review rework returns to the existing Implementer for a revision and Verify, then every revised candidate starts from Initial Review.	src/workflow/team.ts | src/workflow/review/flow.ts	implement,review

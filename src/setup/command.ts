@@ -8,6 +8,7 @@ import { deleteMigratedAudit, inspectAuditMigration, migrateAudit } from "./audi
 import { collectSetup } from "./diagnostics.ts";
 import { formatModelConfig, modelKey, modelRoles, modelRoutes, parseModelConfig, personalModelPath } from "../models/config.ts";
 import { modelSettingsPath, modelWritePlan, projectModelPath, writeModelSettings } from "../models/storage.ts";
+import { readT3Workspace } from "../integrations/t3.ts";
 
 const setupType = "pi-taskbook-setup";
 const migrationTool = "taskbook_migrate";
@@ -18,6 +19,14 @@ const approvedBy = Type.Optional(Type.Array(Type.String({minLength: 1}), {minIte
 type MigrationOperation = "migrate" | "delete-audit" | "delete-legacy-ref";
 const migrationSources = ["audit", "project-json", "legacy-ref", "mirror"] as const;
 type MigrationSource = typeof migrationSources[number];
+type SetupOperation = {kind: "models"; storage: "personal" | "project-tracked" | "project-local"} |
+  {kind: "migrate"; sources: readonly MigrationSource[]} | {kind: Exclude<MigrationOperation, "migrate">};
+const sourceNames: Record<MigrationSource, RegExp> = {
+  audit: /\.audit|审计资料|\baudit\b/iu,
+  "project-json": /project\.json|旧项目事实|(?:legacy|old) (?:project facts|json)/iu,
+  "legacy-ref": /旧\s*(?:Git\s*)?引用|refs\/pi-taskbook\/project-memory|legacy (?:Git )?ref/iu,
+  mirror: /旧镜像|旧\s*Magpie|\b(?:magpie|mirror)\b/iu,
+};
 
 function inventory(root: string, repository: string) {
   return {
@@ -29,6 +38,10 @@ function inventory(root: string, repository: string) {
 
 type SetupInventory = ReturnType<typeof inventory>;
 type SetupSession = { root: string; repository: string; session: string; inventory: SetupInventory };
+
+async function setupRoot(cwd: string) {
+  return (await readT3Workspace(cwd))?.root ?? git(cwd, "rev-parse", "--show-toplevel");
+}
 
 function migrationPlan(run: SetupSession, operation: MigrationOperation, sources: readonly MigrationSource[] = migrationSources) {
   const {root, repository} = run;
@@ -111,11 +124,41 @@ export function registerSetupCommand(pi: ExtensionAPI, workflowIsBusy: () => boo
     if (tools.includes(migrationTool)) pi.setActiveTools(tools.filter(tool => tool !== migrationTool));
   }
 
-  async function authorize(ctx: ExtensionContext, quotes: string[] | undefined, title: string, description: string) {
+  async function authorize(ctx: ExtensionContext, quotes: string[] | undefined, operation: SetupOperation, title: string, description: string) {
     if (quotes?.length) {
       if (!userInputs.length || !quotes.every(quote => userInputs.includes(quote.trim())) ||
           !quotes.some(quote => quote.trim() === userInputs.at(-1))) {
         throw new Error("请引用本次 setup 的完整用户原话，并核对最新决定。");
+      }
+      const ordered = userInputs.filter(input => quotes.some(quote => input === quote.trim()));
+      if (ordered.every(input => /^(?:(?:批准|同意|确认|授权|approve(?:d)?|yes|ok)\s*)?[\p{P}\s]*$/iu.test(input))) {
+        throw new Error("批准内容为空。请明确批准哪些操作。");
+      }
+      const latest = ordered.at(-1)!;
+      if (operation.kind === "migrate") {
+        const migrate = /迁移|归档|导入|转换|\b(?:migrate|archive|import|convert)\b/iu;
+        const allLegacy = /(?:全部|所有)(?:的)?(?:旧资料|旧数据|迁移来源)|\ball (?:legacy|old)\b/iu;
+        const decline = /(?:不要|无需|暂不|先不|别|do not|don['’]t)\s*(?:迁移|归档|导入|migrate|archive|import)/iu;
+        if (decline.test(latest) || operation.sources.some(source => !ordered.some(input =>
+          migrate.test(input) && !decline.test(input) && (sourceNames[source].test(input) || allLegacy.test(input))))) {
+          throw new Error("请逐项明确批准本次迁移的来源。");
+        }
+      }
+      if (operation.kind === "delete-audit" || operation.kind === "delete-legacy-ref") {
+        const subject = sourceNames[operation.kind === "delete-audit" ? "audit" : "legacy-ref"];
+        const remove = (input: string) => /删除|清理|移除|\b(?:delete|remove|clean up)\b/iu.test(input);
+        const decline = /(?:不要|无需|暂不|先不|别|do not|don['’]t)\s*(?:删除|清理|移除|delete|remove|clean up)|(?:保留|keep|retain)\s*(?:原来的?|原有的?)?\s*(?:\.audit|原件|审计资料|旧\s*(?:Git\s*)?引用|legacy (?:Git )?ref)/iu;
+        if (decline.test(latest) || !ordered.some(input => subject.test(input) && remove(input) && !decline.test(input))) {
+          throw new Error("清理需要明确批准删除相应原件。请核对用户选择。");
+        }
+      }
+      if (operation.kind === "models" && operation.storage !== "personal") {
+        const local = /(?:不|无需|不用)(?:由\s*Git\s*)?(?:追踪|跟踪|纳入\s*Git|提交)|本机保存|保存到本机|本地保存|不进\s*Git|\b(?:untracked|local[- ]only|do not track|don't track)\b/iu;
+        const tracked = /(?:追踪|跟踪|纳入\s*Git|提交到\s*Git)|\b(?:track|tracked)\b/iu;
+        const selection = ordered.findLast(input => local.test(input) || tracked.test(input));
+        if (!selection || local.test(selection) !== (operation.storage === "project-local")) {
+          throw new Error("请引用用户明确选择项目模型表由 Git 跟踪或本机保存的原话。");
+        }
       }
       return true;
     }
@@ -173,6 +216,7 @@ export function registerSetupCommand(pi: ExtensionAPI, workflowIsBusy: () => boo
 
   pi.registerTool({
     name: modelSetupTool, label: "保存 Taskbook 模型设置", defaultActive: false,
+    executionMode: "sequential",
     description: "保存用户选定的 Taskbook 模型配置和 Git 跟踪方式。当前 setup 会话内使用。",
     parameters: Type.Object({
       location: Type.Union([Type.Literal("personal"), Type.Literal("project")]),
@@ -183,7 +227,7 @@ export function registerSetupCommand(pi: ExtensionAPI, workflowIsBusy: () => boo
     async execute(_id, {location, gitTracking, configuration, approvedBy: quotes}, signal, _update, ctx) {
       const setup = models;
       if (!setup || checking || workflowIsBusy() || ctx.sessionManager.getSessionId() !== setup.session ||
-          git(ctx.cwd, "rev-parse", "--show-toplevel") !== setup.root) {
+          await setupRoot(ctx.cwd) !== setup.root) {
         throw new Error("请在空闲的当前项目会话先运行 /taskbook-setup。");
       }
       if ((location === "project") !== (gitTracking !== undefined)) throw new Error("使用项目模型表时请明确选择是否由 Git 跟踪。");
@@ -201,7 +245,7 @@ export function registerSetupCommand(pi: ExtensionAPI, workflowIsBusy: () => boo
         "使用仓库的本机 Git 排除。若 Git 正在跟踪项目模型表，将暂存移除并保留本机文件。";
       checking = true;
       try {
-        if (!await authorize(ctx, quotes, "保存 Taskbook 模型设置", `${target}\n${effect}\n暂存 ${modelSettingsPath}。\n\n${content}`)) {
+        if (!await authorize(ctx, quotes, {kind: "models", storage}, "保存 Taskbook 模型设置", `${target}\n${effect}\n暂存 ${modelSettingsPath}。\n\n${content}`)) {
           return {content: [{type: "text" as const, text: "用户未批准，配置保留。"}], details: {}};
         }
         signal?.throwIfAborted();
@@ -220,6 +264,7 @@ export function registerSetupCommand(pi: ExtensionAPI, workflowIsBusy: () => boo
     label: "Taskbook 旧资料迁移",
     description: "按同一 Pi 会话最近一次 setup 盘点迁移，或单独清理已核对的旧资料。用 sources 指定本次批准迁移的来源。",
     defaultActive: false,
+    executionMode: "sequential",
     parameters: Type.Object({
       operation: Type.Union([Type.Literal("migrate"), Type.Literal("delete-audit"), Type.Literal("delete-legacy-ref")]),
       sources: Type.Optional(Type.Array(Type.Union(migrationSources.map(source => Type.Literal(source))),
@@ -229,14 +274,15 @@ export function registerSetupCommand(pi: ExtensionAPI, workflowIsBusy: () => boo
     async execute(_id, {operation, sources, approvedBy: quotes}, signal, _update, ctx) {
       const run = pending;
       if (!run || checking || workflowIsBusy() || ctx.sessionManager.getSessionId() !== run.session ||
-          git(ctx.cwd, "rev-parse", "--show-toplevel") !== run.root || repositoryIdentity(run.root) !== run.repository) {
+          await setupRoot(ctx.cwd) !== run.root || repositoryIdentity(run.root) !== run.repository) {
         throw new Error("请在空闲的当前项目会话先运行 /taskbook-setup。");
       }
       if (operation === "migrate" && quotes?.length && !sources?.length) throw new Error("请给出本次获批迁移的来源。");
       const plan = migrationPlan(run, operation, sources);
       checking = true;
       try {
-        if (!await authorize(ctx, quotes, plan.title, plan.description)) return {content: [{type: "text" as const, text: "用户未批准，原件保留。"}], details: {}};
+        const authorization = operation === "migrate" ? {kind: operation, sources: sources ?? migrationSources} : {kind: operation};
+        if (!await authorize(ctx, quotes, authorization, plan.title, plan.description)) return {content: [{type: "text" as const, text: "用户未批准，原件保留。"}], details: {}};
         signal?.throwIfAborted();
         const result = applyMigration(run, plan);
         return {content: [{type: "text" as const, text: JSON.stringify(result)}], details: {}};
