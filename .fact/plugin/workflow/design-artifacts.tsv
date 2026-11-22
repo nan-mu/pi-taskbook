@@ -1,0 +1,2 @@
+id	fact	source	labels
+designer-approved-artifact	The plugin commits the final Design taskbook as a Markdown file in .fact and commits its removal at the end of the run.	39c219e56dc3:src/workflow/design-archive.ts	

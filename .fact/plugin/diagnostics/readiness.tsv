@@ -1,0 +1,5 @@
+id	fact	source	labels
+term-report	The readiness fields in the Setup diagnostics report indicate which prerequisites are satisfied.	39c219e56dc3:src/setup/diagnostics.ts	
+setup-runnable	readiness.runnable accepts valid model routes or entry-model fallback in a confirmed repository; blockers identify unmet runtime prerequisites.	39c219e56dc3:src/setup/diagnostics.ts	
+setup-initialized	readiness.initialized requires a runnable repository with valid explicit model configuration.	39c219e56dc3:src/setup/diagnostics.ts	
+setup-new-readiness	readiness.taskbookNew requires runnable model routes and T3 worktree support in a confirmed repository.	39c219e56dc3:src/setup/diagnostics.ts	

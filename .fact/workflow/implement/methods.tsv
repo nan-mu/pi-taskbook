@@ -1,0 +1,2 @@
+id	fact	source	labels
+implement-hillclimb	Each hillclimb trial starts from a clean commit. A kept result must be a direct child with actual changes; a rollback must restore the content at the start of that trial.	39c219e56dc3:src/workflow/team.ts#L304-L330	

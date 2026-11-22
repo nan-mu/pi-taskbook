@@ -1,0 +1,3 @@
+id	fact	source	labels
+purpose-fact-registration	For each draft fact marked keep in the signed review, the registration prompt asks the agent to submit its ID, target subject TSV path, and a list of registered labels, which may be empty.	39c219e56dc3:prompts/fact-registration.md | 39c219e56dc3:src/workflow/register-facts.ts#L20-L38	
+preserve-approved-wording	Submit the local placement for each accepted fact and preserve its approved wording and provenance.	prompts/fact-registration.md	

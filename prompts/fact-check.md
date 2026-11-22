@@ -7,4 +7,4 @@ For each premise needed to proceed, submit a `factChecks` entry with a concrete 
 - Git source. Use the baseline file path and the one-based starting line.
 - Tool source. Use a receipt from this attempt. A tool must run against a clean, unchanged Git revision to earn a receipt. Use fixed Git evidence or disclose the gap when a receipt is unavailable.
 
-Report uncovered conditions. Refer to an excerpt once. Report `blocked` when a required premise lacks evidence. The independent reviewer decides which observations enter project memory.
+Restate the goal and the observable result that would support or refute its premise. Refer to an excerpt once. Report `blocked` when a required premise lacks evidence. Use `needs-user` for a missing user decision and identify the affected goal and question. Return the observation to the workflow as evidence.

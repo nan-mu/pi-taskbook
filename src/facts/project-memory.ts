@@ -87,7 +87,7 @@ export function readProjectMemory(root: string, options: {allowUnmigratedLegacy?
   const raw = regularFile(root, projectFactsPath);
   const glossary = projectGlossaryPath(root);
   const currentTerms = regularFile(root, glossary);
-  const {records, applied} = raw === undefined ? {records: {}, applied: {}} : parseProjectTsv(raw);
+  const {records, applied}: Pick<ProjectDocument, "records" | "applied"> = raw === undefined ? {records: {}, applied: {}} : parseProjectTsv(raw);
   if (!options.allowUnmigratedLegacy) {
     const legacy = readLegacyProjectJson(root);
     if (legacy && !applied[legacy.receipt]) {
@@ -245,11 +245,11 @@ export function applyApprovedMemory(root: string, snapshot: ProjectSnapshot, tas
   return commitProjectMemory(root, snapshot, document, "Review project facts · " + task.id, document.modified);
 }
 
-export function commitTaskbookMemory(root: string, snapshot: ProjectSnapshot, task: Taskbook, base: string,
-  changes: MemoryChange[], sessionId: string, topics: Map<string, string>, validate: () => void) {
+export function commitRegisteredMemory(root: string, snapshot: ProjectSnapshot, task: Taskbook, base: string,
+  changes: MemoryChange[], sessionId: string, topics: Map<string, string>, message: string, validate: () => void,
+  prepare: (mutations: Map<string, string>) => void) {
   const document = prepareProjectChanges(snapshot, task, base, changes, sessionId);
-  const message = "Import taskbook facts · " + task.id + "\n\nTaskbook-Input: " + task.digest;
-  return commitProjectMemory(root, snapshot, document, message, document.modified, undefined, {mutations: topics, validate});
+  return commitProjectMemory(root, snapshot, document, message, document.modified, undefined, {mutations: topics, validate, prepare});
 }
 
 function prepareProjectChanges(snapshot: ProjectSnapshot, task: Pick<Taskbook, "repository" | "id" | "digest">,
@@ -334,7 +334,7 @@ export function lockProjectMemory(root: string) {
 }
 
 export function commitProjectMemory(root: string, snapshot: ProjectSnapshot, document: ProjectDocument, message: string, modified = true,
-  migration?: {projectJsonVersion?: string}, extra?: {mutations: Map<string, string>; validate: () => void}) {
+  migration?: {projectJsonVersion?: string}, extra?: {mutations: Map<string, string>; validate: () => void; prepare?: (mutations: Map<string, string>) => void}) {
   const unlock = lockProjectMemory(root);
   try {
     const options = {allowUnmigratedLegacy: migration !== undefined};
@@ -359,6 +359,7 @@ export function commitProjectMemory(root: string, snapshot: ProjectSnapshot, doc
     }
     const paths = [...mutations.keys()].filter(path => regularFile(root, path) !== mutations.get(path));
     if (!paths.length) return snapshot;
+    extra?.prepare?.(new Map(paths.map(path => [path, mutations.get(path)!])));
     const untracked = new Set(git(root, ["ls-files", "--others", "--exclude-standard", "-z", "--", ...paths]).split("\0"));
     const previous = new Map(paths.map(path => [path, regularFile(root, path)]));
     for (const path of paths) {

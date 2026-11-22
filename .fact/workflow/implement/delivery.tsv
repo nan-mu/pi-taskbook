@@ -1,0 +1,6 @@
+id	fact	source	labels
+term-implementer	Implementer is the subagent responsible for modifying the project and returning a candidate commit.	39c219e56dc3:.fact/terms.tsv#L11	terms
+implement-owner	One persistent Pi subagent runs the Implement stage, including its measurements, verification, and review rework.	39c219e56dc3:src/workflow/team.ts	
+implement-verify	At Verify handoff, the implementation runtime requires at least one successful command whose before and after revisions match the same clean candidate commit.	39c219e56dc3:src/workflow/team.ts#L314-L318	review
+implement-consult	The implementer chooses names and local implementation details within the approved plan. It sends design or scope questions to the lead designer.	src/workflow/team.ts | prompts/implementer/0.1/consult.md	prompts
+implement-rework	After the lead approves rework, the original implementer revises and verifies the candidate.	39c219e56dc3:src/workflow/team.ts	review

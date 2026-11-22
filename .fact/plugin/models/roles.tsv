@@ -1,0 +1,9 @@
+id	fact	source	labels
+term-model-configuration-table	A Model Configuration Table assigns a Pi model and optional thinking level to each configured task role.	39c219e56dc3:src/models/config.ts	terms
+model-table-format	The Model Configuration Table has three columns: role, model, and thinking.	39c219e56dc3:src/models/config.ts	
+model-validation	Pi resolves configured model IDs and validates that each configured thinking level is supported by its model.	39c219e56dc3:src/models/config.ts	
+model-env-fallbacks	Legacy PI_TASKBOOK_{DESIGN,IMPLEMENT,REVIEW,FACT_REVIEW,CORRECTNESS,QUALITY}_MODEL variables supply route defaults; explicit file routes override their matching defaults.	39c219e56dc3:src/models/config.ts	
+model-member-fallback	Unspecified designMemberA and designMemberB use the review route when available, otherwise the entry model; design and implement default to the entry model absent overrides.	39c219e56dc3:src/models/config.ts	
+legacy-model-files	The model reader checks TSV first and retains supported Markdown and legacy JSON inputs at the applicable paths; Setup saves TSV.	39c219e56dc3:src/models/config.ts	
+role-model-id	The model field uses the full Pi provider/model identifier.	39c219e56dc3:src/models/config.ts	
+role-thinking-fallback	Without an explicit thinking level for the role, an eligible seat may inherit its fallback role’s level. Otherwise the entry level is clamped to the selected model’s supported range.	39c219e56dc3:src/models/config.ts#L203-L212	

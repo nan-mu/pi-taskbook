@@ -1,0 +1,7 @@
+id	fact	source	labels
+setup-t3-preflight	The diagnostics distinguish T3 tools registered in Pi from the status of the direct T3 connection used by commands.	39c219e56dc3:src/setup/diagnostics.ts | 39c219e56dc3:prompts/setup.md	t3
+setup-check-owner	The plugin runs collectSetup before invoking the selected model. When that model is available, the plugin supplies the diagnostic report and the user’s argument to the Setup conversation.	39c219e56dc3:src/setup/command.ts	
+diagnostic-probes	collectSetup runs probeSubagents, inspectT3 and waitForMagpieCatalogue concurrently. It checks the repository binding and uses modelSetup to evaluate model availability and routes.	39c219e56dc3:src/setup/diagnostics.ts	
+setup-mcp-discovery	Environment diagnostics report T3 issue and pull request tools separately from Magpie’s GitHub delivery capabilities.	39c219e56dc3:src/setup/diagnostics.ts	workflow
+subagent-readiness	Subagent diagnostics distinguish SDK availability, detected package versions, and whether a live RPC probe received a response.	39c219e56dc3:src/setup/diagnostics.ts	
+magpie-catalog-wait	Diagnostics wait a bounded time for the Magpie catalog to register. If it misses the deadline, availability remains unconfirmed.	39c219e56dc3:src/setup/diagnostics.ts	workflow

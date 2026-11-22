@@ -1,0 +1,12 @@
+id	fact	source	labels
+setup-operation-authorization	Setup resolves the scope of each requested write from the command argument and subsequent direct replies in the current conversation; an empty or vague approval requires clarification.	39c219e56dc3:prompts/setup.md	
+setup-entry-scope	A Setup response distinguishes capabilities found in the tool catalog from remote permissions verified by an access check.	39c219e56dc3:prompts/setup.md	
+status-ready	For a bare command with ready model settings, report the status and end the turn.	39c219e56dc3:prompts/setup.md	
+setup-no-facts-init	Setup readiness depends on models and environment; fact and glossary registration belongs to Fact Management.	39c219e56dc3:prompts/setup.md	
+setup-refresh-catalog	The Setup agent refreshes the catalog when the user requests a model check or the available models may have changed.	39c219e56dc3:prompts/setup.md | .fact/tools/model-catalog.tsv#setup-tools	
+setup-plan-options	Compare model assignments in one row per role, with a column for each of Work, Plus, Pro, and Pro Plus.	39c219e56dc3:prompts/setup.md	
+setup-role-preferences	When proposing model assignments, preserve valid explicit assignments outside the requested change.	39c219e56dc3:prompts/setup.md	
+setup-propose-save	Before an approved model write, Setup presents the TSV using the effective save policy and asks about a new path or tracking policy only for a requested policy change.	39c219e56dc3:prompts/setup.md	
+setup-checklist	For a requested write, quote the user’s authorization for that specific operation in approvedBy.	39c219e56dc3:prompts/setup.md	
+setup-operation-receipt	Setup completes approved operations through their named tools and reports receipts; a missing or failed tool leaves its operation pending.	39c219e56dc3:prompts/setup.md	
+single-model-plan	When the catalog supports only one meaningful plan, present that plan and explain the constraint.	39c219e56dc3:prompts/setup.md	

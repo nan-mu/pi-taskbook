@@ -1,4 +1,0 @@
-id	fact	source	labels
-designer-0.1	Designer 0.1 fixes the independent drafts, cross-reading, responses, reconciliation, synthesis, and unanimous confirmation protocol as a baseline for comparing later versions.	.fact/design/0.1.tsv | src/workflow/designer/v0.1.ts | prompts/designer/0.1/	design,workflow
-designer-0.2	Designer 0.2 adds Lead authority for escalating conflicts, returning design changes for member responses, and signing the version both members confirmed.	src/workflow/designer/v0.2.ts | prompts/designer/0.2/	design,workflow
-implementer-0.1	Implementer 0.1 executes the Poteto feature, refactoring, bug-fix, perf-issue and hillclimb adaptations alongside experiment playbooks.	.fact/implement.tsv | src/workflow/implement/v0.1.ts | prompts/implementer/0.1/	implement,workflow

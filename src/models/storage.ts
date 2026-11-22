@@ -54,14 +54,20 @@ export function projectModelPolicy(root: string): ModelPolicy | undefined {
     return {path: projectModelsFile, gitTracking: path === "project-tracked"};
   }
   if (fields.size !== 2 || rows.length !== 2 || !path || (tracking !== "true" && tracking !== "false")) throw invalid();
+  const policy = {path, gitTracking: tracking === "true"};
+  validateModelPolicy(policy);
+  return policy;
+}
+
+export function validateModelPolicy({path, gitTracking}: ModelPolicy) {
+  const invalid = () => new Error("modelConfig 需要有效的项目 TSV 路径或个人模型路径。");
   if (path === personalModelsFile) {
-    if (tracking === "true") throw invalid();
+    if (gitTracking) throw invalid();
   } else if (!/^\.fact\/(?:[\w.-]+\/)*[\w.-]+\.tsv$/u.test(path) || posix.normalize(path) !== path ||
       path.split("/").slice(1).some(part => part.startsWith(".git")) ||
       [modelSettingsPath, ".fact/always.tsv", ".fact/facts.tsv", ".fact/terms.tsv", ".fact/label.tsv", ".fact/change.tsv"].includes(path)) {
     throw invalid();
   }
-  return {path, gitTracking: tracking === "true"};
 }
 
 function primaryWorktree(root: string) {

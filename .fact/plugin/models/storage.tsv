@@ -1,0 +1,7 @@
+id	fact	source	labels
+default-model-policy	When the user approves an initial project save and no policy was configured, the defaults are .fact/models.tsv and modelGitTracking=false.	39c219e56dc3:src/models/storage.ts	
+tracked-model-table	When the user selects a Git-tracked project table, saving the model configuration stages the table with the project settings.	39c219e56dc3:src/models/storage.ts	
+local-model-table	Linked worktrees share the primary checkout’s local project model table. If an existing ignore rule does not cover it, the plugin adds the path to the shared Git info/exclude file.	39c219e56dc3:src/models/storage.ts | .fact/command/taskbook-setup.tsv#user-tracking-policy	worktree
+model-storage-policy	A project table uses a path under .fact/; a personal table uses ~/.agents/taskbook-models.tsv with Git tracking disabled.	39c219e56dc3:src/models/storage.ts	
+legacy-model-policy	The settings reader translates the older single storage choice into a model-table path and Git tracking policy.	39c219e56dc3:src/models/storage.ts	
+settings-stage	On a model-settings save, the plugin updates and stages .fact/taskbook.tsv as a two-column key/value table. A worktree based on the resulting commit inherits that policy.	39c219e56dc3:src/models/storage.ts#L124-L142	

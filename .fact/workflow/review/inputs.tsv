@@ -1,0 +1,3 @@
+id	fact	source	labels
+term-review	Review determines whether the current candidate is ready for delivery.	39c219e56dc3:.fact/terms.tsv#L12	terms
+review-fact-scope	Reviewers assess candidate behavior, maintainability, and draft facts from designers and the implementer against taskbook goals, project conventions, and implementation evidence.	39c219e56dc3:.fact/workflow.tsv#L24 | 39c219e56dc3:.fact/terms.tsv#L12 | 39c219e56dc3:prompts/review/common.md	facts

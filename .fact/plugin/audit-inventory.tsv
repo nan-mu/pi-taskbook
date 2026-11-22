@@ -1,0 +1,2 @@
+id	fact	source	labels
+setup-inventory	For the identified repository, Setup inventories .audit. The preview-facts operation of taskbook_migrate returns the recognized candidates for the inspected source snapshot.	src/setup/command.ts | src/setup/audit-facts.ts | .fact/command/taskbook-setup.tsv#audit-retention	

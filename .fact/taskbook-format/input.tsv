@@ -1,0 +1,6 @@
+id	fact	source	labels
+taskbook-required-sections	A taskbook supplies reviewable Goal and Delivery sections under level-two Markdown headings.	39c219e56dc3:src/taskbook/document.ts | 39c219e56dc3:src/workflow/task-context.ts	workflow
+taskbook-entry-types	Entry identifies the task type: New feature, Fix feature, New experiment, or Fix experiment. A legacy Type field in Goal can supply the same value; both fields must agree if present.	39c219e56dc3:src/taskbook/document.ts	workflow
+taskbook-repository-identity	Repository specifies the GitHub owner/repository matched against the local origin.	39c219e56dc3:src/taskbook/document.ts	worktree
+taskbook-base-selection	Specify the baseline with Base branch or a full Base commit. When both resolve locally, the branch history must include the specified commit.	39c219e56dc3:src/taskbook/document.ts#L112-L122 | .fact/taskbook-format/input.tsv#local-base-branch	worktree
+local-base-branch	When Base branch is supplied, /taskbook-new requires it to resolve locally. An existing worktree may use a full Base commit even if the named baseline branch cannot be found locally.	39c219e56dc3:src/taskbook/document.ts#L112-L126 | 39c219e56dc3:src/taskbook/entry.ts#L33-L42	worktree

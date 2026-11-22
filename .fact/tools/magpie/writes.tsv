@@ -1,0 +1,6 @@
+id	fact	source	labels
+magpie-pending-write	An unknown identity, ambiguous record, unverifiable version or missing operation capability leaves a write pending.	39c219e56dc3:src/integrations/magpie-memory.ts	facts
+magpie-create-contract	An owner-isolated create supplies owner, fact_id, fact_version, an idempotency key and null if_version. Retrying a create must preserve retirement.	39c219e56dc3:src/integrations/magpie-memory.ts	facts
+magpie-update-contract	Conditional updates target the remote ID, require conditional_update, and carry the expected remote version and owner with the local fact version.	39c219e56dc3:src/integrations/magpie-memory.ts	facts
+magpie-retire-contract	Retirement requires conditional_forget, explicit local retirement authorization, and owner- and version-guarded readback of a retired record.	39c219e56dc3:src/integrations/magpie-memory.ts	facts
+magpie-confirm-readback	Before each write, sync rechecks the approved local snapshot. It verifies the returned record against owner-scoped readback and confirms an already matching remote version without another write.	39c219e56dc3:src/integrations/magpie-memory.ts	facts

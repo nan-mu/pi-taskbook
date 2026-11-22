@@ -1,0 +1,4 @@
+id	fact	source	labels
+candidate-observation-receipt	In report-tool implementation and performance turns, a tool receipt binds a nonempty output excerpt to the same clean Git revision observed before and after the tool call.	39c219e56dc3:index.ts	implement,review
+report-measurement-routing	On the legacy report-driven path, a passing experiment implementation advances to performance. When review requests another measurement, the run enters performance if it has not yet been measured, or becomes blocked if it has.	39c219e56dc3:src/workflow/transitions.ts#L31-L51	implement,review
+legacy-review-input-identity	For the legacy review path, the review-input digest includes the review phase, candidate revision, project fact snapshot head, plan version, changes, synchronization candidates and review evidence.	39c219e56dc3:index.ts	facts

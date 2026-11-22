@@ -105,12 +105,12 @@ function modelSetup(ctx: ExtensionContext, root?: string) {
   const policy = root ? savedPolicy || defaultModelPolicy : undefined;
   const sources = {
     personal: inspect(personalModelPath(), legacyPersonalModelPath()),
-    project: root && (() => {
+    project: root ? (() => {
       const projectPolicy = policy?.path.startsWith(".fact/") ? policy : defaultModelPolicy;
       const path = projectModelPath(root, projectPolicy);
       return inspect(path, projectPolicy.path === projectModelsFile ?
         legacyProjectModelPath(root, projectPolicy.gitTracking ? "project-tracked" : "project-local") : undefined);
-    })(),
+    })() : undefined,
     settings: root && repoPath(root, modelSettingsPath, "file"),
   };
   const file = fileStatus(paths.path, "file");
@@ -156,12 +156,13 @@ function modelSetup(ctx: ExtensionContext, root?: string) {
     if (!selected && !suggestion) {
       return { ...details, initialization: initialization(), effective: { status: "unconfirmed", reason: "Pi 未注册可核对的角色模型。" } };
     }
-    const routes = effectiveRoutes(modelRoutes({ ...ctx, model: selected ?? suggestion }, config));
-    const registered = new Map([...new Set(Object.values(routes))].map(key => {
+    const routes = modelRoutes({ ...ctx, model: selected ?? suggestion }, config);
+    const effective = effectiveRoutes(routes);
+    const registered = new Map([...new Set(Object.values(effective))].map(key => {
       try { return [key, modelKey(resolveModel({ ...ctx, model: selected }, key))]; }
       catch { return [key, null]; }
     }));
-    const safeRoutes = Object.fromEntries(Object.entries(routes).map(([role, key]) => [role, registered.get(key) ?? null]));
+    const safeRoutes = Object.fromEntries(Object.entries(effective).map(([role, key]) => [role, registered.get(key) ?? null]));
     const invalidRoles = Object.entries(safeRoutes).filter(([, key]) => !key).map(([role]) => role);
     const status = invalidRoles.length ? "invalid" : !selected ? "unconfirmed" :
       config.kind === "fallback" ? "fallback" : "ready";
@@ -267,7 +268,7 @@ export async function collectSetup(pi: ExtensionAPI, ctx: ExtensionContext) {
     subagents: {builtinSdk: runtime.status, installedVersions: [...new Set(installed.flatMap(item => item.version ? [item.version] : []))],
       externalRpcResponded: runtime.externalRpcResponded, rpcVersion: runtime.legacyReviewTransport},
     t3: {sessionTools: t3SessionTools(pi), directTransport: t3.transport, reason: t3.reason,
-      taskbookNew: t3.worktree && Boolean(root), taskbookHandoff: t3.handoff && Boolean(root) && t3.binding !== undefined},
+      taskbookNew: t3.worktree && Boolean(root)},
     github: {read: Object.entries(mcp.github.read).filter(([, value]) => value.status === "discovered").map(([name]) => name),
       t3Tools: t3ForgeSessionTools(pi), pullRequestDeliveryTools: pullRequestDelivery.tools, repositoryAccess: "not-tested"},
     magpieCatalogue: Object.hasOwn(mcp.magpie.byService, "magpie") ? "registered" : magpieCatalogue,

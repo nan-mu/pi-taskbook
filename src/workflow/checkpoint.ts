@@ -16,7 +16,7 @@ import { loadUpstreamInputs, pinUpstreamInputs, usesCurrentInputs, type Upstream
 import { inspectAuditMigration } from "../setup/audit-migration.ts";
 import { ensureRunDirectory, runDirectory } from "./run-paths.ts";
 import { restorePhase, stages, type Outcome, type Phase } from "./transitions.ts";
-import type { IntakeConflict, IntakeDecision } from "../facts/taskbook-intake.ts";
+import type { IntakeConflict, IntakeDecision, TaskFactView } from "../facts/taskbook-intake.ts";
 import type { TaskItem } from "./task-context.ts";
 import { isArchiveRemoval } from "./design-archive.ts";
 import type { Team } from "./team.ts";
@@ -37,7 +37,7 @@ type State = {
   version: 3;
   digest: string;
   session: string;
-  reviewPolicy?: 1;
+  reviewPolicy?: 1 | 2;
   promptDigest?: string;
   routes?: ModelRoutes;
   plan?: ExecutionPlan;
@@ -58,6 +58,8 @@ type State = {
   approvedProjectHead?: string | null;
   sync?: CompletedSync;
   taskFacts?: TaskItem[];
+  factView?: TaskFactView;
+  registrationIntent?: {input: string; files: [string, string][]};
   intakeConflicts?: IntakeConflict[];
   intakeDecisions?: IntakeDecision[];
   intakeVersion?: {topics: string; project: string | null};
@@ -100,7 +102,7 @@ export function openRun({ ctx, cwd = ctx.cwd, task, promptDigest, prepared }: {
   const session = ctx.sessionManager.getSessionId();
   if (!ctx.sessionManager.getSessionFile()) throw new Error("请在有持久会话记录的 Pi thread 中启动任务。");
   const preliminary = verifyPreparedEntry(cwd, task, prepared);
-  const legacyChanges = taskbookMemoryChanges(task.markdown, task.id);
+  const legacyChanges = taskbookMemoryChanges(task.markdown);
   if (legacyChanges.length && (readFactFile(preliminary.root, projectFactsPath) === undefined ||
       (legacyChanges.some(change => change.kind === "term") && !existsSync(join(preliminary.root, projectGlossaryPath(preliminary.root)))))) {
     throw new Error("任务书使用旧 Project memory 指令。请用 Facts 引用或修改主题 TSV 中的条目。");
@@ -115,7 +117,7 @@ export function openRun({ ctx, cwd = ctx.cwd, task, promptDigest, prepared }: {
   if (!existsSync(path)) {
     const upstream = pinUpstreamInputs();
     loadUpstreamInputs(upstream, stages[0], task.type);
-    const initial: State = { version: 3, reviewPolicy: 1, promptDigest, digest: task.digest, session, base: preliminary.base, branch: preliminary.branch,
+    const initial: State = { version: 3, reviewPolicy: 2, promptDigest, digest: task.digest, session, base: preliminary.base, branch: preliminary.branch,
       phase: stages[0], reports: [],
       upstream };
     try { save(path, initial, task, true); }
@@ -146,13 +148,15 @@ export function openRun({ ctx, cwd = ctx.cwd, task, promptDigest, prepared }: {
       (saved.version < 3 || !state.reviewPolicy || state.promptDigest !== promptDigest || !usesCurrentInputs(state.upstream))) {
     const upstream = pinUpstreamInputs();
     loadUpstreamInputs(upstream, stages[0], task.type);
-    Object.assign(state, { reviewPolicy: 1, promptDigest, upstream, phase: stages[0], cycleStart: state.reports.length,
+    const legacy = saved.reviewPolicy !== 2 && !state.team && !state.taskFacts &&
+      state.reports.some(report => ["fact-review", "correctness", "quality"].includes(report.phase));
+    Object.assign(state, { reviewPolicy: legacy ? 1 : 2, promptDigest, upstream, phase: stages[0], cycleStart: state.reports.length,
       exit: undefined, revision: undefined, candidateId: undefined, plan: undefined, approvedProjectHead: undefined, sync: undefined,
-      planGap: undefined, designActions: undefined, designConsult: undefined, topicFactsHead: undefined, taskFacts: undefined, team: undefined });
+      planGap: undefined, designActions: undefined, designConsult: undefined, topicFactsHead: undefined, taskFacts: undefined, factView: undefined, registrationIntent: undefined, team: undefined });
     save(path, state, task);
   }
   const active = { task, root: preliminary.root, path, state };
-  if (state.approvedProjectHead !== undefined && state.approvedProjectHead !== readProjectMemory(active.root).head) {
+  if (state.phase !== "fact-registration" && state.approvedProjectHead !== undefined && state.approvedProjectHead !== readProjectMemory(active.root).head) {
     throw new Error("当前 .fact 与检查点中已独立审核的版本不同。核对已接受的项目事实版本，恢复该版本后重试，或使用新 Taskbook ID 重新核查。");
   }
   const head = state.exit === "ready" ? cleanRevision(active) : undefined;
@@ -160,7 +164,7 @@ export function openRun({ ctx, cwd = ctx.cwd, task, promptDigest, prepared }: {
   if (state.exit === "ready" && !deliveryHead) {
     if (state.team) throw new Error("这个任务已经交付，当前提交已变化。请为后续变更使用新的 Taskbook ID。");
     checkpoint(active, { ...state, phase: "implement", exit: undefined, revision: undefined, candidateId: undefined, sync: undefined });
-  } else if (state.exit === "ready" && (state.reports.findLast(r => r.phase === "review" || r.phase === "quality")?.projectHead ?? null) !== readProjectMemory(active.root).head) {
+  } else if (state.exit === "ready" && !state.team?.registered && (state.reports.findLast(r => r.phase === "review" || r.phase === "quality")?.projectHead ?? null) !== readProjectMemory(active.root).head) {
     checkpoint(active, {...state, phase: state.taskFacts ? "review" : "correctness", exit: undefined, sync: undefined});
   }
   if (!active.state.routes) {
@@ -181,7 +185,7 @@ export function matchesDeliveryHead(run: Run, head: string) {
   return reviewed !== undefined && (head === reviewed || isArchiveRemoval(root, task, reviewed, head));
 }
 
-export function cleanRevision(run: Run) {
+export function cleanRevision(run: Pick<Run, "root">) {
   const revision = git(run.root, "rev-parse", "HEAD");
   const untracked = git(run.root, "ls-files", "--others", "--exclude-standard", "-z").split("\0").filter(Boolean);
   if (untracked.includes(legacyProjectFactsPath)) readProjectMemory(run.root);

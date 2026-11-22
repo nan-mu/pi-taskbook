@@ -1,0 +1,2 @@
+id	fact	source	labels
+setup-model-write	taskbook_model_setup obtains a modelWritePlan, checks authorization and rechecks the plan before writeModelSettings saves the table.	39c219e56dc3:src/setup/command.ts	

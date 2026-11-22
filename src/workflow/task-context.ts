@@ -2,7 +2,7 @@ import type { Taskbook } from "../taskbook/document.ts";
 import type { CheckedFact } from "../facts/fact-check.ts";
 import type { Phase } from "./transitions.ts";
 
-export type TaskItem = { id: string; text: string; userDecision?: FactDecision; topicFact?: {path: string; id: string} };
+export type TaskItem = { id: string; text: string; operation?: import("../facts/taskbook-intake.ts").FactOperation; userDecision?: FactDecision; topicFact?: {path: string; id: string} };
 export type FactConflict = { factId: string; observation: string; projectVersion?: number; projectHead?: string | null };
 export type FactDecision = { factId: string; action: "keep" | "replace"; text: string };
 

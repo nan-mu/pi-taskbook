@@ -1,0 +1,2 @@
+id	fact	source	labels
+cmd-run	Run /taskbook <taskbook-path> to start the taskbook workflow in the current worktree.	Maintainer decision: user command contract | .fact/prompts/fact-check.tsv#new-follow	

@@ -1,7 +1,0 @@
-id	fact	source	labels
-t3-worktree-ownership	Pi Taskbook delegates worktree creation and management for /taskbook-new to T3's t3_thread_launch MCP tool with workspaceStrategy.type=worktree, without allocating a checkout itself.	ce29da0406120b6f7cdccbf66a22c7c2a0c9eed8:src/integrations/t3.ts:112-128	worktree,t3
-t3-current-handoff	/taskbook-handoff uses T3's native worktree status, listing, and handoff tools to move the current thread or reuse a matching binding.	src/integrations/t3.ts | https://github.com/nan-mu/poteto-delivery/blob/d28745b358b2c87a195d32297068a88e1795fae2/SKILL.md	worktree,t3
-t3-destination-verification	The Taskbook entry checks the bound T3 worktree path and branch before executing the handed-off task in its destination.	src/integrations/t3.ts | src/taskbook/entry.ts	worktree,t3
-t3-handoff-receipts	T3's continuation and setup script receipts describe separate operations. Taskbook reports each status independently.	src/integrations/t3.ts | index.ts	worktree,t3
-t3-handoff-pinned-recovery	Taskbook preserves the prepared branch and commit in the Pi session before asking T3 to move the thread, so re-entry can resume against the original target.	index.ts | src/taskbook/entry.ts	worktree,t3
-t3-local-mcp-address	T3 Code 0.1.11 derives the provider-session HTTP /mcp URL from the server listener address. Taskbook accepts loopback and IP addresses assigned to a local interface.	Installed T3 Code 0.1.11 McpSessionRegistry | src/integrations/t3.ts | tests/setup_rpc.py	t3,worktree

@@ -1,0 +1,5 @@
+id	fact	source	labels
+topic-wording	Separate claims that can change independently into distinct facts.	39c219e56dc3:docs/design/project-memory-prompt.md	
+affirmative	State the adopted choice first and attach a necessary exclusion to that choice.	Maintainer decision: wording of project facts	
+topic-source	Cite a source that can be located and that supports the full scope of the claim.	39c219e56dc3:docs/design/project-memory-prompt.md	
+topic-method-observation	Keep experimental methods distinct from observations and include the conditions under which each result was obtained.	39c219e56dc3:docs/design/project-memory-prompt.md	

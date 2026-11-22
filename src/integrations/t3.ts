@@ -9,28 +9,10 @@ type T3 = { url: URL; token: string };
 type RpcResponse = { id?: number; result?: unknown; error?: unknown };
 const launchTool = "t3_thread_launch";
 const statusTool = "t3_worktree_status";
-const listTool = "t3_worktree_list";
-const handoffTool = "t3_worktree_handoff";
-const workspaceTools = [launchTool, statusTool, listTool, handoffTool];
+const workspaceTools = [launchTool, statusTool];
 const nullable = Type.Union([Type.String(), Type.Null()]);
 const bindingSchema = Type.Object({attached: Type.Boolean(), worktreePath: nullable, branch: nullable,
   projectWorkspaceRoot: Type.String(), defaultStartFromOrigin: Type.Boolean()});
-const worktreePage = Type.Object({refs: Type.Array(Type.Object({name: Type.String(), worktreePath: nullable})),
-  nextCursor: Type.Union([Type.Integer(), Type.Null()])});
-const handoffSchema = Type.Object({worktreePath: Type.String(), branch: Type.String(), baseRef: Type.String(), startedFromOrigin: Type.Boolean(),
-  continuation: Type.Union([
-    Type.Object({status: Type.Literal("scheduled"), delivery: Type.String()}),
-    Type.Object({status: Type.Literal("skipped")}),
-    Type.Object({status: Type.Literal("failed"), detail: Type.String()}),
-  ]),
-  setupScript: Type.Union([
-    Type.Object({status: Type.Literal("started"), scriptName: Type.String(), terminalId: Type.String()}),
-    Type.Object({status: Type.Literal("no-script")}),
-    Type.Object({status: Type.Literal("skipped")}),
-    Type.Object({status: Type.Literal("failed"), detail: Type.String()}),
-  ]),
-});
-
 function readT3Endpoint(): T3 {
   const raw = process.env.T3_MCP_URL;
   const token = process.env.T3_MCP_BEARER_TOKEN;
@@ -132,13 +114,6 @@ async function discoverTools(rpc: Awaited<ReturnType<typeof connectT3>>) {
   return tools;
 }
 
-function canHandoff(input: unknown) {
-  if (typeof input !== "object" || input === null || !("properties" in input)) return false;
-  const {properties} = input;
-  return typeof properties === "object" && properties !== null &&
-    ["branch", "baseRef", "startFromOrigin", "continuationPrompt"].every(name => Object.hasOwn(properties, name));
-}
-
 async function callT3<T extends TSchema>(rpc: Awaited<ReturnType<typeof connectT3>>, name: string, args: object, schema: T) {
   const reply = await rpc("tools/call", {name, arguments: args}) as
     {isError?: boolean; structuredContent?: unknown; content?: {type: string; text?: string}[]};
@@ -173,8 +148,8 @@ export async function readT3Workspace(cwd: string) {
 }
 
 export async function inspectT3() {
-  const gate = {tool: launchTool, worktree: false, handoff: false};
-  const impact = "/taskbook-new 启动独立线程，/taskbook-handoff 迁移当前 T3 线程。普通 Pi 中可在已有 linked worktree 使用 /taskbook。";
+  const gate = {tool: launchTool, worktree: false};
+  const impact = "/taskbook-new 通过 T3 为任务创建指定分支的工作树。已有 linked worktree 时使用 /taskbook。";
   if (!process.env.T3_MCP_URL || !process.env.T3_MCP_BEARER_TOKEN) {
     return { ...gate, status: "missing", transport: "missing",
       reason: "当前 Pi 会话缺少 T3 注入的 MCP 上下文。", impact };
@@ -189,10 +164,9 @@ export async function inspectT3() {
     const rpc = await connectT3(endpoint);
     const tools = await discoverTools(rpc);
     const worktree = hasWorktreeStrategy(tools.get(launchTool));
-    const handoff = tools.has(statusTool) && tools.has(listTool) && canHandoff(tools.get(handoffTool));
     const binding = tools.has(statusTool) ? await callT3(rpc, statusTool, {}, bindingSchema).catch(() => undefined) : undefined;
     return {status: worktree ? "discovered" : tools.has(launchTool) ? "unconfirmed" : "missing", transport: "responding", tool: launchTool, worktree,
-      handoff, binding, reason: tools.has(launchTool) && !worktree ? "工具已注册，但目录未确认托管 worktree 参数。" : undefined, impact};
+      binding, reason: tools.has(launchTool) && !worktree ? "工具已注册，但目录未确认托管 worktree 参数。" : undefined, impact};
   }
   catch { return { ...gate, status: "unconfirmed", transport: "unavailable",
     reason: "插件未能通过 T3 直接接口取得工具目录。", impact }; }
@@ -230,36 +204,4 @@ export async function launchT3Thread(args: {
       workspaceStrategy: { type: "worktree", baseRef: args.base, branch: args.branch, startFromOrigin: false },
   }, Type.Object({threadId: Type.String({minLength: 1}), link: Type.Optional(nullable)}));
   return {threadId: result.threadId, link: result.link ?? undefined};
-}
-
-export async function handoffT3Thread(args: {root: string; branch: string; base: string; message: string}) {
-  const rpc = await connectT3(readT3Endpoint());
-  const tools = await discoverTools(rpc);
-  if (!tools.has(statusTool) || !tools.has(listTool) || !canHandoff(tools.get(handoffTool))) {
-    throw new Error("T3 当前会话缺少工作区状态、列表或线程迁移能力。");
-  }
-  const status = await callT3(rpc, statusTool, {}, bindingSchema);
-  if (status.attached) {
-    if (boundT3Worktree(args.root, status)?.branch !== args.branch) {
-      throw new Error("当前 T3 线程已绑定到另一个工作区。请使用与任务匹配的原线程。");
-    }
-    return {kind: "reused" as const};
-  }
-  if (realpathSync(status.projectWorkspaceRoot) !== realpathSync(args.root)) throw new Error("T3 项目根目录与任务书仓库不一致。");
-  let cursor: number | null = null;
-  const seen = new Set<number>();
-  do {
-    const page = await callT3(rpc, listTool, {query: args.branch, refKind: "local", limit: 200, ...(cursor === null ? {} : {cursor})}, worktreePage);
-    const match = page.refs.find(ref => ref.name === args.branch && ref.worktreePath);
-    if (match) throw new Error("T3 已有该分支的 worktree · " + match.worktreePath + "。请回到它所属的线程。");
-    cursor = page.nextCursor;
-    if (cursor !== null && (seen.has(cursor) || seen.size >= 9)) throw new Error("T3 未能完整核对现有工作区。");
-    if (cursor !== null) seen.add(cursor);
-  } while (cursor !== null);
-  const response = await callT3(rpc, handoffTool, {branch: args.branch, baseRef: args.base, startFromOrigin: false,
-    continuationPrompt: args.message}, handoffSchema);
-  if (response.branch !== args.branch || response.baseRef !== args.base || response.startedFromOrigin || !response.worktreePath) {
-    throw new Error("T3 迁移回执与任务书目标工作区不一致。");
-  }
-  return {kind: "handed-off" as const, ...response};
 }

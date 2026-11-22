@@ -1,0 +1,5 @@
+id	fact	source	labels
+design-synthesize-turn	In Synthesize, the Lead Designer incorporates the resolved issues into one implementation taskbook.	39c219e56dc3:src/workflow/designer/v0.1.ts	prompts
+design-confirm-turn	In Confirm, both Member Designers approve the exact implementation taskbook version produced by the Lead Designer or return specific unresolved issues.	39c219e56dc3:src/workflow/designer/v0.1.ts	prompts
+designer-0.2	After both members confirm a candidate, the Lead signs that exact version, returns proposed changes to both members for response, or asks the user.	39c219e56dc3:src/workflow/designer/v0.2.ts	
+design-release-guard	Implement starts after the Lead signs the member-confirmed version and the plugin commits the design taskbook.	39c219e56dc3:src/workflow/team.ts | .fact/workflow/designer/approval.tsv#design-confirm-turn	

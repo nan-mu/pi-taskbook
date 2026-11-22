@@ -1,0 +1,2 @@
+id	fact	source	labels
+design-probe-checkout	The taskbook_probe tool runs its argument vector at the current HEAD in a temporary checkout and records the hypothesis, criterion and result. The subprocess runs with the host account's privileges.	39c219e56dc3:index.ts | 39c219e56dc3:src/review/subagent-probe.ts	

@@ -1,0 +1,4 @@
+id	fact	source	labels
+review-input-version	The plugin binds review tools and their receipts to the current candidate revision and review round.	39c219e56dc3:src/workflow/team.ts	
+review-context	The plugin supplies the current taskbook Goal, Review prompt, and read-only review tools when dispatching a Designer into Review.	39c219e56dc3:src/workflow/team.ts	prompts
+review-context-handoff	Before cross-review, the plugin appends an archive marker to Member B’s session so earlier turns leave the active review context.	39c219e56dc3:src/workflow/review/flow.ts#L101-L113 | 39c219e56dc3:src/workflow/subagent.ts#L33-L45	prompts

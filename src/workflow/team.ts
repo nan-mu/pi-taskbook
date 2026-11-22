@@ -17,7 +17,7 @@ import { implementerTurn, playbooks, resumeImplementer, reworkImplementer, settl
 import { readRunContext } from "./phase-input.ts";
 import type { FactPlacement } from "./register-facts.ts";
 import { answerReviewUser, reviewTurns, settleReviewTurn, startReviewFlow, type ReviewFlow } from "./review/flow.ts";
-import { subagentTurn, type CommandReceipt, type Seat, type WorkerReceipt, type WorkTurn } from "./subagent.ts";
+import { isCandidateReceipt, subagentTurn, type CommandReceipt, type Seat, type WorkerReceipt, type WorkTurn } from "./subagent.ts";
 import { methodDefinition } from "../methods/tool.ts";
 import type { PullRequestAction } from "../integrations/github-handoff.ts";
 
@@ -77,7 +77,7 @@ function factTool(run: Run, lookup: Set<string>): ToolDefinition<typeof factPara
       page.forEach(match => lookup.add(match.id));
       const isDraftKey = key === "draft" || key.startsWith("draft:") || drafts.some(fact => fact.seat === key || fact.work === key) ||
         ["designer", "implementer", "lead", "member-a", "member-b"].includes(key);
-      const project = isDraftKey ? undefined : await queryProjectFacts(run.root, {query, label, limit});
+      const project = isDraftKey ? undefined : await queryProjectFacts(run.root, {query, label, limit}, run.state.factView);
       project?.matches.forEach(match => { lookup.add(match.id); lookup.add(match.path + "#" + match.id); });
       const result = {project, drafts: page, nextOffset: offset + page.length < matches.length ? offset + page.length : undefined};
       return {content: [{type: "text", text: JSON.stringify(result)}], details: result};
@@ -169,7 +169,7 @@ export async function runTeam(run: Run, ctx: ExtensionContext, signal: AbortSign
         async execute() {
           const implementation = run.state.team?.implement;
           if (implementation?.kind !== "handoff" || run.state.revision !== snapshot) throw new Error("Candidate evidence no longer applies.");
-          const commands = (run.state.team?.commands ?? []).filter(command => command.clean && command.revision === snapshot);
+          const commands = (run.state.team?.commands ?? []).filter(command => isCandidateReceipt(command, snapshot));
           const text = JSON.stringify({records: implementation.checkpoint.records, commands});
           return {content: [{type: "text", text}], details: {}};
         },
@@ -215,7 +215,10 @@ export async function runTeam(run: Run, ctx: ExtensionContext, signal: AbortSign
     if (state.phase === "design") {
       if (!team.design) {
         const baseline = git(run.root, "rev-parse", "HEAD");
-        const design = startDesigner({runId: id + ":design:" + (state.plan?.version ?? 0), baseline, factsVersion: state.topicFactsHead!,
+        const observations = state.reports.slice(state.cycleStart ?? 0).findLast(r => r.phase === "fact-check" && r.outcome === "pass")?.factChecks ?? [];
+        const userAnswers = state.userAnswers ?? [];
+        const factsVersion = hash([state.topicFactsHead, state.approvedProjectHead, state.factView, context.facts, observations, userAnswers]);
+        const design = startDesigner({runId: id + ":design:" + (state.plan?.version ?? 0), baseline, factsVersion, observations, userAnswers,
           taskbook: run.task.markdown, facts: context.facts.map(fact => fact.id + " " + fact.text +
             (fact.userDecision ? " (User decision: " + JSON.stringify(fact.userDecision) + ")" : "")),
           targetIds: [...context.goals, ...context.delivery].map(item => item.id)});
@@ -240,7 +243,7 @@ export async function runTeam(run: Run, ctx: ExtensionContext, signal: AbortSign
         persist({...team, drafts, archiveRevision}, {phase: "implement", plan, reports: [...state.reports, {...report, evidence: [...report.evidence]}]});
         continue;
       }
-      const turns = designerTurns(team.design);
+      const turns: (WorkTurn & {designer: Exclude<Seat, "implementer">})[] = designerTurns(team.design);
       status("Design · " + turns.map(turn => turn.designer + "/" + turn.work).join(", "));
       await settledBatch(turns, turn => dispatch(turn.designer, {
         ...turn, prompt: turn.prompt + "\n\n" + "Primary taskbook facts are tagged " + taskFactLabel(run.task) +
@@ -313,7 +316,7 @@ export async function runTeam(run: Run, ctx: ExtensionContext, signal: AbortSign
         const implement = settleImplementerTurn(implementation, {id: turn.id, settled: true, result: reply.result});
         if (implement.kind === "handoff") {
           const revision = cleanRevision(run);
-          if (!reply.commands.some(command => !command.failed && command.clean && command.before === revision && command.revision === revision)) {
+          if (!reply.commands.some(command => !command.failed && isCandidateReceipt(command, revision))) {
             throw new Error("Verify 需要在干净的提交上实际运行一项交付检查。");
           }
         }
@@ -367,7 +370,7 @@ export async function runTeam(run: Run, ctx: ExtensionContext, signal: AbortSign
     }
     const turns = reviewTurns(review);
     status("Review · " + turns.map(turn => turn.designer + "/" + turn.work).join(", "));
-    await settledBatch(turns, turn => dispatch(turn.designer, turn, revision, {
+    await settledBatch(turns, turn => dispatch(turn.designer, {...turn, context: {...turn.context, taskFactLabel: taskFactLabel(run.task)}}, revision, {
       review: true, cleanContext: turn.cleanContext || turn.work.startsWith("initial-"), evidence: true,
     }), (turn, reply) => {
       assertCandidate(run, revision);
@@ -394,6 +397,11 @@ export async function runTeam(run: Run, ctx: ExtensionContext, signal: AbortSign
       if ((result.findings ?? []).some(finding => finding.factId && !context.facts.some(fact => fact.id === finding.factId) &&
           !reply.lookedUp.has(finding.factId) && !drafts.some(draft => draft.id === finding.factId))) {
         throw new Error("审核报告引用了未核对的事实 ID。");
+      }
+      for (const finding of result.findings ?? []) {
+        const item = context.facts.find(fact => fact.topicFact && (fact.topicFact.id === finding.factId ||
+          fact.topicFact.path + "#" + fact.topicFact.id === finding.factId));
+        if (item) finding.factId = item.id;
       }
       const current = run.state.team!;
       const next = settleReviewTurn(current.review!, {id: turn.id, settled: true, result});

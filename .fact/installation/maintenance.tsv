@@ -1,0 +1,3 @@
+id	fact	source	labels
+offline-workflow-views	Run python3 tools/render-catalog.py <output.html> for the method catalog or python3 tools/render-statecharts.py <output.html> for the offline workflow diagrams.	tools/render-catalog.py | tools/render-statecharts.py	prompts
+review-command-source-map	Trace a command from index.ts into src/setup for setup, src/taskbook and src/integrations/t3.ts for launch, or src/workflow/checkpoint.ts, phase-input.ts and transitions.ts for a running task.	39c219e56dc3:docs/review-guide.md#L5-L18 | 39c219e56dc3:index.ts#L592-L631	

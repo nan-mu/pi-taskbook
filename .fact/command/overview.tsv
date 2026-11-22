@@ -1,0 +1,2 @@
+id	fact	source	labels
+term-command	A Command is a user-invoked entry point for a plugin operation, such as /taskbook-setup.	Maintainer decision: user command contract	terms

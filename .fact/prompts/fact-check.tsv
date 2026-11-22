@@ -1,0 +1,3 @@
+id	fact	source	labels
+new-follow	On successful entry validation, the plugin supplies the fact-check prompt to the agent responsible for that stage.	Maintainer decision: delivery of stage prompts at entry | .fact/workflow/fact-check.tsv#check-role | .fact/prompts/fact-check.tsv#check-prompt	
+check-prompt	The fact-check prompt asks the agent to restate the goal, specify an observable criterion, and report evidence for or against the task premise.	Maintainer decision: lightweight task-entry fact check	
