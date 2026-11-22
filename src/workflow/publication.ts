@@ -31,7 +31,7 @@ export function deliveryFactDiff(run: Run) {
 function verifiedDelivery(run: Run) {
   const {state, root, task} = run;
   const revision = state.deliveryRevision;
-  if (state.exit !== "ready" || !revision || !state.team?.handoff || state.team.review?.kind !== "approved" ||
+  if (state.phase !== "publication" || !revision || !state.team?.handoff || state.team.review?.kind !== "approved" ||
       state.team.review.progress.candidate.revision !== state.revision) throw new Error("PR 交付需要本地任务已完成并签署 Review。");
   if (state.branch === "main") throw new PublicationChanged("PR 交付需要独立于 main 的任务分支。");
   workspace(root, task, state.base, state.branch);
@@ -47,9 +47,9 @@ function verifiedDelivery(run: Run) {
   return {repository, branch: state.branch, revision};
 }
 
-async function remoteGit(run: Run, args: string[]) {
+async function remoteGit(run: Run, args: string[], signal?: AbortSignal) {
   try {
-    const {stdout} = await exec("git", args, {cwd: run.root, timeout: 30_000,
+    const {stdout} = await exec("git", args, {cwd: run.root, signal, timeout: 30_000,
       env: {...process.env, GIT_TERMINAL_PROMPT: "0"}, maxBuffer: 1_000_000});
     return stdout.trim();
   } catch {
@@ -159,7 +159,7 @@ export async function preparePublication(run: Run, action: PullRequestAction, cl
   return {...plan, action, pull, body};
 }
 
-export async function publishDelivery(run: Run, plan: Publication, client: HandoffGitHub): Promise<PublicationReceipt> {
+export async function publishDelivery(run: Run, plan: Publication, client: HandoffGitHub, signal?: AbortSignal): Promise<PublicationReceipt> {
   const delivery = verifiedDelivery(run);
   if (plan.revision !== delivery.revision || plan.branch !== delivery.branch || plan.repository !== delivery.repository) {
     throw new PublicationChanged("记录的 PR 目的地或交付版本已变化。");
@@ -176,9 +176,10 @@ export async function publishDelivery(run: Run, plan: Publication, client: Hando
   const remote = await remoteRevision(run, plan.branch);
   if (remote !== plan.revision && remote !== plan.remoteHead) throw new PublicationChanged("发布期间 origin 工作分支发生变化。");
   verifiedDelivery(run);
+  signal?.throwIfAborted();
   if (remote !== plan.revision) {
     await remoteGit(run, ["-c", "remote.origin.mirror=false", "push", "--porcelain", "--no-follow-tags", "--recurse-submodules=no",
-      "origin", plan.revision + ":refs/heads/" + plan.branch]);
+      "origin", plan.revision + ":refs/heads/" + plan.branch], signal);
     if (await remoteRevision(run, plan.branch) !== plan.revision) throw new Error("等待 origin 确认交付提交后重试。");
   }
   if ((plan.action === "create" || plan.action === "draft") && !pull) {

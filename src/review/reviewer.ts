@@ -35,7 +35,7 @@ const [reviewInstruction, ...reviewRoles] = readFileSync(new URL("../../prompts/
   .trim().split(/^## /m);
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 const parameters = Type.Object({
-  view: Type.Union([Type.Literal("files"), Type.Literal("changes"), Type.Literal("base"), Type.Literal("candidate"), Type.Literal("diff")]),
+  view: Type.Union([Type.Literal("files"), Type.Literal("changes"), Type.Literal("base"), Type.Literal("candidate"), Type.Literal("diff"), Type.Literal("history")]),
   path: Type.Optional(Type.String({ minLength: 1 })),
   start: Type.Optional(Type.Integer({ minimum: 1, description: "首行，从 1 计数" })),
   limit: Type.Optional(Type.Integer({minimum: 1, maximum: 120, description: "行数，默认 60"})),
@@ -43,7 +43,7 @@ const parameters = Type.Object({
 
 export function inspectionTool(input: Pick<ReviewInput,"root"|"base"|"revision">, observations: Inspection[]): ToolDefinition<typeof parameters> {
   return {
-    name: "inspect_revision", label: "检查固定 Git 提交", description: "files 列出当前固定提交中的文件，可用 path 指定目录。base 和 candidate 读取指定文件。changes 和 diff 查看两版改动。每次返回一页。",
+    name: "inspect_revision", label: "检查固定 Git 提交", description: "files 列出当前固定提交中的文件，可用 path 指定目录。base 和 candidate 读取指定文件。changes 和 diff 查看两版改动。history 查看指定路径的提交历史和提交说明。每次返回一页。",
     parameters,
     async execute(_id, { view, path, start = 1, limit = 60 }) {
       if (path && (posix.isAbsolute(path) || posix.normalize(path) !== path || path === ".." || path.startsWith("../"))) {
@@ -56,6 +56,9 @@ export function inspectionTool(input: Pick<ReviewInput,"root"|"base"|"revision">
       } else if (view === "base" || view === "candidate") {
         if (!path) throw new Error("读取文件需要 path。");
         args = ["cat-file", "blob", (view === "base" ? input.base : input.revision) + ":" + path];
+      } else if (view === "history") {
+        if (!path || path === ".") throw new Error("查看历史需要仓库内的具体路径。");
+        args = ["log", "--reverse", "--date=short", "--format=%H %ad%n%B", input.revision, "--", ":(literal)" + path, ":(exclude,top,literal).fact"];
       } else {
         args = ["diff", "--no-ext-diff", "--no-textconv", "--no-color",
           ...(view === "changes" ? ["--name-status"] : []), input.base, input.revision, "--",
@@ -64,7 +67,8 @@ export function inspectionTool(input: Pick<ReviewInput,"root"|"base"|"revision">
       const raw = execFileSync("git", args, {
         cwd: input.root, encoding: "utf8", maxBuffer: 32 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"],
       });
-      const lines = view === "files" ? raw.trimEnd().split("\n").filter(file => file && !isFactPath(file)) : raw.split("\n");
+      const lines = view === "files" ? raw.trimEnd().split("\n").filter(file => file && !isFactPath(file)) :
+        view === "history" ? (raw ? raw.trimEnd().split("\n") : []) : raw.split("\n");
       if (!lines.length) return {content: [{type: "text", text: "此位置没有可检查的文件。"}], details: {}};
       if (start > lines.length) throw new Error("请求的首行超出文件或差异范围。");
       const page: string[] = [];

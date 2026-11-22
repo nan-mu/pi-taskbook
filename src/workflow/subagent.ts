@@ -45,7 +45,7 @@ export async function subagentTurn({ run, ctx, seat, turn, route, tools = [], bu
       ". Your Work State is " + turn.work + ". The current assignment establishes which judgment you own and which inputs you can rely on.",
     alwaysPrompt(root),
     turn.prompt,
-    "The plugin owns scheduling. Work only on this assignment and use its tools. Finish by calling " + resultName +
+    "Work on this assignment using its tools. When the result schema has next, select the Work State you need and supply its matching result. Finish by calling " + resultName +
       " exactly once with the state-specific result. In any permitted reason or evidence fields, identify the observation and its location, including what changed a prior judgment. Use only fields the state accepts, then end the turn.",
   ].filter(Boolean).join("\n\n");
   const resourceLoader = new DefaultResourceLoader({
@@ -79,11 +79,13 @@ export async function subagentTurn({ run, ctx, seat, turn, route, tools = [], bu
       return {content: [{type: "text", text: "Recorded."}], details: {}, terminate: true};
     },
   };
-  function guard<T extends TSchema, Details, State>(tool: ToolDefinition<T, Details, State>): ToolDefinition<T, Details, State> {
-    return {...tool, async execute(id, params, signal, onUpdate, ctx) {
+  function guard<T extends TSchema, Details, State>(tool: ToolDefinition<T, Details, State>) {
+    const {renderCall: _renderCall, renderResult: _renderResult, ...workerTool} = tool;
+    return {...workerTool, async execute(...args: Parameters<typeof tool.execute>) {
+      const [, params] = args;
       const reason = factAccessRestriction(tool.name, params, root);
       if (reason) throw new Error(reason);
-      return tool.execute(id, params, signal, onUpdate, ctx);
+      return tool.execute(...args);
     }};
   }
   const guardedTools: ToolDefinition[] = builtins.length ? [

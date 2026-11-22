@@ -35,6 +35,8 @@ pi install https://github.com/nan-mu/pi-taskbook
 
 粘贴正文时，在命令后留一个空格，再粘贴多行 Markdown。正文中的事实写在 `## Facts` 下。引用相对路径的附件时，提交任务书文件的路径。需要裁决时在当前会话直接回复。任务中断或 Pi 重启后，再次执行 `/taskbook` 会开始一轮新任务。
 
-审核签署后，插件用 Git 推送任务分支，再用当前 Pi 会话的 Magpie GitHub 工具创建 PR。已有对应 PR 时更新该 PR。任务书无需声明发布，是否合并由你决定。
+在 Design 和 Implement 中，agent 提交工作结果时选择下一状态。插件加载该状态的提示词，并等待派发的工作全部返回。需要追查当前行为或历史决策时，可以选择 `how` 或 `why`。
+
+审核签署后，插件用 Git 推送任务分支，再用当前 Pi 会话的 Magpie GitHub 工具创建 PR，并等待回执。已有对应 PR 时更新该 PR。任务书无需声明发布，是否合并由你决定。
 
 任务书的输入字段和引用规则见[任务书格式](.fact/taskbook-format/)；各阶段承担的判断见[工作流](.fact/workflow/)。

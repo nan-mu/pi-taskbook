@@ -2,9 +2,10 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
+import { investigationPrompt, investigationRequest, investigationResult, investigations, pstackGuidance, readTransition, transition, type Investigation } from "../playbook.ts";
 import { acceptPlan, type ExecutionPlan } from "../design-worker.ts";
 import { answers, askConsult, designers, needsUser, type Change, type CompletedReply, type Consultation,
-  type Designer, type Draft, type Reply, type Response, type RoundWork, type Work } from "./protocol-v0.1.ts";
+  type Designer, type Draft, type Response, type RoundWork } from "./protocol-v0.1.ts";
 
 export const designerVersion = "0.1";
 export type DesignInput = {runId: string; taskbook: string; baseline: string; factsVersion: string; facts: readonly string[]; observations?: readonly import("../../facts/fact-check.ts").CheckedFact[]; userAnswers?: readonly {question: string; answer: string}[]; targetIds: readonly string[]};
@@ -18,7 +19,7 @@ type ConfirmationChanges = {goal: boolean; facts: boolean; steps: string[]; orde
 type WorkInput = {drafts: DraftEntry[]} | {issues: Issue[]} | {drafts: DraftEntry[]; resolved: Issue[]; previous?: Candidate} |
   {candidate: Candidate; resolved: Issue[]; changesSincePrevious?: ConfirmationChanges} | null;
 type RoundJob = {id: string; designer: Designer; work: RoundWork; input: WorkInput};
-type ConsultJob = {id: string; designer: Designer; work: "consult"; question: string; evidence: string; returnTo: RoundJob};
+type ConsultJob = {id: string; designer: Designer; work: "consult" | Investigation; question: string; evidence?: string; returnTo: RoundJob};
 type Job = RoundJob | ConsultJob;
 type Slot = {job: Job; reply?: CompletedReply};
 type Progress = {
@@ -46,8 +47,19 @@ export function startDesigner(input: DesignInput): DesignerState {
     seenProposals: [], consultations: []}, "draft", designers.map(designer => ({designer, input: null})));
 }
 
-function responseSchema(work: Work) {
-  return work === "consult" ? Type.Union([answers.consult, needsUser]) : Type.Union([answers[work], askConsult, needsUser]);
+export function redraftDesign(state: Working) {
+  const {progress} = state;
+  return begin({...progress, drafts: [], issues: [], resolved: [], seenProposals: [], candidate: undefined},
+    "draft", designers.map(designer => ({designer, input: null})));
+}
+
+function responseSchema(job: Job) {
+  const escalation = transition(job.designer === "lead" ? "needs-user" : "lead-decision", needsUser);
+  if ("returnTo" in job) return Type.Union([
+    transition(job.returnTo.work, job.work === "consult" ? answers.consult : investigationResult), escalation,
+  ]);
+  return Type.Union([transition("select-state", answers[job.work]), transition("consult", askConsult), escalation,
+    ...investigations.map(method => transition(method, investigationRequest))]);
 }
 
 export function designContext(input: DesignInput) {
@@ -60,18 +72,20 @@ export function designerTurns(state: DesignerState) {
   const {input, consultations, round} = state.progress;
   const assignment = designContext(input);
   return state.slots.filter(slot => !slot.reply).map(({job}) => {
-    const current = job.work === "consult" ? job.returnTo.input : job.input;
+    const current = "returnTo" in job ? job.returnTo.input : job.input;
     const focused = current && "resolved" in current ? {
       ...current, ...("previous" in current && current.previous ? {drafts: []} : {}),
       resolved: current.resolved.map(({id, proposal}) => ({id, proposal})),
     } : current;
-    const materials = job.work === "consult" ? {question: job.question, evidence: job.evidence, work: focused} : focused;
+    const materials = "returnTo" in job ? {question: job.question, evidence: job.evidence, returnTo: job.returnTo.work, work: focused} : focused;
+    const prompt = job.work === "how" || job.work === "why" ? investigationPrompt(job.work) :
+      readFileSync(new URL(`../../../prompts/designer/${designerVersion}/${job.work}.md`, import.meta.url), "utf8").trim();
     return {
       id: job.id, designer: job.designer, work: job.work,
       context: structuredClone({protocol: designerVersion, round, ...assignment, materials,
-        consultations: consultations.filter(item => item.designer === job.designer)}),
-      prompt: readFileSync(new URL(`../../../prompts/designer/${designerVersion}/${job.work}.md`, import.meta.url), "utf8").trim(),
-      schema: responseSchema(job.work),
+        consultations: consultations.filter(item => item.designer === job.designer).slice(-6)}),
+      prompt: job.work === "synthesize" ? prompt + "\n\n" + pstackGuidance("architect", "design") : prompt,
+      schema: responseSchema(job),
     };
   });
 }
@@ -114,24 +128,29 @@ export function settleDesignerTurn(state: DesignerState, event: {id: string; set
   if (state.kind !== "working" || !event.settled) return state;
   const slot = state.slots.find(item => item.job.id === event.id && !item.reply);
   if (!slot) return state;
-  const schema = responseSchema(slot.job.work);
-  if (!Value.Check(schema, event.result)) throw new Error(`Invalid Designer ${slot.job.work} result.`);
-  const result: Reply = structuredClone(event.result);
-  if (result.kind === "needs-user") return {kind: "paused", previous: state, question: result.question,
+  const {next, result} = readTransition(responseSchema(slot.job), event.result);
+  const {job} = slot;
+  if (Value.Check(needsUser, result)) return {kind: "paused", previous: state, question: result.question,
     evidence: result.evidence, factId: result.factId};
-  if (result.kind === "consult" && slot.job.work !== "consult") {
+  if ("returnTo" in job) {
+    const finding = Value.Check(investigationResult, result) ?
+      {kind: "answered" as const, answer: result.answer, basis: result.evidence.join("\n"), draftFacts: []} : result;
+    if (!Value.Check(answers.consult, finding)) throw new Error("Invalid Design consultation result.");
+    const consultations = [...state.progress.consultations, {designer: job.designer, question: job.question, result: finding}];
+    return replaceJob({...state, progress: {...state.progress, consultations}}, slot, job.returnTo);
+  }
+  if (next === "consult" && Value.Check(askConsult, result)) {
     return replaceJob(state, slot, {question: result.question, evidence: result.evidence,
-      work: "consult", designer: slot.job.designer, returnTo: slot.job});
+      work: next, designer: job.designer, returnTo: job});
   }
-  if (result.kind === "answered" && slot.job.work === "consult") {
-    const consultations = [...state.progress.consultations, {designer: slot.job.designer, question: slot.job.question, result}];
-    return replaceJob({...state, progress: {...state.progress, consultations}}, slot, slot.job.returnTo);
+  if ((next === "how" || next === "why") && Value.Check(investigationRequest, result)) {
+    return replaceJob(state, slot, {question: result.question, work: next, designer: job.designer, returnTo: job});
   }
-  if (result.kind === "consult" || result.kind === "answered" || slot.job.work === "consult") throw new Error("Invalid Consult transition.");
-  validateReply(state, slot.job, result);
+  if (!Value.Check(answers[job.work], result)) throw new Error("Invalid Design round result.");
+  validateReply(state, job, result);
   const slots = state.slots.map(item => item === slot ? {...slot, reply: result} : item);
-  const next = {...state, slots};
-  return slots.every(item => item.reply) ? advance(next) : next;
+  const collected = {...state, slots};
+  return slots.every(item => item.reply) ? advance(collected) : collected;
 }
 
 function replaceJob(state: Working, slot: Slot, job: Omit<ConsultJob, "id"> | RoundJob): Working {

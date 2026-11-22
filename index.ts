@@ -2,6 +2,7 @@ import { buildPhaseInput, readRunContext } from "./src/workflow/phase-input.ts";
 import { registerSetupCommand } from "./src/setup/command.ts";
 import { setRunState, cleanRevision, matchesDeliveryHead, startRun, type Report, type Run } from "./src/workflow/run.ts";
 import { magpieSessionTransport, readSourceProjectFacts, recallMagpieMemory, syncMagpieMemory, type MagpieSyncResult } from "./src/integrations/magpie-memory.ts";
+import { magpieSessionTools } from "./src/integrations/mcp-catalog.ts";
 import { methodTool, registerMethodTool } from "./src/methods/tool.ts";
 import type { ExtensionAPI, ExtensionContext, ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -26,7 +27,7 @@ import { readFileSync } from "node:fs";
 import { resumeTeam, runTeam, selectedPlaybook } from "./src/workflow/team.ts";
 import { registerSubagentTool, subagentTool } from "./src/workflow/subagent.ts";
 import { registerReviewedFacts, reviewedDrafts } from "./src/workflow/register-facts.ts";
-import { githubHandoff, githubHandoffTools, pullRequestActions, type PullRequestAction } from "./src/integrations/github-handoff.ts";
+import { githubHandoff, githubHandoffTools, pullRequestActions } from "./src/integrations/github-handoff.ts";
 import { preparePublication, publishDelivery } from "./src/workflow/publication.ts";
 
 const reportTool = "taskbook_report";
@@ -36,8 +37,6 @@ const directDelegation = (name: string) => /^(?:agent|subagents?|subagentworkflo
 const kickoffType = "pi-taskbook-stage";
 const t3Continuation = "pi-taskbook-t3-continuation";
 const taskbookPrefix = "/taskbook ";
-const publishKickoff = "pi-taskbook-publication";
-const publishTool = "taskbook_publish_pr";
 const handoffPrompt = readFileSync(new URL("./prompts/handoff.md", import.meta.url), "utf8");
 const reportParameters = Type.Object({
   attempt: Type.String({ description: "当前阶段提示词中给出的执行标识。" }),
@@ -66,13 +65,10 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   let lastRun: Run | undefined;
   let attempt: string | undefined;
   let started = false;
-  let syncCaller: { id: string; run: Run; revision: string; transport: ReturnType<typeof magpieSessionTransport> } | undefined;
-  let syncing = false;
+  let deliveryCaller: string | undefined;
   let reported = false;
   let launching = false;
   let relocated = false;
-  let publishing: {token: string; run: Run; action: PullRequestAction; previousTools: string[];
-    active: boolean; caller?: string} | undefined;
   let phaseInput: string | undefined;
   let workerSnapshot: ProjectSnapshot | undefined;
   let intakeSnapshot: ReturnType<typeof readFactTables> | undefined;
@@ -276,7 +272,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     coordinating = undefined;
     teamProgress = undefined;
     run = undefined;
-    syncCaller = undefined;
+    deliveryCaller = undefined;
     relocated = false;
     attempt = undefined;
     phaseInput = undefined;
@@ -300,97 +296,43 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     ctx.ui.notify("退出（阻塞） · " + reason, "warning");
   }
 
-  async function syncCompleted(active: Run) {
+  async function publishSignedDelivery(ctx: ExtensionToolContext, active: Run, signal?: AbortSignal) {
     const {state, task} = active;
     const revision = state.deliveryRevision;
     if (!revision || !state.revision || state.team?.review?.kind !== "approved" ||
         state.team.review.progress.candidate.revision !== state.revision || state.approvedProjectHead === undefined) {
-      throw new Error("同步需要已签署的交付提交和 .fact 版本。");
+      throw new Error("发布需要已签署的交付提交和 .fact 版本。");
     }
-    if (cleanRevision(active) !== revision) throw new Error("同步前交付提交已变化。");
+    if (cleanRevision(active) !== revision) throw new Error("发布前交付提交已变化。");
     requireApprovedFacts(active, readProjectMemory(active.root));
-    syncing = true;
-    try {
-      const transport = syncCaller?.run === active && syncCaller.revision === state.revision ? syncCaller.transport : undefined;
-      const result = await syncMagpieMemory(active.root, {repository: task.repository.toLowerCase(), digest: task.digest,
-        projectHead: state.approvedProjectHead, revision}, transport).catch((): MagpieSyncResult => ({status: "pending", items: [],
-          mirror: {status: "pending", updated: 0, reason: "同步未返回完整结果。"}}));
-      setRunState(active, {...state, sync: result});
-    } finally {
-      syncing = false;
-    }
+    const repository = task.repository.toLowerCase();
+    const sync = await syncMagpieMemory(active.root, {repository, digest: task.digest, projectHead: state.approvedProjectHead, revision},
+      magpieSessionTransport(pi, ctx, signal)).catch((): MagpieSyncResult => ({status: "pending", items: [],
+      mirror: {status: "pending", updated: 0, reason: "同步未返回完整结果。"}}));
+    setRunState(active, {...active.state, sync});
+    signal?.throwIfAborted();
+    const target = githubHandoff(pi, ctx, repository, {signal});
+    const plan = await preparePublication(active, state.team.pullRequest ?? "create", target);
+    signal?.throwIfAborted();
+    const writer = githubHandoff(pi, ctx, repository, {action: plan.action, comments: plan.comments.length > 0, signal});
+    return publishDelivery(active, plan, writer, signal);
   }
-
-  function queuePublication(ctx: ExtensionContext, active: Run, action: PullRequestAction) {
-    const catalogue = githubHandoffTools(pi);
-    if (!ctx.model) {
-      const reason = "当前 Pi 会话没有可用模型。";
-      setRunState(active, {...active.state, stopReason: reason});
-      ctx.ui.notify("PR 发布失败 · " + reason, "warning");
-      return;
-    }
-    const token = randomUUID();
-    publishing = {token, run: active, action, previousTools: pi.getActiveTools(), active: false};
-    pi.setActiveTools([publishTool, ...[...catalogue.values()].filter(tool => tool.exposure === "direct").map(tool => tool.name)]);
-    pi.sendMessage({customType: publishKickoff, details: token, display: false,
-      content: "Call taskbook_publish_pr once with attempt " + token + ". Determine which revision and action succeeded from the receipt returned by this call, then end the turn."},
-      {triggerTurn: true});
-  }
-
-  async function handoffToGitHub(ctx: ExtensionToolContext, active: Run, selected: PullRequestAction, signal?: AbortSignal) {
-    try {
-      const directory = githubHandoff(pi, ctx, active.task.repository.toLowerCase(), {signal});
-      const plan = await preparePublication(active, selected, directory);
-      signal?.throwIfAborted();
-      const client = githubHandoff(pi, ctx, active.task.repository.toLowerCase(),
-        {action: plan.action, comments: plan.comments.length > 0, signal});
-      const receipt = await publishDelivery(active, plan, client);
-      setRunState(active, {...active.state, publication: receipt});
-      const summary = "PR 已登记 · " + [receipt.pullRequest, ...receipt.comments].join("\n");
-      ctx.ui.notify(summary, "info");
-      return summary;
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      setRunState(active, {...active.state, stopReason: reason});
-      const summary = "本地交付提交 " + active.state.deliveryRevision + "。PR 发布失败 · " + reason;
-      ctx.ui.notify(summary, "warning");
-      return summary;
-    }
-  }
-
-  pi.registerTool({
-    name: publishTool, label: "发布已签署的交付 PR", description: "Continue the current Taskbook publication request.",
-    defaultActive: false, executionMode: "sequential",
-    reachesTools: () => ["magpie"],
-    parameters: Type.Object({attempt: Type.String()}, {additionalProperties: false}),
-    async execute(toolCallId, {attempt: token}, signal, _onUpdate, ctx) {
-      const pending = publishing;
-      if (!pending?.active || pending.caller || token !== pending.token) throw new Error("当前没有匹配的 PR 交付请求。");
-      pending.caller = toolCallId;
-      const summary = await handoffToGitHub(ctx, pending.run, pending.action, signal);
-      return {content: [{type: "text", text: summary}], details: {}, terminate: true};
-    },
-  });
 
   async function announce(ctx: ExtensionContext, active: Run) {
     const labels = {ready: "可交接", blocked: "有阻塞"};
     const state = active.state;
     const lines = [labels[state.exit!] + " · " + active.task.id];
     if (state.exit === "blocked") lines.push("阻塞原因 · " + (state.stopReason ?? state.reports.at(-1)?.summary ?? "见当前会话。"));
+    if (state.sync) lines.push("Magpie 同步 · " + JSON.stringify(state.sync));
     if (state.exit === "ready") {
-      await syncCompleted(active);
-      const head = cleanRevision(active);
-      if (!matchesDeliveryHead(active, head)) return exitInvocation(ctx, "同步期间交付提交发生变化。");
-      requireApprovedFacts(active, readProjectMemory(active.root));
-      if (active.state.sync) lines.push("Magpie 同步 · " + JSON.stringify(active.state.sync));
+      if (state.publication) lines.push("PR · " + state.publication.pullRequest, ...state.publication.comments);
       for (const report of state.reports.filter(report => report.candidateId === state.candidateId && report.outcome === "pass")) {
         lines.push(titles[report.phase] + " · " + report.summary);
       }
       if (state.team?.handoff) lines.push(state.team.handoff);
     }
-    const publishAction = state.exit === "ready" && state.team?.handoff ? state.team.pullRequest ?? "create" : undefined;
-    if (publishAction) lines[0] = "本地已签署，正在发布 PR · " + active.task.id;
-    if (state.revision) lines.splice(1, 0, state.exit === "ready" ? "交付提交 " + (active.state.deliveryRevision ?? state.revision) : "候审提交 " + state.revision);
+    if (state.deliveryRevision) lines.splice(1, 0, "交付提交 " + state.deliveryRevision);
+    else if (state.revision) lines.splice(1, 0, "候审提交 " + state.revision);
     const decisions = new Map((state.decisions ?? []).map(decision => [decision.factId, decision]));
     for (const decision of decisions.values()) {
       lines.push(`用户事实裁决 ${decision.factId} · ${decision.action} · ${decision.text}`);
@@ -399,18 +341,16 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     ctx.ui.notify(handoff, active.state.exit === "blocked" ? "warning" : "info");
     await release(ctx);
     pi.sendMessage({ customType: "pi-taskbook-exit", content: handoff, display: true }, { triggerTurn: false });
-    if (publishAction) queuePublication(ctx, active, publishAction);
   }
 
-  const setup = registerSetupCommand(pi, () => Boolean(run || launching || publishing || syncing));
+  const setup = registerSetupCommand(pi, () => Boolean(run || launching));
 
   function entryBusy(ctx: ExtensionContext) {
-    return !ctx.isIdle() || attempt || launching || publishing || setup.isChecking() || coordinating || syncing;
+    return !ctx.isIdle() || attempt || launching || setup.isChecking() || coordinating;
   }
 
   registerHelpCommand(pi, ctx => {
     if (setup.isChecking()) return "当前阶段 · Setup 正在检查当前 Pi 会话和项目。";
-    if (publishing) return "当前阶段 · Handoff 正通过 Magpie GitHub 发布 PR · " + publishing.run.task.id;
     if (launching && !run) return "正在准备任务入口和工作树。";
     if (setup.isActive(ctx)) return "当前阶段 · Setup 正在处理配置或迁移问题。";
     const current = run ?? (lastRun?.state.session === ctx.sessionManager.getSessionId() ? lastRun : undefined);
@@ -419,7 +359,6 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     if (state.phase === "exit") {
       const receipt = state.publication;
       if (receipt) return task.id + " · PR 已登记 · " + receipt.pullRequest;
-      if (state.exit === "ready") return task.id + " · 本地已签署" + (state.stopReason ? "，PR 发布失败 · " + state.stopReason : "，正在发布 PR。");
       return task.id + " · 有阻塞" +
         (state.stopReason ? " · " + state.stopReason : "");
     }
@@ -604,11 +543,9 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   });
 
   pi.on("context", event => {
-    const kickoff = publishing?.active ? {type: publishKickoff, id: publishing.token} :
-      started && attempt ? {type: kickoffType, id: attempt} : undefined;
-    if (!kickoff) return;
+    if (!started || !attempt) return;
     const index = event.messages.findLastIndex(message => message.role === "custom" &&
-      message.customType === kickoff.type && message.details === kickoff.id);
+      message.customType === kickoffType && message.details === attempt);
     return {messages: index < 0 ? [] : event.messages.slice(index)};
   });
 
@@ -618,12 +555,6 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       try { root = git(ctx.cwd, "rev-parse", "--show-toplevel"); } catch {}
     }
     const projectInstructions = root ? alwaysPrompt(root) : "";
-    if (publishing && event.messageType === "custom" && event.message.customType === publishKickoff && event.message.details === publishing.token) {
-      publishing.active = true;
-      return {systemPrompt: [projectInstructions,
-        "You are the Pi Taskbook delivery agent. Current phase: Handoff / PR publication. Review has signed the delivery; your remaining job is to obtain the Magpie GitHub receipt.",
-        "Run the single Taskbook publication tool with the supplied attempt token. Use the returned receipt to determine which revision and action succeeded, and end the turn."].filter(Boolean).join("\n\n")};
-    }
     if (!run || !attempt || !phaseInput || run.state.phase === "exit" || event.messageType !== "custom" ||
         event.message.customType !== kickoffType || event.message.details !== attempt) {
       if (projectInstructions) return {systemPrompt: event.systemPrompt + "\n\n" + projectInstructions};
@@ -636,11 +567,13 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", (event, ctx) => {
-    if (publishing) {
-      if ((event.toolName === publishTool && publishing.active && !publishing.caller) ||
-          (publishing.caller && event.parentToolCallId === publishing.caller &&
-            [...githubHandoffTools(pi).values()].some(tool => tool.name === event.toolName))) return;
-      return {block: true, reason: "PR 交付由插件通过 Magpie GitHub MCP 执行。"};
+    if (run?.state.phase === "publication") {
+      if (deliveryCaller && event.parentToolCallId === deliveryCaller) {
+        const github = [...githubHandoffTools(pi).values()];
+        const memory = [...magpieSessionTools(pi).values()].flatMap(group => Object.values(group));
+        if ([...github, ...memory].some(tool => tool.name === event.toolName)) return;
+      }
+      return {block: true, reason: "交付阶段由插件通过 Magpie 执行。"};
     }
     if (event.toolName === subagentTool && coordinating && event.parentToolCallId === coordinating.caller) return;
     if (run && directDelegation(event.toolName)) {
@@ -651,8 +584,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       const reason = factAccessRestriction(event.toolName, event.input, ctx.cwd, run.root);
       if (reason) return {block: true, reason};
     }
-    if ((run || syncing) && /^(?:mcp__.*__)?memory_(?:save|forget)(?:_[\da-f]+)?$/i.test(event.toolName) &&
-        !(syncing && syncCaller && event.parentToolCallId === syncCaller.id)) {
+    if (run && /^(?:mcp__.*__)?memory_(?:save|forget)(?:_[\da-f]+)?$/i.test(event.toolName)) {
       return { block: true, reason: "Magpie 写入在签署交付后由插件执行。" };
     }
     if (coordinating || run?.state.pendingQuestion || run?.state.pendingConflicts?.length || run?.state.intakeConflicts?.length) {
@@ -690,8 +622,10 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: reportTool,
     label: "提交任务书阶段证据",
-    description: "在本阶段结束时登记结论和证据，随后结束当前模型轮次。",
+    description: "登记本阶段结果。Handoff 通过时在本调用内等待签署交付的 PR 回执。",
     defaultActive: false,
+    executionMode: "sequential",
+    reachesTools: input => run?.state.phase === "handoff" && input.outcome === "pass" ? ["magpie"] : [],
     parameters: reportParameters,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       if (!run || !started || reported || !attempt || params.attempt !== attempt || run.state.phase === "exit") {
@@ -716,11 +650,24 @@ export default function taskbookExtension(pi: ExtensionAPI) {
           reported = true;
           return {content: [{type:"text", text:"记录已保存，等待用户裁决。"}], details: {}, terminate: true};
         }
-        const next = {...team, handoff: summary, pullRequest: params.pullRequest};
-        syncCaller = {id: toolCallId, run: active, revision, transport: magpieSessionTransport(pi, ctx)};
-        setRunState(active, {...active.state, team: next, reports: [...active.state.reports, report]});
         reported = true;
-        return {content: [{type:"text", text:"交付说明已保存。"}], details: {}, terminate: true};
+        deliveryCaller = toolCallId;
+        try {
+          const deliveryRevision = removeDesignArchive(active.root, active.task);
+          setRunState(active, {...active.state, phase: "publication", deliveryRevision,
+            team: {...team, handoff: summary, pullRequest: params.pullRequest}, reports: [...active.state.reports, report]});
+          ctx.ui.setStatus("pi-taskbook", titles.publication);
+          onUpdate?.({content: [{type: "text", text: titles.publication}], details: {}});
+          const publication = await publishSignedDelivery(ctx, active, signal);
+          setRunState(active, {...active.state, phase: "exit", exit: "ready", publication});
+          return {content: [{type: "text", text: "PR 已登记 · " + publication.pullRequest}], details: {}, terminate: true};
+        } catch (error) {
+          const stopReason = error instanceof Error ? error.message : String(error);
+          setRunState(active, {...active.state, phase: "exit", exit: "blocked", stopReason});
+          return {content: [{type: "text", text: "PR 发布失败 · " + stopReason}], details: {}, terminate: true};
+        } finally {
+          deliveryCaller = undefined;
+        }
       }
       if (phase === "fact-management") {
         if (!intakeSnapshot || !workerSnapshot || readProjectMemory(run.root).head !== workerSnapshot.head ||
@@ -789,30 +736,13 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   });
 
   pi.on("agent_settled", async (event, ctx) => {
-    if (publishing?.active) {
-      const completed = publishing;
-      publishing = undefined;
-      pi.setActiveTools(completed.previousTools);
-      if (!completed.caller) {
-        setRunState(completed.run, {...completed.run.state, stopReason: "PR 工具未执行。"});
-        ctx.ui.notify("PR 工具未执行。", "warning");
-      }
-      return;
-    }
     if (!run || !started) return;
     started = false;
     attempt = undefined;
-    if (event.aborted || !reported) {
-      return exitInvocation(ctx, event.aborted ? "当前轮次被中断。" : "本轮结束前没有通过校验的阶段报告。");
-    }
     try {
-      if (run.state.phase === "handoff" && run.state.team?.handoff) {
-        if (!matchesDeliveryHead(run, cleanRevision(run))) throw new Error("交付工作区与签署结果不一致。");
-        requireApprovedFacts(run, readProjectMemory(run.root));
-        const deliveryRevision = removeDesignArchive(run.root, run.task);
-        setRunState(run, {...run.state, phase: "exit", exit: "ready", deliveryRevision});
-      }
-      if (run.state.phase === "exit") return await announce(ctx, run);
+      if (run.state.phase === "exit" && reported) return await announce(ctx, run);
+      if (event.aborted || !reported) return await exitInvocation(ctx,
+        event.aborted ? "当前轮次被中断。" : "本轮结束前没有通过校验的阶段报告。");
       await startPhase(ctx);
     } catch (error) { await exitInvocation(ctx, String(error)); }
   });

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { Type, type Static } from "typebox";
+import { Type } from "typebox";
 import { Value } from "typebox/value";
 import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { queryProjectFacts, maxFactMatches } from "../facts/query.ts";
@@ -18,6 +18,7 @@ import { readRunContext } from "./phase-input.ts";
 import type { FactPlacement } from "./register-facts.ts";
 import { answerReviewUser, reviewTurns, settleReviewTurn, startReviewFlow, type ReviewFlow } from "./review/flow.ts";
 import { isCandidateReceipt, type registerSubagentTool, type CommandReceipt, type Seat, type WorkerReceipt, type WorkTurn } from "./subagent.ts";
+import { investigations, transition } from "./playbook.ts";
 import { methodDefinition } from "../methods/tool.ts";
 import type { PullRequestAction } from "../integrations/github-handoff.ts";
 
@@ -39,10 +40,11 @@ export type Team = {
 };
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
-const answerSchema = Type.Union([
-  Type.Object({kind: Type.Literal("answer"), answer: Type.String({minLength: 1, pattern: "\\S"})}, {additionalProperties: false}),
-  Type.Object({kind: Type.Literal("ask-user"), question: Type.String({minLength: 1, pattern: "\\S"})}, {additionalProperties: false}),
-]);
+const consultAnswer = Type.Object({kind: Type.Literal("answer"), answer: Type.String({minLength: 1, pattern: "\\S"})}, {additionalProperties: false});
+const consultEscalation = Type.Object({kind: Type.Literal("ask-user"), question: Type.String({minLength: 1, pattern: "\\S"})}, {additionalProperties: false});
+const draftedFactsResult = Type.Object({result: Type.Object({
+  kind: Type.String(), draftFacts: Type.Optional(Type.Array(Type.Object({text: Type.String(), source: Type.String()}))),
+})});
 const leadConsult = readFileSync(new URL("../../prompts/lead-implement-consult.md", import.meta.url), "utf8").trim();
 const factParameters = Type.Object({
   query: Type.String({minLength: 1, maxLength: 240}),
@@ -56,7 +58,7 @@ const reviewReply = Type.Object({
   evidence: Type.Optional(Type.Array(Type.String())),
   findings: Type.Optional(Type.Array(Type.Object({evidence: Type.Array(Type.String()), factId: Type.Optional(Type.String())}))),
 });
-const needsUserResult = Type.Object({kind: Type.Literal("needs-user")});
+const needsUserResult = Type.Object({result: Type.Object({kind: Type.Literal("needs-user")})});
 
 function factTool(run: Run, lookup: Set<string>): ToolDefinition<typeof factParameters> {
   return {
@@ -199,19 +201,16 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
     signal.throwIfAborted();
     workspace(run.root, run.task, run.state.base, run.state.branch);
     checkFacts(run);
-    let failure: unknown;
+    const failure = results.find(result => result.status === "rejected");
+    if (failure) throw failure.reason;
     const acceptedOrder = [...results.entries()];
     if (deferUserRequest) {
       const priority = (result: typeof results[number]) => Number(result.status === "fulfilled" && Value.Check(needsUserResult, result.value.result));
       acceptedOrder.sort(([, left], [, right]) => priority(left) - priority(right));
     }
     for (const [index, result] of acceptedOrder) {
-      if (result.status === "rejected") failure ??= result.reason;
-      else {
-        try { accept(turns[index], result.value); } catch (error) { failure ??= error; }
-      }
+      if (result.status === "fulfilled") accept(turns[index], result.value);
     }
-    if (failure !== undefined) throw failure;
   };
 
   while (true) {
@@ -281,15 +280,18 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
       if (implementation.kind === "paused") {
         const {question, evidence, stepId} = implementation;
         if (stepId && !state.plan?.steps.some(step => step.id === stepId)) throw new Error("方案缺口需要引用现行计划的步骤。");
+        const {previous} = implementation;
+        const returnTo = "returnTo" in previous ? previous.returnTo : previous.work;
+        const answerSchema = Type.Union([transition(returnTo, consultAnswer), transition("needs-user", consultEscalation)]);
         const turn: WorkTurn = {
-          id: implementation.previous.id + ":lead", work: "implement-consult", prompt: leadConsult, schema: answerSchema,
-          context: {question, evidence, stepId, goals: context.goals, plan: state.plan, taskFactLabel: taskFactLabel(run.task)},
+          id: previous.id + ":lead", work: "implement-consult", prompt: leadConsult, schema: answerSchema,
+          context: {question, evidence, stepId, returnTo, goals: context.goals, plan: state.plan, taskFactLabel: taskFactLabel(run.task)},
         };
         status("Implement · Lead Consult");
         await settledBatch([turn], work => dispatch("lead", work, git(run.root, "rev-parse", "HEAD")), (_turn, reply) => {
           const result = reply.result;
           if (!Value.Check(answerSchema, result)) throw new Error("无效的 Lead Consult 答案。");
-          const outcome: Static<typeof answerSchema> = result;
+          const outcome = result.result;
           updateTeam({...team, implement: outcome.kind === "answer" ? resumeImplementer(implementation, outcome.answer) : implementation,
             receipts: [...(team.receipts ?? []), reply.receipt]},
             outcome.kind === "ask-user" ? {pendingQuestion: {question: outcome.question + "\n" + evidence}} : {});
@@ -321,7 +323,10 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
         "Use the approved tasks and primary taskbook facts. Start each implementation slice from a known state, change one independently verifiable behavior, and check it on the candidate before moving on. Resolve local decisions in Consult and send plan or scope decisions to the Lead. " +
         "Keep delivery commits local until Handoff publishes the signed revision. Report durable new knowledge as sourced draft facts. " +
         "Use taskbook_method to load a reference method when needed."},
-        git(run.root, "rev-parse", "HEAD"), {writable: true}), (_turn, reply) => {
+        git(run.root, "rev-parse", "HEAD"), {writable: !investigations.some(method => method === turn.work)}), (_turn, reply) => {
+        if (!Value.Check(draftedFactsResult, reply.result)) throw new Error("无效的 Implement 状态结果。");
+        const {result} = reply.result;
+        const draftFacts = result.draftFacts ?? [];
         const implement = settleImplementerTurn(implementation, {id: turn.id, settled: true, result: reply.result});
         if (implement.kind === "handoff") {
           const revision = cleanRevision(run);
@@ -331,18 +336,17 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
         }
         if (hillclimb && trialBase) {
           const keep = Type.Object({kind: Type.Literal("decision"), verdict: Type.Literal("keep")});
-          if (Value.Check(keep, reply.result)) {
+          if (Value.Check(keep, result)) {
             const revision = cleanRevision(run);
             if (git(run.root, "rev-list", "--parents", "-n", "1", revision) !== revision + " " + trialBase ||
                 !git(run.root, "diff", "--name-only", trialBase, revision)) throw new Error("保留实验需要一条包含实际改动的独立提交。");
           }
-          if (turn.work === "rollback" && implement.kind === "working" && implement.work !== "rollback" && implement.work !== "consult" &&
+          if (turn.work === "rollback" && result.kind === "done" &&
               git(run.root, "diff", "--name-only", trialBase, cleanRevision(run))) {
             throw new Error("实验回退后工作区内容必须与该次实验前一致。");
           }
         }
-        const schema = Type.Object({draftFacts: Type.Optional(Type.Array(Type.Object({text: Type.String(), source: Type.String()})))});
-        const drafts = Value.Check(schema, reply.result) ? addDrafts(fetchDrafts(team), reply.result.draftFacts ?? [], "implementer", turn.work) : fetchDrafts(team);
+        const drafts = addDrafts(fetchDrafts(team), draftFacts, "implementer", turn.work);
         updateTeam({...team, implement, drafts, trialBase, commands: [...(team.commands ?? []), ...reply.commands], receipts: [...(team.receipts ?? []), reply.receipt]});
       });
       continue;
@@ -350,7 +354,7 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
 
     if (state.phase !== "review") return;
     const review = team.review;
-    if (!review || !state.revision) throw new Error("缺少当前候审提交的 Review 检查点。");
+    if (!review || !state.revision) throw new Error("缺少当前候审提交的 Review 状态。");
     const {revision} = state;
     assertCandidate(run, revision);
     if (review.kind === "needs-user") {

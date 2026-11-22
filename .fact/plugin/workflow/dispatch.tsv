@@ -1,8 +1,8 @@
 id	fact	source	labels
-plugin-dispatch	The Taskbook plugin selects the next Work State and builds the context, prompt, model, and tool set before creating or continuing each Subagent.	39c219e56dc3:src/workflow/team.ts	prompts
-plugin-transition-input	Agents report structured outcomes to the plugin. The plugin validates the result, records the next transition, and dispatches the next Work Turns.	39c219e56dc3:src/workflow/team.ts	
+plugin-dispatch	The plugin validates an agent-selected Work State in Design and Implement and supplies its context, prompt, model, and tools. A Design round waits for all members before the Lead chooses its next state.	src/workflow/team.ts | src/workflow/designer/v0.2.ts | src/workflow/implement/v0.1.ts	workflow,prompts
+plugin-transition-input	Design and Implement submit the next Work State and its structured result together; the plugin accepts only a declared transition and waits for the next Work Turn to complete.	src/workflow/playbook.ts | src/workflow/subagent.ts | src/workflow/team.ts	workflow
 plugin-design-implement-count	The plugin creates the implementer session after the approved design taskbook has been committed.	39c219e56dc3:src/workflow/team.ts	design
-workflow-persistent-seats	Pi Taskbook owns four named Pi SDK sessions and keeps each seat’s configured model and reasoning level through Design, Implement and Review.	39c219e56dc3:src/workflow/team.ts	design,implement,review
+workflow-worker-seats	Each Work Turn uses a fresh Pi SDK session. The named seat keeps its configured model and reasoning level across turns.	src/workflow/team.ts | src/workflow/subagent.ts	design,implement,review
 work-turn-deduplication	A designer turn accepts a result only for its pending turn ID and settles it once.	39c219e56dc3:src/workflow/designer/v0.1.ts | 39c219e56dc3:.fact/workflow.tsv#L10	design,review
 work-turn-exclusion	The dispatcher waits for all calls in a batch to settle before processing their outcomes and dispatching another batch.	39c219e56dc3:src/workflow/team.ts	design,review
 parent-turn-lifetime	The original Pi session keeps a tool call active while the named team works. Fact intake waits for the team directly, and team work after a user decision runs through taskbook_run_team.	index.ts	design,implement,review

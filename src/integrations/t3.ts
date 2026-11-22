@@ -257,7 +257,7 @@ export async function handoffT3Thread(args: {root: string; branch: string; base:
   let cursor: number | null = null;
   const seen = new Set<number>();
   do {
-    const page = await callT3(rpc, listTool,
+    const page: Static<typeof worktreePage> = await callT3(rpc, listTool,
       {query: args.branch, refKind: "local", limit: 200, ...(cursor === null ? {} : {cursor})}, worktreePage);
     const existing = page.refs.find(ref => ref.name === args.branch);
     if (existing?.worktreePath) throw new Error("任务分支已有 worktree · " + existing.worktreePath + "。可在其所属线程继续，或指定新的 Work branch。");
