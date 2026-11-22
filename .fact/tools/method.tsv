@@ -1,2 +1,2 @@
 id	fact	source	labels
-stage-method-lookup	taskbook_method lists available methods for the active stage when called without a name and returns source and text when a method is selected.	39c219e56dc3:src/methods/tool.ts	workflow,prompts
+stage-method-lookup	taskbook_method lists the recommendations for the active stage and task type when called without a name. A named call returns the source and text of a method available in that stage.	src/methods/tool.ts | src/methods/upstream.ts	workflow,prompts

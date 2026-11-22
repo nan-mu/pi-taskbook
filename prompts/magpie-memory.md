@@ -1,8 +1,3 @@
----
-name: magpie-memory
-description: Review eligibility and evidence for Magpie cross-project memory.
----
-
 # Cross-project memory
 
 Magpie global is visible to the user's projects and agents. For each cross-project M item, require explicit authorization and a durable use outside the source project, revision and run.

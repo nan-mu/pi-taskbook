@@ -4,24 +4,6 @@
   "license": "MIT License\n\nCopyright (c) 2026 Matt Pocock\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n",
   "skills": [
     {
-      "name": "ask-matt",
-      "path": "skills/engineering/ask-matt/SKILL.md",
-      "kind": "workflow",
-      "stage": [
-        "design"
-      ],
-      "status": "partial",
-      "applies": "进入设计时",
-      "reason": "原入口能分清需要明确的问题、需要实际观察的问题与可立即拆解的工作。",
-      "adaptation": "适用条件为「进入设计时」。读已解析的目标、约束、证据与未决项。给每个未决项标明最短的解决方式，能读出答案就给出处，只有运行才能回答就提出一个可证伪实验，属于价值取舍或事实冲突就写明须由谁决定。未决项清空时给出可验证的实现计划。",
-      "omissions": "原入口、交互命令、按项目规模选择其它调度器不迁移。",
-      "distribution": "engineering",
-      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/ask-matt/SKILL.md",
-      "references": [
-        "skills/engineering/ask-matt/PHASE-BOUNDARIES.md"
-      ]
-    },
-    {
       "name": "code-review",
       "path": "skills/engineering/code-review/SKILL.md",
       "kind": "mixed",
@@ -174,40 +156,6 @@
       ]
     },
     {
-      "name": "grill-with-docs",
-      "path": "skills/engineering/grill-with-docs/SKILL.md",
-      "kind": "workflow",
-      "stage": [
-        "fact",
-        "design"
-      ],
-      "status": "partial",
-      "applies": "设计未决项涉及项目语言或既有决定",
-      "reason": "原组合先用追问澄清含义，再与项目词汇和历史决定对照。",
-      "adaptation": "适用条件为「设计未决项涉及项目语言或既有决定」。从一个未决行为追到使用者及其业务名词。查术语和决策的原始出处，把能由材料回答的部分先填好。碰到反例、词义分歧或旧决定限制设计，把两种解释和各自证据并列，记录明确后会改变哪个验收场景。可确定的解释进入设计，涉及改写旧事实的解释交由裁决。",
-      "omissions": "插件组合本地方法，原 Skill 工具与直接落盘不迁移。",
-      "distribution": "engineering",
-      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/grill-with-docs/SKILL.md",
-      "references": []
-    },
-    {
-      "name": "implement-spec",
-      "path": "skills/engineering/implement-spec/SKILL.md",
-      "kind": "workflow",
-      "stage": [
-        "design",
-        "implement"
-      ],
-      "status": "partial",
-      "applies": "执行方案含多个依赖单元",
-      "reason": "保留依赖前沿与短交接，执行身份和调度由 Pi 持有。",
-      "adaptation": "适用条件为「执行方案含多个依赖单元」。把每个可验收单元关联到规格条款、前置单元和证据。仅选择前置已满足的单元，为执行者提供该单元的计划、代码版本、允许写入的范围和必要引用。返回结果要能与单元及版本对应。若两个单元会写同一状态，标明合并前必须验证的共同约束。实现者无法按契约推进时返回阻塞原因，后续决策交回设计。",
-      "omissions": "不承接上游独立 worktree、自动合并、issue 关闭和草稿 PR 的调度。",
-      "distribution": "engineering",
-      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/implement-spec/SKILL.md",
-      "references": []
-    },
-    {
       "name": "implement",
       "path": "skills/engineering/implement/SKILL.md",
       "kind": "mixed",
@@ -358,28 +306,6 @@
       "references": []
     },
     {
-      "name": "setup-matt-pocock-skills",
-      "path": "skills/engineering/setup-matt-pocock-skills/SKILL.md",
-      "kind": "workflow",
-      "stage": [
-        "intake"
-      ],
-      "status": "excluded",
-      "applies": "不触发",
-      "reason": "核心交付为安装 Matt 的追踪器配置、标签和目录体系，与使用自有 Pi 调度的授权边界冲突。",
-      "adaptation": "无运行时指令。",
-      "omissions": "完整原始流程留在来源索引。",
-      "distribution": "engineering",
-      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/setup-matt-pocock-skills/SKILL.md",
-      "references": [
-        "skills/engineering/setup-matt-pocock-skills/domain.md",
-        "skills/engineering/setup-matt-pocock-skills/issue-tracker-github.md",
-        "skills/engineering/setup-matt-pocock-skills/issue-tracker-gitlab.md",
-        "skills/engineering/setup-matt-pocock-skills/issue-tracker-local.md",
-        "skills/engineering/setup-matt-pocock-skills/triage-labels.md"
-      ]
-    },
-    {
       "name": "tdd",
       "path": "skills/engineering/tdd/SKILL.md",
       "kind": "method",
@@ -498,22 +424,6 @@
       ]
     },
     {
-      "name": "wayfinder",
-      "path": "skills/engineering/wayfinder/SKILL.md",
-      "kind": "workflow",
-      "stage": [
-        "design"
-      ],
-      "status": "partial",
-      "applies": "设计有多个相依的未决问题",
-      "reason": "原方法先拆决定的依赖关系，再沿可回答的问题推进。",
-      "adaptation": "适用条件为「设计有多个相依的未决问题」。用验收语言定义终点。把未知项写成能获得答案的决策问题，标明每个答案会解开什么后继选择。先处理无前置且会排除最多歧义的一个，优先检索材料或做可判定的实验。更新已知、剩余和被排除的路线。达到能产出可执行方案的粒度后停止扩展问题。",
-      "omissions": "不启用原交互调度器。",
-      "distribution": "engineering",
-      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/wayfinder/SKILL.md",
-      "references": []
-    },
-    {
       "name": "wizard",
       "path": "skills/engineering/wizard/SKILL.md",
       "kind": "mixed",
@@ -545,22 +455,6 @@
       "omissions": "常驻总管、周期任务、自行更新 wiki、对执行者的全面接管不迁移。",
       "distribution": "in-progress",
       "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/in-progress/chief-of-staff/SKILL.md",
-      "references": []
-    },
-    {
-      "name": "claude-handoff",
-      "path": "skills/in-progress/claude-handoff/SKILL.md",
-      "kind": "workflow",
-      "stage": [
-        "escalate"
-      ],
-      "status": "excluded",
-      "applies": "不触发",
-      "reason": "上游特有的增量是调用 Claude CLI 提交下一段提示并再启动会话。Pi 采用自己的派发，通用交接已由 handoff 提供。",
-      "adaptation": "无运行时指令。",
-      "omissions": "完整原始流程留在来源索引。",
-      "distribution": "in-progress",
-      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/in-progress/claude-handoff/SKILL.md",
       "references": []
     },
     {
@@ -686,54 +580,6 @@
       "references": []
     },
     {
-      "name": "git-guardrails-claude-code",
-      "path": "skills/misc/git-guardrails-claude-code/SKILL.md",
-      "kind": "workflow",
-      "stage": [
-        "implement"
-      ],
-      "status": "excluded",
-      "applies": "不触发",
-      "reason": "上游的保证来自 Claude 的工具调用前钩子和拒绝命令的脚本。仅给执行者提示无法兑现同一保证。",
-      "adaptation": "无运行时指令。",
-      "omissions": "完整原始流程留在来源索引。",
-      "distribution": "misc",
-      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/misc/git-guardrails-claude-code/SKILL.md",
-      "references": []
-    },
-    {
-      "name": "migrate-to-shoehorn",
-      "path": "skills/misc/migrate-to-shoehorn/SKILL.md",
-      "kind": "method",
-      "stage": [
-        "implement"
-      ],
-      "status": "excluded",
-      "applies": "不触发",
-      "reason": "唯一交付是把 TypeScript 中的特定测试断言迁移至指定库。去掉指定语言及目标库，会改变任务本身。",
-      "adaptation": "无运行时指令。",
-      "omissions": "完整原始流程留在来源索引。",
-      "distribution": "misc",
-      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/misc/migrate-to-shoehorn/SKILL.md",
-      "references": []
-    },
-    {
-      "name": "scaffold-exercises",
-      "path": "skills/misc/scaffold-exercises/SKILL.md",
-      "kind": "workflow",
-      "stage": [
-        "implement"
-      ],
-      "status": "excluded",
-      "applies": "不触发",
-      "reason": "核心交付为课程练习目录、规范化题号及教学模板；缺少通用工程任务触发条件。",
-      "adaptation": "无运行时指令。",
-      "omissions": "完整原始流程留在来源索引。",
-      "distribution": "misc",
-      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/misc/scaffold-exercises/SKILL.md",
-      "references": []
-    },
-    {
       "name": "setup-pre-commit",
       "path": "skills/misc/setup-pre-commit/SKILL.md",
       "kind": "mixed",
@@ -751,22 +597,6 @@
       "roleAdaptations": {
         "quality": "先读候选修订和项目既有设置，说明改变了哪一个真实提交入口，哪些检查仅作用于暂存文件、哪些必须检查全项目。核实配置可由实际运行入口到达，正常和失败的返回码对提交有何影响。\n\n读取该版本等价的正常样例及故意失败样例的运行观察。区分手动执行一个检查成功、提交入口真正触发检查、检查报错真的阻止提交这三件事；没有据以证明其中一环的材料就定位缺口。报告范围和副作用时只引自己的只读观察与候选运行证据。"
       }
-    },
-    {
-      "name": "grill-me",
-      "path": "skills/productivity/grill-me/SKILL.md",
-      "kind": "workflow",
-      "stage": [
-        "design"
-      ],
-      "status": "partial",
-      "applies": "需要对一个决定做无持久副作用的追问",
-      "reason": "源文件是 grilling 的别名，保留可追溯来源。",
-      "adaptation": "适用条件为「需要对一个决定做无持久副作用的追问」。此入口的完整方法由 grilling 承担。同一次派发只使用一份追问指令。",
-      "omissions": "原交互入口省略，此条不另计作一种独立方法。",
-      "distribution": "productivity",
-      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/productivity/grill-me/SKILL.md",
-      "references": []
     },
     {
       "name": "grilling",
@@ -801,27 +631,6 @@
       "distribution": "productivity",
       "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/productivity/handoff/SKILL.md",
       "references": []
-    },
-    {
-      "name": "teach",
-      "path": "skills/productivity/teach/SKILL.md",
-      "kind": "workflow",
-      "stage": [
-        "design"
-      ],
-      "status": "excluded",
-      "applies": "不触发",
-      "reason": "目标是跨会话教授一项技能，需要课程、检索练习以及长期学习记录。两种工程任务入口均未承诺教学服务。",
-      "adaptation": "无运行时指令。",
-      "omissions": "完整原始流程留在来源索引。",
-      "distribution": "productivity",
-      "url": "https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/productivity/teach/SKILL.md",
-      "references": [
-        "skills/productivity/teach/GLOSSARY-FORMAT.md",
-        "skills/productivity/teach/LEARNING-RECORD-FORMAT.md",
-        "skills/productivity/teach/MISSION-FORMAT.md",
-        "skills/productivity/teach/RESOURCES-FORMAT.md"
-      ]
     },
     {
       "name": "to-questionnaire",

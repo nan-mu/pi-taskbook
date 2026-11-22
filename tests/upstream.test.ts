@@ -26,6 +26,10 @@ test("method provenance identifies the shipped sources and the exact reviewed ad
     assert.throws(() => loadUpstreamInputs(changed, "fact-check", "new-feature"));
     assert.ok(!usesCurrentInputs({ ...pins, [owner]: { commit: data.commit, root: "/old/worktree" } }));
   }
+  assert.ok(usesCurrentInputs({
+    pstack: {...pins.pstack, digest: "ff01e9b32cfec78556c1395e5de0351f0bc1051d03f923d711debdd0e87dd36f"},
+    matt: {...pins.matt, digest: "1b03965df22b8541aa6f289b4b4647d0f028042a3552b753a02eeb15b23e2ddf"},
+  }));
   assert.ok(!usesCurrentInputs(undefined));
 });
 

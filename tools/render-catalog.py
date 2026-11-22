@@ -425,16 +425,12 @@ PAGE = r'''<!doctype html>
             <option value="">全部类型</option>
             <option value="method">任务提示词</option>
             <option value="mixed">流程及提示词</option>
-            <option value="workflow">流程</option>
-            <option value="playbook">内嵌 playbook</option>
-            <option value="automationSkills">Benny 自动化包</option>
           </select></label
         ><label
           >迁移状态<select id="status">
             <option value="">全部状态</option>
             <option value="integrated">已纳入方法</option>
             <option value="partial">部分迁移</option>
-            <option value="excluded">已排除</option>
             <option value="callable">可按阶段调用</option>
             <option value="roles">有角色版本</option>
           </select></label
@@ -502,15 +498,9 @@ PAGE = r'''<!doctype html>
       function statusText(r) {
         return statuses[r.status];
       }
-      const regular = rows.filter(r => r.collection === "skills");
-      const automation = rows.filter(r => r.collection === "automationSkills");
-      const playbooks = rows.filter(r => r.playbook);
-      const published = regular.filter(r => r.owner === "pstack" || ["engineering", "productivity"].includes(r.distribution));
-      const pstackCount = regular.filter(r => r.owner === "pstack").length;
+      const pstackCount = rows.filter(r => r.owner === "pstack").length;
       $("summary").textContent =
-        `常规盘点 ${regular.length} 项（PStack 公开技能 ${pstackCount}，Matt 全仓 ${regular.length - pstackCount}）。` +
-        `两套已发布目录合计 ${published.length} 项。计入 Benny 自动化包 ${automation.length} 项后，全树共 ${regular.length + automation.length} 项技能，另有 ${playbooks.length} 篇内嵌 playbook。` +
-        `${regular.filter(callable).length} 项含可按阶段调用的提示词。`;
+        `随包编审方法 ${rows.length} 项（PStack ${pstackCount}，Matt ${rows.length - pstackCount}）。`;
       function typeLabel(r) {
         if (r.playbook) return "内嵌 playbook";
         if (r.collection === "automationSkills") return "Benny 自动化包";

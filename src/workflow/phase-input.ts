@@ -12,8 +12,10 @@ import { taskMemory, workerContext } from "./task-context.ts";
 import type { Phase } from "./transitions.ts";
 
 const promptDir = fileURLToPath(new URL("../../prompts/", import.meta.url));
-export const magpieGuide = readFileSync(new URL("../../methods/magpie-memory/SKILL.md", import.meta.url), "utf8").replace(/^---\n[\s\S]*?\n---\n+/, "");
-const localRolePrompts = readdirSync(promptDir, {recursive: true}).flatMap(name => typeof name === "string" && name.endsWith(".md") && name !== "setup.md" ? [name] : []).sort()
+const magpieGuideFile = "magpie-memory.md";
+export const magpieGuide = readFileSync(join(promptDir, magpieGuideFile), "utf8");
+const localRolePrompts = readdirSync(promptDir, {recursive: true})
+  .flatMap(name => typeof name === "string" && name.endsWith(".md") && name !== "setup.md" && name !== magpieGuideFile ? [name] : []).sort()
   .map(name => [name, readFileSync(join(promptDir, name), "utf8")]);
 export const localPromptDigest = createHash("sha256").update(JSON.stringify([localRolePrompts, magpieGuide])).digest("hex");
 export const memoryGuide = readFileSync(join(promptDir, "project-memory.md"), "utf8");
@@ -72,7 +74,7 @@ export function buildPhaseInput(run: Run, phase: Phase, attempt: string, project
   }
   if (phase === "fact-check") guidance.push(prompts[task.type.startsWith("fix-") ? "fact-check-fix" : "fact-check-new"], magpieGuide);
   const methods = methodDirectory(workerMethodStages(phase, task.type), phaseSources(phase, task.type));
-  return [common, ...guidance, ...(phase === "fact-management" ? [] : ["## Reference methods\nIdentify the current role decision that needs a method. Use taskbook_method to read only the guidance needed for that decision, retain its source, and return to the assignment after finding the criterion. Omit name to browse.\n" + methods]),
+  return [common, ...guidance, ...(phase === "fact-management" ? [] : ["## Reference methods\nIdentify the current role decision that needs a method. Use taskbook_method to read only the guidance needed for that decision, retain its source, and return to the assignment after finding the criterion. Omit name for the recommended methods.\n" + methods]),
     "## 当前运行数据", fixed, "## 任务书原文", task.markdown,
     ...(task.facts !== undefined ? ["## 任务书随附事实", task.facts] : [])].join("\n\n");
 }
