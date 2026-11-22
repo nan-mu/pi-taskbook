@@ -19,7 +19,7 @@ const setupTools = [modelCatalogTool, modelSetupTool, migrationTool];
 const instructions = readFileSync(new URL("../../prompts/setup.md", import.meta.url), "utf8").trim();
 const approvedBy = Type.Optional(Type.Array(Type.String({minLength: 1}), {minItems: 1, maxItems: 12, uniqueItems: true}));
 type MigrationOperation = "migrate" | "prepare-facts" | "delete-audit";
-type MigrationInput = {branch?: string; selections?: {id: string; path: string}[]};
+type MigrationInput = {branch?: string; selections?: Parameters<typeof prepareAuditFactInput>[4]};
 type SetupOperation = {kind: "models"; storage: ReturnType<typeof modelStorage>; changeTracking: boolean; newPath?: string} |
   {kind: MigrationOperation};
 const auditName = /\.audit|审计资料|\baudit\b/iu;
@@ -42,7 +42,7 @@ function migrationPlan(run: MigrationSession, operation: MigrationOperation, inp
   if (audit.status !== "ready" && audit.status !== "archived") throw new Error("没有可归档的 .audit。");
   if (operation === "prepare-facts") {
     const {branch, selections} = input;
-    if (!branch || !selections?.length) throw new Error("请给出选定的事实、目标主题表和工作分支。");
+    if (!branch || !selections?.length) throw new Error("请给出选定的事实和工作分支。");
     const known = inspectAuditFacts(root, repository, audit.snapshot.digest);
     return {title: "准备旧事实迁移", description: JSON.stringify({branch, selections}), apply() {
       if (inventoryDigest(inspectAuditMigration(root)) !== inventoryDigest(audit) ||
@@ -259,7 +259,7 @@ export function registerSetupCommand(pi: ExtensionAPI, workflowIsBusy: () => boo
       const preview = modelWritePlan(setup.root, policy, target);
       const previous = preview.files[0]?.content;
       if (storage !== "personal" && previous?.split(/\r?\n/u, 1)[0] === "id\tfact\tsource\tlabels") {
-        throw new Error("模型表路径指向了已有的主题事实表。请更正 " + modelSettingsPath + "。");
+        throw new Error("模型表路径指向了已有的事实表。请更正 " + modelSettingsPath + "。");
       }
       if (projectPath && projectPath !== configured.path && previous !== undefined) {
         parseModelConfig(previous);
@@ -291,7 +291,7 @@ export function registerSetupCommand(pi: ExtensionAPI, workflowIsBusy: () => boo
     parameters: Type.Object({
       operation: Type.Union([Type.Literal("preview-facts"), Type.Literal("prepare-facts"), Type.Literal("migrate"), Type.Literal("delete-audit")]),
       branch: Type.Optional(Type.String({minLength: 1})),
-      selections: Type.Optional(Type.Array(Type.Object({id: Type.String(), path: Type.String()}, {additionalProperties: false}), {minItems: 1})),
+      selections: Type.Optional(Type.Array(Type.Object({id: Type.String(), path: Type.Optional(Type.String())}, {additionalProperties: false}), {minItems: 1})),
       approvedBy,
     }, {additionalProperties: false}),
     async execute(_id, {operation, branch, selections, approvedBy: quotes}, signal, _update, ctx) {

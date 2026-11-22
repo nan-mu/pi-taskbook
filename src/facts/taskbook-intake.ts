@@ -13,12 +13,13 @@ import { decodeTsv } from "./tsv.ts";
 
 const columns = ["id", "fact", "source", "labels"];
 const labelPath = ".fact/label.tsv";
+export const defaultFactTable = ".fact/records.tsv";
 const normalize = (text: string) => text.normalize("NFKC").trim().replace(/\s+/gu, " ").replace(/[.。]+$/u, "");
 export const taskFactLabel = (task: Pick<Taskbook, "digest">) => "taskbook:" + task.digest.slice(0, 16);
 export type IntakeDecision = {id: string; action: "create" | "use" | "update" | "delete"; detail: string};
 export type IntakeConflict = {id: string; reason: string};
 
-export function readTopicFacts(root: string) {
+export function readFactTables(root: string) {
   const tables = new Map<string, FactMatch[]>();
   const modelPath = projectModelPolicy(root)?.path ?? projectModelsFile;
   function scan(dir: string) {
@@ -80,7 +81,7 @@ function legacyRetirements(root: string, commit: string) {
 
 export const intakeTargetsParameter = Type.Array(Type.Object({
   id: Type.String({minLength: 1}),
-  target: Type.String({minLength: 1, description: "Subject TSV for creation, or existing path#row-id for a referenced fact."}),
+  target: Type.String({minLength: 1, description: "Existing path#row-id that disambiguates the taskbook reference."}),
 }, {additionalProperties: false}));
 type IntakeTarget = Static<typeof intakeTargetsParameter>[number];
 
@@ -91,14 +92,14 @@ export type TaskFactView = {
   entries: TaskFactEntry[]; memoryChanges: MemoryChange[]; sessionId: string;
 };
 
-export function validateSubjectPath(root: string, path: string, tables: Map<string, FactMatch[]>) {
+export function validateFactTablePath(root: string, path: string, tables: Map<string, FactMatch[]>) {
   const reserved = [modelSettingsPath, projectModelPolicy(root)?.path, projectModelsFile, ".fact/facts.tsv", ".fact/label.tsv"];
   const parts = path.split("/");
   if (!path.startsWith(".fact/") || !path.endsWith(".tsv") || posix.normalize(path) !== path ||
       parts.slice(1).some(part => !part || part.startsWith(".") || /[\\\x00-\x1f#]/u.test(part)) ||
       reserved.includes(path) || path.startsWith(".fact/taskbook/") || ["change.tsv", "label.tsv"].includes(parts.at(-1)!) ||
       (path === ".fact/always.tsv" && !tables.has(path)) || (readFactFile(root, path) !== undefined && !tables.has(path))) {
-    throw new Error("请选择可写入的主题事实表：" + path);
+    throw new Error("请选择可写入的事实表：" + path);
   }
 }
 
@@ -106,7 +107,7 @@ export function importTaskFacts({root, task, items, expectedHead, project, sessi
   root: string; task: Taskbook; items: TaskItem[]; expectedHead: string; project: ProjectSnapshot; base: string;
   sessionId: string; memoryChanges: MemoryChange[]; decisions?: IntakeDecision[]; targets?: IntakeTarget[];
 }) {
-  const snapshot = readTopicFacts(root);
+  const snapshot = readFactTables(root);
   if (snapshot.head !== expectedHead) throw new Error("事实表已变化，请按当前版本重新核对。");
   if (new Set(targets.map(x => x.id)).size !== targets.length || targets.some(x => !items.some(item => item.id === x.id))) {
     throw new Error("事实定位须使用唯一的当前任务条目标识。");
@@ -159,10 +160,9 @@ export function importTaskFacts({root, task, items, expectedHead, project, sessi
       continue;
     } else if (operation === "create") {
       const path = explicit?.[2].startsWith(".fact/") ? explicit[2] :
-        decision?.detail.startsWith(".fact/") ? decision.detail : supplied ?? item.topicFact?.path;
-      if (!path) { conflict("创建事实需要目标主题 TSV 路径。"); continue; }
+        decision?.detail.startsWith(".fact/") ? decision.detail : item.topicFact?.path ?? defaultFactTable;
       if (supplied && supplied !== path) throw new Error("提交的目标与任务书指定的创建路径不一致：" + item.id);
-      validateSubjectPath(root, path, snapshot.tables);
+      validateFactTablePath(root, path, snapshot.tables);
       const fact = item.userDecision?.action === "replace" ? item.userDecision.text : body;
       const duplicate = [...existing, ...entries.filter(x => x.operation !== "delete").map(x => x.row)].find(x => normalize(x.fact) === normalize(fact));
       const prior = Object.values(project.records).find(record => !record.deleted && normalize(record.text) === normalize(fact));

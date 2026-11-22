@@ -1,5 +1,5 @@
 id	fact	source	labels
 intake-task-context	Design and Implement receive the active task label for retrieving the facts that govern their assignment.	src/workflow/team.ts	prompts
-baseline-intake	For an authored creation, the plugin uses the specified destination in the task view. For an update, retirement, or reuse, it resolves the existing fact in its subject file.	src/facts/taskbook-intake.ts | .fact/approach/facts/task-view.tsv#overlay | .fact/plugin/facts/intake.tsv#reuse-task-fact | .fact/plugin/facts/intake.tsv#existing-fact-target	
+baseline-intake	For an authored creation, the plugin uses .fact/records.tsv or the explicitly supplied path. Updates, retirements and reuse resolve to the existing row.	src/facts/taskbook-intake.ts | .fact/approach/facts/task-view.tsv#overlay	facts
 reuse-task-fact	Reusing a fact preserves its registered text and makes it available under the current task label.	src/facts/taskbook-intake.ts	
 existing-fact-target	An update supplies the replacement text and a deletion supplies its reason. Resolve the selected fact before altering its task view.	src/facts/taskbook-intake.ts	

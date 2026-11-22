@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { projectFacts, readProjectMemory, type ProjectSnapshot } from "../facts/project-memory.ts";
-import { readTopicFacts, taskFactLabel } from "../facts/taskbook-intake.ts";
+import { taskFactLabel } from "../facts/taskbook-intake.ts";
 import { readSourceProjectFacts, type recallMagpieMemory } from "../integrations/magpie-memory.ts";
 import { methodDirectory, readStageMethod, workerMethodStages } from "../methods/catalog.ts";
 import { phaseSources, usesCurrentInputs } from "../methods/upstream.ts";
@@ -49,20 +49,21 @@ export function readRunContext(run: Run, snapshot = readProjectMemory(run.root))
 }
 
 export function buildPhaseInput(run: Run, phase: Phase, attempt: string, projectSnapshot: ProjectSnapshot,
-  magpieCandidates?: Awaited<ReturnType<typeof recallMagpieMemory>> & {receipts?: string[]}, topicSnapshot?: ReturnType<typeof readTopicFacts>) {
+  magpieCandidates?: Awaited<ReturnType<typeof recallMagpieMemory>> & {receipts?: string[]}) {
   const { task, state } = run;
   if (!usesCurrentInputs(state.upstream)) throw new Error("任务的方法版本与随包编审版本不同，需要从事实核查重新建立审计。");
+  const context = phase === "fact-management" ? taskMemory(task) : readRunContext(run, projectSnapshot);
   const fixed = JSON.stringify({ task: task.id, root: run.root, type: task.type, base: state.base, revision: state.revision,
     branch: state.branch, phase, attempt, plan: state.plan, planGap: state.planGap,
     consult: phase === "design" ? state.designConsult : undefined,
     userAnswers: state.userAnswers ?? [], designActions: phase === "design" ?
       state.designActions?.filter(action => action.version === (state.plan?.version ?? 0)) : undefined,
-    ...readRunContext(run, projectSnapshot), magpieCandidates,
-    ...(topicSnapshot ? {registeredTopicFacts: [...topicSnapshot.tables.values()].flat(), intakeDecisions: state.intakeDecisions ?? []} : {}),
+    ...context, magpieCandidates,
+    ...(phase === "fact-management" ? {intakeDecisions: state.intakeDecisions ?? []} : {}),
     ...(state.taskFacts ? {taskFactLabel: taskFactLabel(task)} : {}),
     sourceProjectFactCandidates: phase === "fact-check" ? readSourceProjectFacts(run.root, task.repository.toLowerCase()) : undefined,
     decisions: state.decisions ?? [],
-    priorReports: workerContext(phase, state.reports.slice(state.cycleStart ?? 0)) });
+    priorReports: phase === "fact-management" ? undefined : workerContext(phase, state.reports.slice(state.cycleStart ?? 0)) });
   const consult = phase === "design" ? state.designConsult : undefined;
   const guidance = consult ? [prompts["designer-consult"], ...consult.methods.map(id => readStageMethod(id, workerMethodStages("design"), "design").text)]
     : [prompts[phase]];
@@ -71,7 +72,7 @@ export function buildPhaseInput(run: Run, phase: Phase, attempt: string, project
   }
   if (phase === "fact-check") guidance.push(prompts[task.type.startsWith("fix-") ? "fact-check-fix" : "fact-check-new"], magpieGuide);
   const methods = methodDirectory(workerMethodStages(phase, task.type), phaseSources(phase, task.type));
-  return [common, ...guidance, "## Reference methods\nIdentify the current role decision that needs a method. Use taskbook_method to read only the guidance needed for that decision, retain its source, and return to the assignment after finding the criterion. Omit name to browse.\n" + methods,
+  return [common, ...guidance, ...(phase === "fact-management" ? [] : ["## Reference methods\nIdentify the current role decision that needs a method. Use taskbook_method to read only the guidance needed for that decision, retain its source, and return to the assignment after finding the criterion. Omit name to browse.\n" + methods]),
     "## 当前运行数据", fixed, "## 任务书原文", task.markdown,
     ...(task.facts !== undefined ? ["## 任务书随附事实", task.facts] : [])].join("\n\n");
 }

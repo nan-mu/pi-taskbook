@@ -22,6 +22,8 @@ import { isArchiveRemoval } from "./design-archive.ts";
 import type { Team } from "./team.ts";
 import type { Publication, PublicationReceipt } from "./publication.ts";
 
+const preScopedDesignPromptDigest = "c03e7859192581f3549ab123712cca28240f2d20689d544bb11a40f7272bb7b1";
+
 export type RunObservation = { revision: string; toolName: string; toolCallId: string; input: unknown; isError: boolean; observed: string };
 export type Report = { planVersion?: number; plan?: ExecutionPlan; gap?: PlanGap; model?: string; phase: Phase; outcome: Outcome; summary: string; evidence: string[];
   factChecks?: CheckedFact[]; observations?: RunObservation[]; review?: ReviewResult; candidateId?: string;
@@ -105,7 +107,7 @@ export function openRun({ ctx, cwd = ctx.cwd, task, promptDigest, prepared }: {
   const legacyChanges = taskbookMemoryChanges(task.markdown);
   if (legacyChanges.length && (readFactFile(preliminary.root, projectFactsPath) === undefined ||
       (legacyChanges.some(change => change.kind === "term") && !existsSync(join(preliminary.root, projectGlossaryPath(preliminary.root)))))) {
-    throw new Error("任务书使用旧 Project memory 指令。请用 Facts 引用或修改主题 TSV 中的条目。");
+    throw new Error("任务书使用旧 Project memory 指令。请用 Facts 引用或修改事实表中的条目。");
   }
   const key = task.id + "-" + task.digest.slice(0, 16);
   const path = join(runDirectory(preliminary.root), key, "state.json");
@@ -142,6 +144,12 @@ export function openRun({ ctx, cwd = ctx.cwd, task, promptDigest, prepared }: {
       throw new Error("旧检查点含已审核的观察或项目事实裁决。保留 " + path +
         "，用 /taskbook-setup 盘点并核对迁移，再用新的 Taskbook ID 重启任务并重新提交裁决。");
     }
+    save(path, state, task);
+  }
+  if (saved.version === 3 && state.phase !== "exit" && state.reviewPolicy === 2 && state.taskFacts !== undefined &&
+      state.promptDigest === preScopedDesignPromptDigest &&
+      usesCurrentInputs(state.upstream)) {
+    state.promptDigest = promptDigest;
     save(path, state, task);
   }
   if ((state.phase !== "exit" || (state.exit === "ready" && !state.team?.handoff)) &&

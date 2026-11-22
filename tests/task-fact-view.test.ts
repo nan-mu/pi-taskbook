@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { queryProjectFacts } from "../src/facts/query.ts";
-import { importTaskFacts, readTopicFacts } from "../src/facts/taskbook-intake.ts";
+import { defaultFactTable, importTaskFacts, readFactTables } from "../src/facts/taskbook-intake.ts";
 import { readProjectMemory } from "../src/facts/project-memory.ts";
 import { git, type Taskbook } from "../src/taskbook/document.ts";
 import { taskAuthoredFacts } from "../src/workflow/task-context.ts";
@@ -23,7 +23,7 @@ function input(root: string, markdown: string) {
   const task: Taskbook = {id: "sample", digest: "a".repeat(64), markdown, type: "new-feature", repository: "local/test", sourcePath: ""};
   const base = git(root, "rev-parse", "HEAD");
   return {root, task, base, sessionId: "session", memoryChanges: [], items: taskAuthoredFacts(markdown),
-    expectedHead: readTopicFacts(root).head, project: readProjectMemory(root)};
+    expectedHead: readFactTables(root).head, project: readProjectMemory(root)};
 }
 function runFor(args: ReturnType<typeof input>, staged: Extract<ReturnType<typeof importTaskFacts>, {kind: "complete"}>): Run {
   const {root, task, base} = args;
@@ -49,12 +49,13 @@ test("stages all operations without a commit, queries the recovered view and reg
       "3. `delete` · `fact` — `Unneeded value.`：Removed from the design.",
       "4. `use` · `fact` — `three`", "5. A plain older taskbook fact."
     ].join("\n"));
-    const staged = importTaskFacts({...args, targets: [{id: "F5", target: path}]});
+    const staged = importTaskFacts(args);
     assert.equal(staged.kind, "complete");
     const run = runFor(args, staged);
     const recovered = JSON.parse(JSON.stringify(staged.view));
     const overlay = await queryProjectFacts(root, {query: recovered.label, limit: 10}, recovered);
     assert.deepEqual(overlay.matches.map(x => x.operation).sort(), ["create", "create", "delete", "update", "use"]);
+    assert.equal(overlay.matches.find(x => x.taskItemId === "F5")?.path, defaultFactTable);
     assert.equal((await queryProjectFacts(root, {query: "Unneeded"}, recovered)).matches.length, 0);
     assert.equal((await queryProjectFacts(root, {query: path + "#one"}, recovered)).matches[0].fact, "New value.");
     assert.equal((await queryProjectFacts(root, {query: path + "#one"})).matches[0].fact, "Old value.");
@@ -62,16 +63,21 @@ test("stages all operations without a commit, queries the recovered view and reg
     assert.equal(git(root, "rev-parse", "HEAD"), args.base);
     const unsigned = {...run, state: {...run.state, team: {}}};
     assert.throws(() => registerReviewedFacts(unsigned, []), /签署审核/);
-    const receipt = registerReviewedFacts(run, []);
+    const approved = run.state.team!.review!;
+    assert.equal(approved.kind, "approved");
+    const draft = {id: "draft:" + "a".repeat(20), text: "Signed draft fact.", source: "evidence", seat: "lead" as const, work: "verify"};
+    run.state.team = {...run.state.team, drafts: [draft], review: {...approved, draftFacts: [{id: draft.id, decision: "keep", evidence: ["R1"]}]}};
+    const receipt = registerReviewedFacts(run);
     assert.notEqual(receipt.revision, args.base);
     assert.equal(git(root, "rev-parse", "HEAD^"), args.base);
     assert.equal((await queryProjectFacts(root, {query: "terms"})).matches[0].fact, "A Widget is a test component.");
     assert.equal((await queryProjectFacts(root, {query: "one"})).matches[0].fact, "New value.");
     assert.equal((await queryProjectFacts(root, {query: path + "#two"})).matches.length, 0);
+    assert.equal((await queryProjectFacts(root, {query: draft.text})).matches[0].path, defaultFactTable);
     assert.equal((await queryProjectFacts(root, {query: recovered.label})).matches.length, 0);
     assert.match(readFileSync(join(root, ".fact/label.tsv"), "utf8"), /custom\tCustom label\nterms\t/);
     const restored = {...run, state: JSON.parse(readFileSync(run.path, "utf8"))};
-    assert.deepEqual(registerReviewedFacts(restored, []), receipt);
+    assert.deepEqual(registerReviewedFacts(restored), receipt);
     assert.equal(git(root, "status", "--porcelain"), "");
   } finally { rmSync(root, {recursive: true, force: true}); }
 });
@@ -129,7 +135,7 @@ test("resuming an old committed intake acknowledges its deletion and never resur
     const args = input(root, "## Facts\n1. `delete` · `fact` — `retired`：Retire the old fact.");
     writeFileSync(path, table(""));
     commit("Import taskbook facts\n\nTaskbook-Input: " + args.task.digest);
-    const state = {...args, expectedHead: readTopicFacts(root).head};
+    const state = {...args, expectedHead: readFactTables(root).head};
     const restored = importTaskFacts(state);
     assert.equal(restored.kind, "complete");
     assert.deepEqual(restored.view.entries, []);

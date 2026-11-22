@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { answers, designers, needsUser, type Change, type Designer } from "./protocol-v0.1.ts";
-import { designerTurns as draftTurns, settleDesignerTurn as settleDraft, startDesigner as startDraft,
+import { designContext, designerTurns as draftTurns, settleDesignerTurn as settleDraft, startDesigner as startDraft,
   type DesignInput, type DesignerState as DraftState } from "./v0.1.ts";
 
 export const designerVersion = "0.2";
@@ -58,7 +58,7 @@ export function designerTurns(state: DesignerState) {
     const material = state.decision.kind === "signoff" ? {candidate: state.decision.approved.candidate,
       approvedBy: ["member-a", "member-b"]} : {issue: state.decision.issue};
     return [{id: state.id, designer: "lead" as const, work: state.work, prompt: decisionPrompt,
-      schema: schemaFor(state.decision), context: structuredClone({protocol: designerVersion, ...state.checkpoint.input,
+      schema: schemaFor(state.decision), context: structuredClone({protocol: designerVersion, ...designContext(state.checkpoint.input),
         round: state.checkpoint.round, kind: state.decision.kind, materials: material, authority: state.authority})}];
   }
   return draftTurns(state).map(turn => {
@@ -89,7 +89,7 @@ function resynthesize(state: LeadWork, authority: Direction[]): DesignerState {
   const serial = checkpoint.serial + 1;
   return {kind: "working", work: "synthesize", protocol: designerVersion, checkpoint: {...checkpoint, round, serial, issues: []}, authority,
     slots: [{job: {id: `${checkpoint.input.runId}:${round}:lead:${serial}`, designer: "lead", work: "synthesize",
-      input: {drafts: checkpoint.drafts, resolved: checkpoint.resolved, previous: checkpoint.candidate}}}]};
+      input: {drafts: checkpoint.candidate ? [] : checkpoint.drafts, resolved: checkpoint.resolved, previous: checkpoint.candidate}}}]};
 }
 
 function reconsider(state: LeadWork, changes: Change[]): DesignerState {

@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { posix } from "node:path";
 import { Type, type Static } from "typebox";
+import { factSearchOnly, isFactPath } from "./access.ts";
 
 const text = Type.String({ minLength: 1, maxLength: 1200 });
 const gitSource = Type.Object({
@@ -34,6 +35,7 @@ export function checkFacts(root: string, base: string, checks: FactCheck[], rece
       return { ...check, origin: result.toolName + " " + result.toolCallId, toolError: result.isError, toolInput: result.input, observedHead: result.head };
     }
     const path = source.path;
+    if (isFactPath(path)) throw new Error(factSearchOnly);
     if (posix.isAbsolute(path) || posix.normalize(path) !== path || path.startsWith("../") || path === "..") {
       throw new Error("基线证据需要仓库内的相对文件路径。");
     }

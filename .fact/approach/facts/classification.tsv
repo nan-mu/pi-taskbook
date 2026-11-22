@@ -1,5 +1,5 @@
 id	fact	source	labels
-topic-placement	Record each fact once in the subject file responsible for the decision it informs.	39c219e56dc3:docs/design/project-memory-prompt.md	
-topic-labels	Use registered labels for cross-topic queries. Leave labels empty when the path or text already locates the fact.	39c219e56dc3:docs/design/project-memory-prompt.md	
-topic-terms	Store each definition in its subject table and label it terms.	Maintainer decision: Fact System terminology	
-topic-history	Use release tags to locate earlier subject tables and Git history to trace changes in wording.	Maintainer decision: retrieving earlier project facts from Git	
+topic-placement	New facts use .fact/records.tsv by default. Existing path#row-id references and explicit taskbook paths remain valid.	src/facts/taskbook-intake.ts | src/workflow/register-facts.ts	facts
+topic-labels	Use registered labels for recurring searches across fact records. Leave labels empty when an ID or the wording suffices.	src/facts/query.ts	facts
+topic-terms	Use the terms label to find definitions. An authored creation can request that label.	src/facts/taskbook-intake.ts | src/workflow/register-facts.ts	terms
+topic-history	Use release tags and Git history to trace changes in fact wording.	Maintainer decision: retrieving earlier project facts from Git	facts

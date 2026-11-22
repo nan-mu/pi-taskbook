@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createsPull, type HandoffGitHub, type HandoffPullRequest, type PullRequestAction } from "../integrations/github-handoff.ts";
 import { readProjectMemory } from "../facts/project-memory.ts";
-import { readTopicFacts } from "../facts/taskbook-intake.ts";
+import { readFactTables } from "../facts/taskbook-intake.ts";
 import { git, githubRepository, gitOk, workspace } from "../taskbook/document.ts";
 import { cleanRevision, matchesDeliveryHead, type Run } from "./checkpoint.ts";
 
@@ -36,7 +36,7 @@ function verifiedDelivery(run: Run) {
   if (state.branch === "main") throw new PublicationChanged("PR 交付需要独立于 main 的任务分支。");
   workspace(root, task, state.base, state.branch);
   if (cleanRevision(run) !== revision || !matchesDeliveryHead(run, revision) ||
-      readProjectMemory(root).head !== state.approvedProjectHead || readTopicFacts(root).head !== state.topicFactsHead) {
+      readProjectMemory(root).head !== state.approvedProjectHead || readFactTables(root).head !== state.topicFactsHead) {
     throw new PublicationChanged("本地交付提交或事实版本变化。");
   }
   const repository = task.repository.toLowerCase();

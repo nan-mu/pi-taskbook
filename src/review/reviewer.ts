@@ -9,6 +9,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { dispatchReview } from "./subagent-dispatch.ts";
+import { factSearchOnly, isFactPath } from "../facts/access.ts";
 
 type Role = "fact-review" | "correctness" | "quality" | "review";
 type TaskItem = { id: string; text: string };
@@ -34,37 +35,51 @@ const [reviewInstruction, ...reviewRoles] = readFileSync(new URL("../../prompts/
   .trim().split(/^## /m);
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 const parameters = Type.Object({
-  view: Type.Union([Type.Literal("changes"), Type.Literal("base"), Type.Literal("candidate"), Type.Literal("diff")]),
+  view: Type.Union([Type.Literal("files"), Type.Literal("changes"), Type.Literal("base"), Type.Literal("candidate"), Type.Literal("diff")]),
   path: Type.Optional(Type.String({ minLength: 1 })),
   start: Type.Optional(Type.Integer({ minimum: 1, description: "首行，从 1 计数" })),
+  limit: Type.Optional(Type.Integer({minimum: 1, maximum: 120, description: "行数，默认 60"})),
 }, { additionalProperties: false });
 
 export function inspectionTool(input: Pick<ReviewInput,"root"|"base"|"revision">, observations: Inspection[]): ToolDefinition<typeof parameters> {
   return {
-    name: "inspect_revision", label: "检查固定 Git 提交", description: "changes 列出改变的路径。base 和 candidate 读取指定版本文件。diff 读取两版差异，允许按文件过滤。响应带观察编号和分页位置。",
+    name: "inspect_revision", label: "检查固定 Git 提交", description: "files 列出当前固定提交中的文件，可用 path 指定目录。base 和 candidate 读取指定文件。changes 和 diff 查看两版改动。每次返回一页。",
     parameters,
-    async execute(_id, { view, path, start = 1 }) {
+    async execute(_id, { view, path, start = 1, limit = 60 }) {
       if (path && (posix.isAbsolute(path) || posix.normalize(path) !== path || path === ".." || path.startsWith("../"))) {
         throw new Error("请给仓库内的相对路径。");
       }
+      if (path && isFactPath(path)) throw new Error(factSearchOnly);
       let args: string[];
-      if (view === "base" || view === "candidate") {
+      if (view === "files") {
+        args = ["ls-tree", "-r", "--name-only", input.revision, "--", ...(path && path !== "." ? [path] : [])];
+      } else if (view === "base" || view === "candidate") {
         if (!path) throw new Error("读取文件需要 path。");
         args = ["cat-file", "blob", (view === "base" ? input.base : input.revision) + ":" + path];
       } else {
         args = ["diff", "--no-ext-diff", "--no-textconv", "--no-color",
-          ...(view === "changes" ? ["--name-status"] : []), input.base, input.revision, "--", ...(path ? [path] : [])];
+          ...(view === "changes" ? ["--name-status"] : []), input.base, input.revision, "--",
+          ...(path ? [":(literal)" + path] : []), ":(exclude,top,literal).fact"];
       }
-      const raw = execFileSync("git", ["--literal-pathspecs", ...args], {
+      const raw = execFileSync("git", args, {
         cwd: input.root, encoding: "utf8", maxBuffer: 32 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"],
       });
-      const lines = raw.split("\n");
+      const lines = view === "files" ? raw.trimEnd().split("\n").filter(file => file && !isFactPath(file)) : raw.split("\n");
+      if (!lines.length) return {content: [{type: "text", text: "此位置没有可检查的文件。"}], details: {}};
       if (start > lines.length) throw new Error("请求的首行超出文件或差异范围。");
-      const page = lines.slice(start - 1, start + 119).join("\n");
-      const content = page.length > 24000 ? page.slice(0, 24000) + "\n[本页字符截断，可指定后续首行]" : page;
+      const page: string[] = [];
+      let size = 0;
+      for (const line of lines.slice(start - 1, start - 1 + limit)) {
+        if (page.length && size + line.length > 8000) break;
+        page.push(line.length > 8000 ? line.slice(0, 8000) + "\n[本行已截断]" : line);
+        size += line.length + 1;
+      }
+      const content = page.join("\n");
+      const next = start + page.length;
       const id = "R" + (observations.length + 1);
       observations.push({ id, view, path, start, digest: digest(content), characters: content.length });
-      return { content: [{ type: "text", text: `Observation ${id}\n总行数 ${lines.length}，首行 ${start}\n${content}` }], details: {} };
+      return { content: [{ type: "text", text: `Observation ${id}\n总行数 ${lines.length}，首行 ${start}` +
+        (next <= lines.length ? `，下页首行 ${next}` : "") + "\n" + content }], details: {} };
     },
   };
 }

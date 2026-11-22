@@ -14,8 +14,9 @@ type Issue = {
   replies: {designer: Designer; response: Response}[];
 };
 type Candidate = {version: string; draft: Draft; plan: ExecutionPlan};
+type ConfirmationChanges = {goal: boolean; facts: boolean; steps: string[]; order: boolean};
 type WorkInput = {drafts: DraftEntry[]} | {issues: Issue[]} | {drafts: DraftEntry[]; resolved: Issue[]; previous?: Candidate} |
-  {candidate: Candidate; resolved: Issue[]} | null;
+  {candidate: Candidate; resolved: Issue[]; changesSincePrevious?: ConfirmationChanges} | null;
 type RoundJob = {id: string; designer: Designer; work: RoundWork; input: WorkInput};
 type ConsultJob = {id: string; designer: Designer; work: "consult"; question: string; evidence: string; returnTo: RoundJob};
 type Job = RoundJob | ConsultJob;
@@ -49,14 +50,25 @@ function responseSchema(work: Work) {
   return work === "consult" ? Type.Union([answers.consult, needsUser]) : Type.Union([answers[work], askConsult, needsUser]);
 }
 
+export function designContext(input: DesignInput) {
+  const {observations, ...assignment} = input;
+  return {...assignment, observations: observations?.map(({claim, origin}, index) => ({id: "observation:P" + (index + 1), claim, origin}))};
+}
+
 export function designerTurns(state: DesignerState) {
   if (state.kind !== "working") return [];
   const {input, consultations, round} = state.checkpoint;
+  const assignment = designContext(input);
   return state.slots.filter(slot => !slot.reply).map(({job}) => {
-    const materials = job.work === "consult" ? {question: job.question, evidence: job.evidence, work: job.returnTo.input} : job.input;
+    const current = job.work === "consult" ? job.returnTo.input : job.input;
+    const focused = current && "resolved" in current ? {
+      ...current, ...("previous" in current && current.previous ? {drafts: []} : {}),
+      resolved: current.resolved.map(({id, proposal}) => ({id, proposal})),
+    } : current;
+    const materials = job.work === "consult" ? {question: job.question, evidence: job.evidence, work: focused} : focused;
     return {
       id: job.id, designer: job.designer, work: job.work,
-      context: structuredClone({protocol: designerVersion, round, ...input, materials,
+      context: structuredClone({protocol: designerVersion, round, ...assignment, materials,
         consultations: consultations.filter(item => item.designer === job.designer)}),
       prompt: readFileSync(new URL(`../../../prompts/designer/${designerVersion}/${job.work}.md`, import.meta.url), "utf8").trim(),
       schema: responseSchema(job.work),
@@ -143,7 +155,19 @@ function assignIssues(checkpoint: Checkpoint, work: "respond" | "reconcile") {
 
 function synthesize(checkpoint: Checkpoint) {
   return begin(checkpoint, "synthesize", [{designer: "lead",
-    input: {drafts: checkpoint.drafts, resolved: checkpoint.resolved, previous: checkpoint.candidate}}]);
+    input: {drafts: checkpoint.candidate ? [] : checkpoint.drafts, resolved: checkpoint.resolved, previous: checkpoint.candidate}}]);
+}
+
+function confirmationChanges(previous: Candidate, current: Candidate): ConfirmationChanges {
+  const oldSteps = new Map(previous.plan.steps.map(step => [step.id, step]));
+  const newSteps = new Map(current.plan.steps.map(step => [step.id, step]));
+  return {
+    goal: previous.draft.goal !== current.draft.goal,
+    facts: JSON.stringify(previous.draft.facts) !== JSON.stringify(current.draft.facts),
+    steps: [...new Set([...oldSteps.keys(), ...newSteps.keys()])]
+      .filter(id => JSON.stringify(oldSteps.get(id)) !== JSON.stringify(newSteps.get(id))),
+    order: JSON.stringify([...oldSteps.keys()]) !== JSON.stringify([...newSteps.keys()]),
+  };
 }
 
 function pauseRepeated(state: Working, issues: Issue[]): DesignerState {
@@ -193,7 +217,10 @@ function advance(state: Working): DesignerState {
       const {reply} = submitted(state.slots, "synthesize")[0];
       const plan = acceptPlan(reply.plan.steps, [...checkpoint.input.targetIds], checkpoint.candidate?.plan.version);
       const candidate = {draft: reply.draft, plan, version: digest({draft: reply.draft, plan, factsVersion: checkpoint.input.factsVersion})};
-      return begin({...checkpoint, candidate}, "confirm", designers.slice(1).map(designer => ({designer, input: {candidate, resolved: checkpoint.resolved}})));
+      const changesSincePrevious = checkpoint.candidate ? confirmationChanges(checkpoint.candidate, candidate) : undefined;
+      return begin({...checkpoint, candidate}, "confirm", designers.slice(1).map(designer => ({
+        designer, input: {candidate, resolved: checkpoint.resolved, changesSincePrevious},
+      })));
     }
     case "confirm": {
       const candidate = checkpoint.candidate!;

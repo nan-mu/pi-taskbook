@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { deleteMigratedAudit, inspectAuditMigration, migrateAudit } from "../src/setup/audit-migration.ts";
 import { inspectAuditFacts, prepareAuditFactInput } from "../src/setup/audit-facts.ts";
 import { readProjectMemory } from "../src/facts/project-memory.ts";
-import { importTaskFacts, readTopicFacts } from "../src/facts/taskbook-intake.ts";
+import { importTaskFacts, readFactTables } from "../src/facts/taskbook-intake.ts";
 import { git, readTaskbook } from "../src/taskbook/document.ts";
 import { prepareTaskLaunch } from "../src/taskbook/entry.ts";
 import { taskAuthoredFacts } from "../src/workflow/task-context.ts";
@@ -98,7 +98,7 @@ test("Setup hands audit terms to Fact Management and recognizes a signed registr
   assert.equal(prepareTaskLaunch(root, task).branch, branch);
   git(root, "worktree", "add", "-q", "-b", branch, worktree);
   const view = importTaskFacts({root: worktree, task, base, sessionId: "session", memoryChanges: [],
-    items: taskAuthoredFacts(task.markdown), expectedHead: readTopicFacts(worktree).head, project: readProjectMemory(worktree)});
+    items: taskAuthoredFacts(task.markdown), expectedHead: readFactTables(worktree).head, project: readProjectMemory(worktree)});
   assert.equal(view.kind, "complete");
   assert.deepEqual(view.view.entries[0].row.labels, ["terms"]);
   const {revision} = registerReviewedFacts({task, root: worktree, path: join(git(worktree, "rev-parse", "--absolute-git-dir"), "state.json"),

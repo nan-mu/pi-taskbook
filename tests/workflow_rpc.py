@@ -420,6 +420,11 @@ def named_work_turn(messages):
         assert parent_inspected.wait(timeout=20)
         assert "Use input 7." in json.dumps(assignment)
         assert 'missing measurement' in json.dumps(assignment)
+        assert all("observed" not in item and "toolInput" not in item for item in assignment["observations"])
+        if seat == "member-b":
+            if last["role"] != "tool":
+                return tool_call("inspect_revision", {"view": "base", "path": ".fact/measurement.tsv"})
+            assert "taskbook_query_facts" in prompt_text(last)
         reply = {"kind": "draft", "draft": draft}
     elif stage == "compare" and "targetIds" in assignment:
         reply = {"kind": "compare", "reviews": [{"designer": peer, "changes": []}
@@ -613,7 +618,11 @@ class Provider(http.server.BaseHTTPRequestHandler):
                 assert not ({"Agent", "SubagentWorkflow"} & {t["function"]["name"] for t in body.get("tools", [])})
                 kind = state["type"]
                 assert "UNTRUSTED CHECKOUT CONTENT" not in system
-                assert "## Reference methods" in system and "通用方法" not in system
+                assert ("## Reference methods" in system) == (phase != "fact-management")
+                assert "通用方法" not in system
+                if phase == "fact-management":
+                    assert "registeredTopicFacts" not in state
+                    assert {t["function"]["name"] for t in body.get("tools", [])} == {"taskbook_query_facts", "taskbook_report"}
                 if phase == "fact-check":
                     assert "pstack:principle-prove-it-works" in system and "matt:research" in system
                     assert ("matt:diagnosing-bugs" in system) == kind.startswith("fix-")

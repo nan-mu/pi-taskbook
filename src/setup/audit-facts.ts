@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { inspectLegacyProjectMemory } from "../facts/project-memory-migration.ts";
-import { readTopicFacts, validateSubjectPath } from "../facts/taskbook-intake.ts";
+import { defaultFactTable, readFactTables, validateFactTablePath } from "../facts/taskbook-intake.ts";
 import { decodeTsv } from "../facts/tsv.ts";
 import { git, gitOk, readTaskbook, validTaskBranch } from "../taskbook/document.ts";
 import { privateDirectory } from "../workflow/run-paths.ts";
@@ -10,8 +10,8 @@ import { taskAuthoredFacts } from "../workflow/task-context.ts";
 
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 const sourceHeading = "\n## Migration sources\n";
-type Selection = {id: string; path: string};
-type Source = Selection & {sourceVersion: string};
+type Source = {id: string; path: string; sourceVersion: string};
+type Selection = {id: string; path?: string};
 
 function migrationDirectory(root: string, digest: string) {
   if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error("旧审计目录的摘要无效。");
@@ -67,14 +67,14 @@ export function prepareAuditFactInput(root: string, repository: string, digest: 
       !selections.length || new Set(selections.map(item => item.id)).size !== selections.length) {
     throw new Error("迁移需要明确工作分支和不重复的候选事实。");
   }
-  const snapshot = readTopicFacts(root);
+  const snapshot = readFactTables(root);
   const sources: Source[] = [];
-  const items = selections.map(({id, path}) => {
+  const items = selections.map(({id, path = defaultFactTable}) => {
     const entry = inventory.entries.find(item => item.id === id);
     if (!entry || entry.status !== "ready" || entry.retired) throw new Error("这条旧事实尚不可迁移：" + id);
-    validateSubjectPath(root, path, snapshot.tables);
+    validateFactTablePath(root, path, snapshot.tables);
     if (path.includes("`")) {
-      throw new Error("请使用能在任务书中引用的主题路径。");
+      throw new Error("请使用能在任务书中引用的事实表路径。");
     }
     sources.push({id, path, sourceVersion: entry.sourceVersion});
     const prefix = entry.scope === "project" ? "" : "[" + entry.scope + "] ";

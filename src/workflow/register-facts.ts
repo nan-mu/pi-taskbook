@@ -1,20 +1,13 @@
-import { Type, type Static } from "typebox";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { commitRegisteredMemory, readProjectMemory } from "../facts/project-memory.ts";
-import { readTopicFacts, validateSubjectPath } from "../facts/taskbook-intake.ts";
+import { defaultFactTable, readFactTables, validateFactTablePath } from "../facts/taskbook-intake.ts";
 import { decodeTsv, encodeTsv } from "../facts/tsv.ts";
 import { git } from "../taskbook/document.ts";
 import { checkpoint, cleanRevision, type Run } from "./checkpoint.ts";
 
-const placement = Type.Object({
-  id: Type.String({pattern: "^draft:[a-f0-9]{20}$"}),
-  path: Type.String({pattern: "^\\.fact/(?:[^/\\\\\\x00-\\x1f]+/)*[^/\\\\\\x00-\\x1f]+\\.tsv$", maxLength: 240}),
-  labels: Type.Array(Type.String({minLength: 1}), {uniqueItems: true}),
-}, {additionalProperties: false});
-export const placementParameter = Type.Array(placement);
-export type FactPlacement = Static<typeof placement>;
+export type FactPlacement = {id: string; path: string; labels: string[]};
 const columns = "id\tfact\tsource\tlabels";
 const labelPath = ".fact/label.tsv";
 
@@ -28,38 +21,38 @@ export function reviewedDrafts(run: Run) {
   return (team?.drafts ?? []).filter(draft => approved.has(draft.id));
 }
 
-export function validatePlacements(run: Run, placements: FactPlacement[]) {
-  const snapshot = readTopicFacts(run.root);
+function validatePlacements(run: Run, drafts: ReturnType<typeof reviewedDrafts>, placements: FactPlacement[]) {
+  const snapshot = readFactTables(run.root);
   const labels = new Set(decodeTsv(snapshot.labels ?? "").slice(1).map(row => row[0]));
   labels.add("terms");
-  const drafts = reviewedDrafts(run);
   if (placements.length !== drafts.length || new Set(placements.map(item => item.id)).size !== drafts.length ||
       placements.some(item => !drafts.some(draft => draft.id === item.id))) {
-    throw new Error("每条审核通过的 Draft Fact 需要唯一的事实分类。");
+    throw new Error("事实登记检查点中的草稿记录不匹配。");
   }
   for (const {path, labels: selected} of placements) {
-    validateSubjectPath(run.root, path, snapshot.tables);
+    validateFactTablePath(run.root, path, snapshot.tables);
     if (selected.some(label => !labels.has(label))) throw new Error("事实标签须在 .fact/label.tsv 已登记。");
   }
-  return drafts;
 }
 
 const sha = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const norm = (value: string) => value.normalize("NFKC").trim().replace(/\s+/gu, " ").replace(/[.。]+$/u, "");
 
-export function registerReviewedFacts(run: Run, placements: FactPlacement[]) {
-  const drafts = validatePlacements(run, placements);
+export function registerReviewedFacts(run: Run, savedPlacements = run.state.team?.placements) {
+  const drafts = reviewedDrafts(run);
+  const placements = savedPlacements ?? drafts.map(draft => ({id: draft.id, path: defaultFactTable, labels: []}));
+  validatePlacements(run, drafts, placements);
   const base = run.state.revision;
   if (!base) throw new Error("登记事实缺少已审核提交。");
   const head = cleanRevision(run);
   const view = run.state.factView;
   const marker = "Taskbook-Registration: " + run.task.digest;
   const input = sha(JSON.stringify([run.task.digest, base, view, drafts, placements]));
-  const snapshot = readTopicFacts(run.root);
+  const snapshot = readFactTables(run.root);
   const project = readProjectMemory(run.root);
   const receipt = (revision: string) => ({revision,
     diff: revision === base ? "" : git(run.root, "diff", "--no-ext-diff", base, revision, "--", ".fact"),
-    topicHead: readTopicFacts(run.root).head, projectHead: readProjectMemory(run.root).head});
+    topicHead: readFactTables(run.root).head, projectHead: readProjectMemory(run.root).head});
 
   if (head !== base) {
     // A process can stop after the Git commit but before the transition to Handoff.
@@ -87,7 +80,7 @@ export function registerReviewedFacts(run: Run, placements: FactPlacement[]) {
   for (const entry of view?.entries ?? []) {
     const {operation, row} = entry;
     if (operation === "use") continue;
-    validateSubjectPath(run.root, row.path, tables);
+    validateFactTablePath(run.root, row.path, tables);
     const rows = tables.get(row.path) ?? [];
     const index = rows.findIndex(current => current.id === row.id);
     if ((operation === "create") !== (index === -1)) throw new Error("目标事实在审核后发生变化：" + row.id);
@@ -123,7 +116,7 @@ export function registerReviewedFacts(run: Run, placements: FactPlacement[]) {
   }
   commitRegisteredMemory(run.root, project, run.task, run.state.base, view?.memoryChanges ?? [], view?.sessionId ?? run.state.session,
     changes, "Register reviewed facts · " + run.task.id + "\n\n" + marker, () => {
-      if (cleanRevision(run) !== base || readTopicFacts(run.root).head !== snapshot.head) throw new Error("登记前项目事实发生变化。");
+      if (cleanRevision(run) !== base || readFactTables(run.root).head !== snapshot.head) throw new Error("登记前项目事实发生变化。");
     }, mutations => {
       const files: [string, string][] = [...mutations].map(([path, content]) => [path, sha(content)]);
       checkpoint(run, {...run.state, registrationIntent: {input, files}});

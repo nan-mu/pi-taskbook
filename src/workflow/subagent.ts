@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   createAgentSession, DefaultResourceLoader, getAgentDir, ModelRuntime, SessionManager, SettingsManager,
+  createBashToolDefinition, createEditToolDefinition, createGrepToolDefinition, createReadToolDefinition, createWriteToolDefinition,
   type ExtensionAPI, type ExtensionContext, type ExtensionToolContext, type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
@@ -10,6 +11,7 @@ import { Type, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { modelKey, type RoleSelection } from "../models/config.ts";
 import { alwaysPrompt } from "../facts/always.ts";
+import { factAccessRestriction } from "../facts/access.ts";
 import { git } from "../taskbook/document.ts";
 import { privateDirectory } from "./run-paths.ts";
 import { cleanRevision, type Run } from "./checkpoint.ts";
@@ -90,8 +92,19 @@ export async function subagentTurn({ run, ctx, seat, turn, route, tools = [], bu
       return {content: [{type: "text", text: "Recorded."}], details: {}, terminate: true};
     },
   };
-  const customTools = [...tools, resultTool];
-  const names = [...builtins, ...customTools.map(tool => tool.name)];
+  function guard<T extends TSchema, Details, State>(tool: ToolDefinition<T, Details, State>): ToolDefinition<T, Details, State> {
+    return {...tool, async execute(id, params, signal, onUpdate, ctx) {
+      const reason = factAccessRestriction(tool.name, params, root);
+      if (reason) throw new Error(reason);
+      return tool.execute(id, params, signal, onUpdate, ctx);
+    }};
+  }
+  const guardedTools: ToolDefinition[] = builtins.length ? [
+    guard(createBashToolDefinition(root)), guard(createEditToolDefinition(root)), guard(createGrepToolDefinition(root)),
+    guard(createReadToolDefinition(root)), guard(createWriteToolDefinition(root)),
+  ].filter(tool => builtins.includes(tool.name)) : [];
+  const customTools = [...guardedTools, ...tools, resultTool];
+  const names = [...new Set([...builtins, ...customTools.map(tool => tool.name)])];
   const {session} = await createAgentSession({
     cwd: root, agentDir, model, thinkingLevel, modelRuntime, sessionManager: manager, resourceLoader, settingsManager,
     tools: names, customTools,

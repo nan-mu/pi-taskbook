@@ -4,7 +4,7 @@ import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { queryProjectFacts, maxFactMatches } from "../facts/query.ts";
-import { readTopicFacts, taskFactLabel } from "../facts/taskbook-intake.ts";
+import { readFactTables, taskFactLabel } from "../facts/taskbook-intake.ts";
 import { readProjectMemory } from "../facts/project-memory.ts";
 import { resolveModel, roleSelection, type RoleSelection } from "../models/config.ts";
 import { inspectionTool, type Inspection } from "../review/reviewer.ts";
@@ -61,9 +61,17 @@ const needsUserResult = Type.Object({kind: Type.Literal("needs-user")});
 function factTool(run: Run, lookup: Set<string>): ToolDefinition<typeof factParameters> {
   return {
     name: "taskbook_query_facts", label: "Query facts",
-    description: "Search .fact by project label, exact fact ID or keywords. Use draft, designer, implementer, a seat, or an exact work state as a label to page through matching draft facts. The result includes nextOffset when more drafts match.",
+    description: "Search project facts by label, exact ID or keywords. In Design, query an observation:Pn ID from the assignment to read one checked excerpt. Use draft, designer, implementer, a seat, or a work state to find draft facts.",
     parameters: factParameters,
     async execute(_id, {query, label, limit = 5, offset = 0}) {
+      const evidence = /^observation:P([1-9]\d*)$/iu.exec(query.trim());
+      if (evidence && run.state.phase === "design") {
+        const design = run.state.team?.design;
+        const observation = design?.kind === "working" ? design.checkpoint.input.observations?.[Number(evidence[1]) - 1] : undefined;
+        if (!observation) throw new Error("没有该核查观察。请选择当前任务包中的观察 ID。");
+        const {claim, observed, origin, source} = observation;
+        return {content: [{type: "text", text: JSON.stringify({claim, observed, origin, source})}], details: {}};
+      }
       const key = (label ?? query).trim().toLowerCase();
       const drafts = run.state.team?.drafts ?? [];
       const matches = drafts.filter(fact => {
@@ -96,7 +104,7 @@ function addDrafts(existing: DraftFact[], facts: readonly {text: string; source:
 
 function checkFacts(run: Run) {
   const {state, root} = run;
-  if (readTopicFacts(root).head !== state.topicFactsHead || readProjectMemory(root).head !== state.approvedProjectHead) {
+  if (readFactTables(root).head !== state.topicFactsHead || readProjectMemory(root).head !== state.approvedProjectHead) {
     throw new Error("事实版本已变化，请恢复任务使用的版本后重试。");
   }
 }
@@ -246,8 +254,8 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
       status("Design · " + turns.map(turn => turn.designer + "/" + turn.work).join(", "));
       await settledBatch(turns, turn => dispatch(turn.designer, {
         ...turn, prompt: turn.prompt + "\n\n" + "Primary taskbook facts are tagged " + taskFactLabel(run.task) +
-          ". Query project facts as needed. For a conflict with an authored fact, check each record's project, applicable revision, and authority. Flag both source locations and the affected design decision for the Lead.",
-      }, team.designBase!, {cleanContext: turn.work === "draft"}), (turn, reply) => {
+          ". Query project facts or an observation ID through taskbook_query_facts when the decision needs it. Inspect only the source passage needed for the current judgment. For a conflict with an authored fact, flag both source locations and the affected decision for the Lead.",
+      }, team.designBase!, {cleanContext: true}), (turn, reply) => {
         const current = run.state.team!;
         const design = settleDesignerTurn(current.design!, {id: turn.id, settled: true, result: reply.result});
         if (design !== current.design) persist({...current, design, receipts: [...(current.receipts ?? []), reply.receipt]});

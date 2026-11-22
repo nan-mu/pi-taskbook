@@ -2,6 +2,8 @@
 
 Verify the premises that can change design or acceptance. Match the source to the task's baseline, scope and fact references. Probe the actual behavior when needed. A failing probe is useful only if it reproduces the reported failure.
 
+For project facts, use `taskbook_query_facts` and cite its tool receipt. Inspect the specific code or prompt cited by a fact when the task needs independent evidence. Verify each prerequisite once. Leave full inventories, detailed comparisons and delivery checks to the stages that use them. For a source comparison, establish the pinned revisions and that the relevant entry points are available before passing.
+
 For each premise needed to proceed, submit a `factChecks` entry with a concrete `claim`, a verbatim `observed` excerpt and its source.
 
 - Git source. Use the baseline file path and the one-based starting line.

@@ -18,7 +18,8 @@ import { validateConflict, parseFactDecision, taskMemory } from "./src/workflow/
 import { consultDesign, runIndependentReview, type ReviewResult } from "./src/review/reviewer.ts";
 import { checkFacts, factChecksParameter, type Observation } from "./src/facts/fact-check.ts";
 import { maxFactMatches, queryProjectFacts } from "./src/facts/query.ts";
-import { intakeTargetsParameter, importTaskFacts, readTopicFacts, type IntakeDecision } from "./src/facts/taskbook-intake.ts";
+import { factAccessRestriction } from "./src/facts/access.ts";
+import { intakeTargetsParameter, importTaskFacts, readFactTables, type IntakeDecision } from "./src/facts/taskbook-intake.ts";
 import { alwaysPrompt } from "./src/facts/always.ts";
 import { readFactFile } from "./src/facts/commit-files.ts";
 
@@ -30,7 +31,7 @@ import { modelKey, roleSelection } from "./src/models/config.ts";
 import { readFileSync } from "node:fs";
 import { resumeTeam, runTeam, selectedPlaybook } from "./src/workflow/team.ts";
 import { registerSubagentTool, subagentTool } from "./src/workflow/subagent.ts";
-import { placementParameter, registerReviewedFacts, reviewedDrafts, validatePlacements } from "./src/workflow/register-facts.ts";
+import { registerReviewedFacts, reviewedDrafts } from "./src/workflow/register-facts.ts";
 import { githubHandoff, githubHandoffTools, pullRequestActions, type PullRequestAction } from "./src/integrations/github-handoff.ts";
 import { deliveryFactDiff, preparePublication, publishDelivery, PublicationChanged } from "./src/workflow/publication.ts";
 
@@ -44,10 +45,7 @@ const t3Continuation = "pi-taskbook-t3-continuation";
 const taskbookPrefix = "/taskbook ";
 const publishKickoff = "pi-taskbook-publication";
 const publishTool = "taskbook_publish_pr";
-const tailPrompts = {
-  "fact-registration": readFileSync(new URL("./prompts/fact-registration.md", import.meta.url), "utf8"),
-  handoff: readFileSync(new URL("./prompts/handoff.md", import.meta.url), "utf8"),
-};
+const handoffPrompt = readFileSync(new URL("./prompts/handoff.md", import.meta.url), "utf8");
 const reportParameters = Type.Object({
   attempt: Type.String({ description: "当前阶段提示词中给出的执行标识。" }),
   outcome: Type.Union([Type.Literal("pass"), Type.Literal("blocked"), Type.Literal("fact-conflict"), Type.Literal("plan-gap"), Type.Literal("needs-user")]),
@@ -58,7 +56,6 @@ const reportParameters = Type.Object({
   gap: Type.Optional(Type.Object({stepId: Type.String({minLength:1}), observation: Type.String({minLength:1}),
     question: Type.String({minLength:1})}, {additionalProperties:false})),
   factChecks: Type.Optional(factChecksParameter),
-  factPlacements: Type.Optional(placementParameter),
   pullRequest: Type.Optional(Type.Union(pullRequestActions.map(action => Type.Literal(action)))),
   intakeTargets: Type.Optional(intakeTargetsParameter),
   intakeConflicts: Type.Optional(Type.Array(Type.Object({id: Type.String(), reason: Type.String({minLength: 1, maxLength: 4000})},
@@ -71,7 +68,7 @@ function requireApprovedFacts(run: Run, snapshot: ProjectSnapshot) {
   if (run.state.approvedProjectHead !== undefined && snapshot.head !== run.state.approvedProjectHead) {
     throw new Error("当前 .fact 与本任务已独立审核的版本不同，请恢复已审核版本后重试。");
   }
-  if (run.state.topicFactsHead !== undefined && readTopicFacts(run.root).head !== run.state.topicFactsHead) {
+  if (run.state.topicFactsHead !== undefined && readFactTables(run.root).head !== run.state.topicFactsHead) {
     throw new Error("标签事实与本任务已同步的版本不同，请恢复对应版本后重试。");
   }
 }
@@ -90,7 +87,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     nestedTools: Set<string>; active: boolean; caller?: string} | undefined;
   let phaseInput: string | undefined;
   let workerSnapshot: ProjectSnapshot | undefined;
-  let intakeSnapshot: ReturnType<typeof readTopicFacts> | undefined;
+  let intakeSnapshot: ReturnType<typeof readFactTables> | undefined;
   const observations = new Map<string, Observation>();
 
   let reviewing: AbortController | undefined;
@@ -129,18 +126,23 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   });
 
   function toggleReportTool(enabled: boolean) {
-    const tools = pi.getActiveTools().filter(name => name !== reportTool && name !== teamTool && name !== methodTool && !designTools.includes(name));
-    if (!run) {
-      tools.push(...[...suspendedTools].filter(name => !tools.includes(name)));
-      suspendedTools.clear();
-    }
+    const tools = [...new Set([...pi.getActiveTools(), ...suspendedTools])]
+      .filter(name => name !== reportTool && name !== teamTool && name !== methodTool && !designTools.includes(name));
+    suspendedTools.clear();
     if (enabled && run?.state.phase === "design") tools.push(...(run.state.designConsult ? ["taskbook_probe"] : designTools));
     if (enabled) tools.push(reportTool, methodTool);
     pi.setActiveTools(run ? tools.filter(name => {
-      if (!directDelegation(name) && !(relocated && name === "read")) return true;
+      if (!directDelegation(name) && !(relocated && name === "read") && phaseAllowsTool(run.state.phase, name)) return true;
       suspendedTools.add(name);
       return false;
     }) : tools);
+  }
+
+  function phaseAllowsTool(phase: Run["state"]["phase"], name: string) {
+    if (phase === "fact-management") return name === queryFactsTool || name === reportTool;
+    if (phase === "fact-check") return !["codemode", "compress", "edit", "write"].includes(name);
+    if (phase === "handoff") return name === queryFactsTool || name === reportTool;
+    return true;
   }
 
   function pauseForUser(ctx: ExtensionContext, active: Run) {
@@ -159,7 +161,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     ctx.ui.setStatus("pi-taskbook", "等待用户裁决事实同步");
     const conflicts = active.state.intakeConflicts ?? [];
     ctx.ui.notify(conflicts.map(item => item.id + " · " + item.reason).join("\n") +
-      "。\n请直接回复 <条目> use <已有事实>、<条目> update <已有事实>、<条目> delete <已有事实> 或 <条目> create <目标路径或区分理由>", "warning");
+      "。\n请直接回复 <条目> use <已有事实>、<条目> update <已有事实>、<条目> delete <已有事实> 或 <条目> create <区分理由>", "warning");
   }
 
   function teamPhase(active: Run) {
@@ -229,13 +231,14 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       pi.sendMessage({customType: kickoffType, content: phaseInput, display: false, details: attempt}, {triggerTurn: true});
       return;
     }
-    if (phase === "fact-registration" && (run.state.team?.placements || !reviewedDrafts(run).length)) {
+    if (phase === "fact-registration") {
       const active = run;
       const team = active.state.team!;
-      const {topicHead, ...registered} = registerReviewedFacts(active, team.placements ?? []);
+      const drafts = reviewedDrafts(active);
+      const {topicHead, ...registered} = registerReviewedFacts(active);
       const existing = active.state.reports.at(-1);
       const reports: Report[] = existing?.phase === phase ? active.state.reports : [...active.state.reports,
-        {phase, outcome: "pass", summary: "没有待登记的 Draft Facts。", evidence: [registered.revision]}];
+        {phase, outcome: "pass", summary: "已处理任务事实和 " + drafts.length + " 条审核通过的草稿事实。", evidence: [registered.revision]}];
       checkpoint(active, {...active.state, phase: "handoff", topicFactsHead: topicHead, approvedProjectHead: registered.projectHead, team: {...team, registered}, reports});
       return startPhase(ctx);
     }
@@ -250,7 +253,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     if (phase === "fact-review" || phase === "correctness" || phase === "quality" || phase === "review") {
       return startReview(ctx, run, phase);
     }
-    const tail = phase === "fact-registration" || phase === "handoff";
+    const tail = phase === "handoff";
     const {model: target, thinkingLevel} = phase === "fact-management" || (phase === "fact-check" && run.state.reviewPolicy === 2) || tail
       ? {model: initialModel ?? ctx.model, thinkingLevel: initialThinking ?? ctx.thinkingLevel}
       : roleSelection(ctx, run.root, run.state.routes!, phase === "fact-check" ? "factCheck" : phase);
@@ -277,7 +280,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     }) : [];
     workerSnapshot = readProjectMemory(active.root);
     requireApprovedFacts(active, workerSnapshot);
-    intakeSnapshot = phase === "fact-management" ? readTopicFacts(active.root) : undefined;
+    intakeSnapshot = phase === "fact-management" ? readFactTables(active.root) : undefined;
     if (intakeSnapshot && !active.state.factBase) {
       checkpoint(active, {...active.state, factBase: git(active.root, "rev-parse", "HEAD")});
     }
@@ -286,14 +289,11 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       checkpoint(active, {...active.state, intakeDecisions: undefined, intakeVersion: undefined});
       ctx.ui.notify("事实版本已变化。同步将重新核对，原裁决用于其当时的版本。", "warning");
     }
-    phaseInput = tail ? tailPrompts[phase] + "\n\n" + JSON.stringify({attempt: token, task: active.task.id, userAnswers: active.state.userAnswers,
-      ...(phase === "fact-registration" ? {drafts: reviewedDrafts(active),
-        topics: [...readTopicFacts(active.root).tables.keys()], labels: readTopicFacts(active.root).labels} : {
-        goals: readRunContext(active).goals, delivery: readRunContext(active).delivery,
-        factDiff: deliveryFactDiff(active), candidate: active.state.revision,
-        reports: active.state.reports.filter(report => ["implement", "review", "fact-registration"].includes(report.phase)),
-      })}) : buildPhaseInput(active, phase, token, workerSnapshot,
-        magpieCandidates ? {...magpieCandidates, receipts} : undefined, intakeSnapshot);
+    phaseInput = tail ? handoffPrompt + "\n\n" + JSON.stringify({attempt: token, task: active.task.id, userAnswers: active.state.userAnswers,
+      goals: readRunContext(active).goals, delivery: readRunContext(active).delivery,
+      factDiff: deliveryFactDiff(active), candidate: active.state.revision,
+      reports: active.state.reports.filter(report => ["implement", "review", "fact-registration"].includes(report.phase)),
+    }) : buildPhaseInput(active, phase, token, workerSnapshot, magpieCandidates ? {...magpieCandidates, receipts} : undefined);
     attempt = token;
     started = false;
     reported = false;
@@ -768,7 +768,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       const active = run;
       if (active.state.intakeConflicts?.length) {
         const version = active.state.intakeVersion;
-        if (version && (version.topics !== readTopicFacts(active.root).head || version.project !== readProjectMemory(active.root).head)) {
+        if (version && (version.topics !== readFactTables(active.root).head || version.project !== readProjectMemory(active.root).head)) {
           checkpoint(active, {...active.state, intakeConflicts: undefined, intakeDecisions: undefined, intakeVersion: undefined});
           ctx.ui.notify("事实版本已变化，本次同步将按新版本重新核对。", "warning");
           return startPhase(ctx);
@@ -865,7 +865,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     return {systemPrompt: [relocated ? "" : event.systemPrompt, role, projectInstructions, phaseInput].filter(Boolean).join("\n\n")};
   });
 
-  pi.on("tool_call", event => {
+  pi.on("tool_call", (event, ctx) => {
     if (publishing) {
       if ((event.toolName === publishTool && publishing.active && !publishing.caller) ||
           (publishing.caller && event.parentToolCallId === publishing.caller && publishing.nestedTools.has(event.toolName))) return;
@@ -876,6 +876,10 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       return {block: true, reason: "任务书的子代理由插件按项目配置派发。设计阶段可用 taskbook_consult。"};
     }
     if (run && relocated && event.toolName === "read") return {block: true, reason: "请通过 Taskbook 工具读取已验证的 T3 工作区。"};
+    if (run) {
+      const reason = factAccessRestriction(event.toolName, event.input, ctx.cwd, run.root);
+      if (reason) return {block: true, reason};
+    }
     if ((run || syncing) && /^(?:mcp__.*__)?memory_(?:save|forget)(?:_[\da-f]+)?$/i.test(event.toolName) &&
         !(syncing && syncCaller && event.parentToolCallId === syncCaller.id)) {
       return { block: true, reason: "Magpie 写入由规格和质量审核通过后持久化的完成检查点触发。" };
@@ -887,11 +891,12 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     if (started && run && teamPhase(run) && event.toolName !== teamTool) {
       return {block: true, reason: "请调用 " + teamTool + " 从团队检查点继续。"};
     }
-    if (started && run && ["fact-management", "fact-registration", "handoff"].includes(run.state.phase) && ![reportTool, queryFactsTool, methodTool, "read"].includes(event.toolName)) {
-      return {block: true, reason: "Fact Management 通过阶段报告提交已核对的事实。"};
+    if (started && run && !phaseAllowsTool(run.state.phase, event.toolName)) {
+      return {block: true, reason: "请使用当前阶段提示中的工具。"};
     }
     if (started && run && (run.state.phase === "fact-check" || run.state.phase === "implement" || run.state.phase === "performance") &&
-        ![reportTool, methodTool, queryFactsTool, "edit", "write"].includes(event.toolName)) {
+        ![reportTool, methodTool, "edit", "write"].includes(event.toolName) &&
+        (run.state.phase === "fact-check" || event.toolName !== queryFactsTool)) {
       try { observedCalls.set(event.toolCallId, cleanRevision(run)); } catch { return; }
     }
   });
@@ -995,16 +1000,12 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       const outcome = params.outcome;
       if (params.pullRequest && (phase !== "handoff" || outcome !== "pass")) throw new Error("PR 提议属于 Handoff 的通过报告。");
       if (params.intakeTargets && (phase !== "fact-management" || outcome !== "pass")) throw new Error("事实定位只用于 Fact Management 通过报告。");
-      if (phase === "fact-registration" || phase === "handoff") {
+      if (phase === "handoff") {
         const active = run;
         const team = active.state.team;
         if (!team || !matchesDeliveryHead(active, cleanRevision(active))) throw new Error("交付工作区与签署结果不一致。");
         requireApprovedFacts(active, readProjectMemory(active.root));
         if (outcome !== "pass" && outcome !== "blocked") throw new Error("只接受通过结果或具体阻塞原因。");
-        if (outcome === "pass" && phase === "fact-registration") {
-          if (!params.factPlacements) throw new Error("请提交通过审核的事实分类。");
-          validatePlacements(active, params.factPlacements);
-        }
         const summary = params.summary.trim();
         if (!summary) throw new Error("请给出交付说明。");
         const report: Report = {phase, outcome, summary, evidence: params.evidence};
@@ -1013,19 +1014,17 @@ export default function taskbookExtension(pi: ExtensionAPI) {
           reported = true;
           return {content: [{type:"text", text:"记录已保存，等待用户裁决。"}], details: {}};
         }
-        const next = phase === "fact-registration" ? {...team, placements: params.factPlacements} :
-          {...team, handoff: summary, pullRequest: params.pullRequest};
+        const next = {...team, handoff: summary, pullRequest: params.pullRequest};
         checkpoint(active, {...active.state, team: next, reports: [...active.state.reports, report]});
-        if (phase === "handoff" && active.state.revision) {
+        if (active.state.revision) {
           syncCaller = {id: toolCallId, path: active.path, revision: active.state.revision, transport: magpieSessionTransport(pi, ctx)};
         }
         reported = true;
         return {content: [{type:"text", text:"记录已保存，请结束当前轮次。"}], details: {}};
       }
-      if (params.factPlacements) throw new Error("只有 Fact Management 登记阶段可提交事实分类。");
       if (phase === "fact-management") {
         if (!intakeSnapshot || !workerSnapshot || readProjectMemory(run.root).head !== workerSnapshot.head ||
-            readTopicFacts(run.root).head !== intakeSnapshot.head) throw new Error("事实同步输入已变化，请重新提交任务书。");
+            readFactTables(run.root).head !== intakeSnapshot.head) throw new Error("事实同步输入已变化，请重新提交任务书。");
         if (outcome !== "pass" && outcome !== "fact-conflict" && outcome !== "blocked") throw new Error("无效的事实同步结果。");
         if (params.intakeConflicts && outcome !== "fact-conflict") throw new Error("同步冲突须使用 fact-conflict。");
         const items = taskMemory(run.task).facts.map(fact => {
