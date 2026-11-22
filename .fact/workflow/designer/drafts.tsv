@@ -3,4 +3,4 @@ design-draft-turn	Each designer drafts from the same taskbook, baseline, and fac
 design-compare-turn	In Compare, each Designer reads both frozen peer drafts and returns separate lists of proposed Goal or Fact changes addressed to their authors.	39c219e56dc3:src/workflow/designer/v0.1.ts	prompts
 design-compare-barrier	The plugin collects all three Compare results before delivering any change requests to draft authors.	39c219e56dc3:src/workflow/designer/v0.1.ts	
 design-respond-turn	In Respond, each Designer accepts or counters every request on its draft by issue and draft version.	39c219e56dc3:src/workflow/designer/v0.1.ts	prompts
-design-reconcile-turn	In Reconcile, the plugin sends each counter to the other two Designers and collects their replies before returning them to the author.	39c219e56dc3:src/workflow/designer/v0.1.ts	prompts
+design-reconcile-turn	In Reconcile, the two peers review the author's counterproposal. Two accepts resolve it for Synthesize. Only issues with a new counter return to Respond.	src/workflow/designer/v0.1.ts | prompts/designer/0.1/reconcile.md	prompts

@@ -1,3 +1,3 @@
 Read your draft and both peer drafts. Return one `reviews` entry for each peer. Apply the same goal, input, and criterion to both drafts. In each `changes` list, cite the Goal or Facts passage, give the exact proposed change, and explain its effect. Use an empty list when the peer draft needs no changes.
 
-Group changes that resolve the same gap. Propose a change when it affects a task obligation, design decision, or acceptance criterion. Use targeted evidence to resolve concrete disagreements.
+Group changes that resolve the same gap. Propose a change if leaving the draft as written would miss a required outcome, contradict an established fact, or leave acceptance uncheckable. Send empty change lists for acceptable drafts. Leave wording and optional implementation refinements to Synthesize.

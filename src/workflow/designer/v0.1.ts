@@ -228,9 +228,16 @@ function advance(state: Working): DesignerState {
     }
     case "reconcile": {
       const replies = submitted(state.slots, "reconcile");
-      const issues = progress.issues.map(issue => ({...issue, replies: replies.flatMap(({designer, reply}) =>
-        reply.responses.filter(response => response.issue === issue.id).map(response => ({designer, response})))}));
-      return assignIssues({...progress, issues}, "respond");
+      const issues: Issue[] = [];
+      const resolved = [...progress.resolved];
+      for (const issue of progress.issues) {
+        const reviewed = {...issue, replies: replies.flatMap(({designer, reply}) =>
+          reply.responses.filter(response => response.issue === issue.id).map(response => ({designer, response})))};
+        if (reviewed.replies.some(({response}) => response.decision === "counter")) issues.push(reviewed);
+        else resolved.push(reviewed);
+      }
+      const next = {...progress, issues, resolved};
+      return issues.length ? assignIssues(next, "respond") : synthesize(next);
     }
     case "synthesize": {
       const {reply} = submitted(state.slots, "synthesize")[0];
