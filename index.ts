@@ -297,13 +297,13 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       : [...goals, ...delivery];
     if (phase === "correctness" || phase === "review") {
       objectives.push(...(state.userAnswers ?? []).map((answer, index) => ({
-        id: "ANSWER" + (index + 1), text: JSON.stringify({ ...answer, obligation: "核对候审结果是否符合用户对这个问题的原始答复。" }),
+        id: "ANSWER" + (index + 1), text: JSON.stringify({ ...answer, obligation: "针对这条原始答复，指出一个可以推翻“候选已遵循答复”的具体情形，并用候选版本的可读产物或已有回执核查。" }),
       })));
     }
     if ((phase === "correctness" || phase === "review") && state.plan) {
       const {version, steps} = state.plan;
       objectives.push(...steps.map((step, index) => ({id:"PLAN" + (index + 1),
-        text: JSON.stringify({version, step, obligation:"对照候审提交与运行证据，核对约定行为和验收判据。"})})));
+        text: JSON.stringify({version, step, obligation:"将该步骤约定的验收观察与候选提交的实际输出配对。缺少对应观察时，将该步骤记为未获证实。"})})));
     }
     if (factReview) {
       objectives.push(...changes.map((change, index) => ({ id: "M" + (index + 1),
@@ -456,7 +456,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       nestedTools: new Set([...catalogue.values()].map(tool => tool.name))};
     pi.setActiveTools([publishTool]);
     pi.sendMessage({customType: publishKickoff, details: token, display: false,
-      content: "Call taskbook_publish_pr once with attempt " + token + ". The plugin handles the user's approval and GitHub receipt."},
+      content: "Call taskbook_publish_pr once with attempt " + token + ". The plugin handles approval. Determine which revision and action succeeded from the receipt returned by this call, then end the turn."},
       {triggerTurn: true});
   }
 
@@ -811,7 +811,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     if (publishing && event.messageType === "custom" && event.message.customType === publishKickoff && event.message.details === publishing.token) {
       publishing.active = true;
       return {systemPrompt: [projectInstructions,
-        "Run the single Taskbook publication tool with the supplied attempt token. End the turn after its receipt."].filter(Boolean).join("\n\n")};
+        "Run the single Taskbook publication tool with the supplied attempt token. Use the returned receipt to determine which revision and action succeeded, and end the turn."].filter(Boolean).join("\n\n")};
     }
     if (!run || !attempt || !phaseInput || run.state.phase === "exit" || event.messageType !== "custom" ||
         event.message.customType !== kickoffType || event.message.details !== attempt) {

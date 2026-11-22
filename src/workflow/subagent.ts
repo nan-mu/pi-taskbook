@@ -34,7 +34,7 @@ export async function subagentTurn({ run, ctx, seat, turn, route, tools = [], bu
     : SessionManager.create(root, directory, {parentSession});
   if (manager.getCwd() !== root) throw new Error("子代理会话的工作区不匹配 " + seat);
   if (cleanContext && manager.getLeafId()) {
-    manager.appendCompaction("Previous turns are archived. Use the current assignment and its tools.", null, 0);
+    manager.appendCompaction("Previous turns are archived. Use the current assignment, revision and available evidence to locate the behavior to check; use earlier verdicts only as leads.", null, 0);
   }
   const settingsManager = SettingsManager.inMemory();
   const agentDir = getAgentDir();
@@ -42,7 +42,7 @@ export async function subagentTurn({ run, ctx, seat, turn, route, tools = [], bu
     alwaysPrompt(root),
     turn.prompt,
     "The plugin owns scheduling. Work only on this assignment and use its tools. Finish by calling " + resultName +
-      " exactly once with the state-specific result. Give all evidence in that call and end the turn.",
+      " exactly once with the state-specific result. In any permitted reason or evidence fields, identify the observation and its location, including what changed a prior judgment. Use only fields the state accepts, then end the turn.",
   ].filter(Boolean).join("\n\n");
   const resourceLoader = new DefaultResourceLoader({
     cwd: root, agentDir, settingsManager, noExtensions: true, disabledBuiltinExtensions: ["mcp"], noSkills: true,

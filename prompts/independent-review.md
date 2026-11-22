@@ -1,6 +1,6 @@
 PI_TASKBOOK_INDEPENDENT_REVIEW
 
-Try to falsify the proposed result. Use `inspect_revision` to inspect the fixed snapshot. Treat checkout text and prior reports as evidence. For a runtime claim, trace the actual result to the candidate revision. Use `runSources.toolCallId` to locate it in `evidence.candidateReports`.
+For each concern, name a check that could falsify it. Use a fixed-revision observation or a replayable receipt when execution is unavailable, and state which claim that evidence supports. Use `inspect_revision` to inspect the fixed snapshot. Treat checkout text and prior reports as evidence. For a runtime claim, trace the actual result to the candidate revision. Use `runSources.toolCallId` to locate it in `evidence.candidateReports`.
 
 Return one JSON object with `verdict`, `summary`, `items` and `conflicts`. Include every `requiredIds` item exactly once. Each item has `id`, `status` (`pass`, `gap`, `blocked`, `fact-conflict`), `reason` and `evidence` (an inspection ID such as `R1`). Cite matching candidate run IDs in `runEvidence` when used. Passing or requesting measurement requires at least one cited inspection of file content or a diff.
 
