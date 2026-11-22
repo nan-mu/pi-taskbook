@@ -16,6 +16,7 @@ import { implementerTurn, playbooks, resumeImplementer, reworkImplementer, settl
   type ImplementerState, type Playbook } from "./implement/v0.1.ts";
 import { readRunContext } from "./phase-input.ts";
 import type { FactPlacement } from "./register-facts.ts";
+import { readReviewSubmission, validateReviewSubmission } from "./review/submission.ts";
 import { answerReviewUser, reviewTurns, settleReviewTurn, startReviewFlow, type ReviewFlow } from "./review/flow.ts";
 import { isCandidateReceipt, type registerSubagentTool, type CommandReceipt, type Seat, type WorkerReceipt, type WorkTurn } from "./subagent.ts";
 import { investigations, transition } from "./playbook.ts";
@@ -52,12 +53,6 @@ const factParameters = Type.Object({
   limit: Type.Optional(Type.Integer({minimum: 1, maximum: maxFactMatches})),
   offset: Type.Optional(Type.Integer({minimum: 0})),
 }, {additionalProperties: false});
-const reviewReply = Type.Object({
-  kind: Type.String(),
-  draftFacts: Type.Optional(Type.Array(Type.Object({id: Type.String(), evidence: Type.Array(Type.String())}))),
-  evidence: Type.Optional(Type.Array(Type.String())),
-  findings: Type.Optional(Type.Array(Type.Object({evidence: Type.Array(Type.String()), factId: Type.Optional(Type.String())}))),
-});
 const needsUserResult = Type.Object({result: Type.Object({kind: Type.Literal("needs-user")})});
 
 function factTool(run: Run, lookup: Set<string>): ToolDefinition<typeof factParameters> {
@@ -163,6 +158,7 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
   const fetchDrafts = (team: Team) => team.drafts ?? [];
   const dispatch = async (seat: Seat, turn: WorkTurn, snapshot: string, options: {
     review?: boolean; writable?: boolean; evidence?: boolean;
+    validate?: (result: unknown, observations: readonly Inspection[], lookedUp: ReadonlySet<string>) => void;
   } = {}) => {
     const observations: Inspection[] = [];
     const lookedUp = new Set<string>();
@@ -191,9 +187,10 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
     const route: RoleSelection = prior
       ? {model: resolveModel(ctx, prior.model), thinkingLevel: prior.thinking}
       : roleSelection(ctx, run.root, run.state.routes!, role);
-    const reply = await runWorker({run, ctx, seat, turn, route, tools, signal,
+    const validate = options.validate;
+    const assignment = validate ? {...turn, validateResult: (result: unknown) => validate(result, observations, lookedUp)} : turn;
+    return runWorker({run, ctx, seat, turn: assignment, route, tools, signal,
       builtins: options.writable ? ["read", "bash", "edit", "write", "grep", "find", "ls"] : []});
-    return {...reply, observations, lookedUp};
   };
   const settledBatch = async <T,>(turns: readonly T[], perform: (turn: T) => Promise<Awaited<ReturnType<typeof dispatch>>>,
     accept: (turn: T, reply: Awaited<ReturnType<typeof dispatch>>) => void, deferUserRequest = false) => {
@@ -385,37 +382,17 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
       return;
     }
     const turns = reviewTurns(review);
+    const drafts = fetchDrafts(team).map(draft => draft.id);
+    const facts = new Set(context.facts.map(fact => fact.id));
     status("Review · " + turns.map(turn => turn.designer + "/" + turn.work).join(", "));
     await settledBatch(turns, turn => dispatch(turn.designer, {...turn, context: {
       ...turn.context, delivery: context.delivery, userAnswers: state.userAnswers, taskFactLabel: taskFactLabel(run.task),
     }}, revision, {
       review: true, evidence: true,
+      validate: (result, observations, lookedUp) => validateReviewSubmission(turn.work, result, {observations, lookedUp, drafts, facts}),
     }), (turn, reply) => {
       assertCandidate(run, revision);
-      const result = reply.result;
-      const freshJudgment = /^(initial|cross)-/u.test(turn.work);
-      const drafts = fetchDrafts(team);
-      if (!Value.Check(reviewReply, result)) throw new Error("审核结果格式无效。");
-      if (freshJudgment) {
-        const references = [...(result.evidence ?? []), ...(result.findings ?? []).flatMap(finding => finding.evidence)];
-        if (!reply.observations.some(obs => (obs.view === "candidate" || obs.view === "diff") && obs.characters > 0 && references.includes(obs.id))) {
-          throw new Error(turn.designer + " 的审核需要引用本轮独立检查的文件或差异。");
-        }
-        if (drafts.some(draft => !reply.lookedUp.has(draft.id))) {
-          throw new Error(turn.designer + " 需要逐条审核本次提交的 Draft Facts。");
-        }
-      }
-      if ((freshJudgment || result.draftFacts !== undefined) && ((result.draftFacts ?? []).length !== drafts.length ||
-          drafts.some(draft => !result.draftFacts?.some(item => item.id === draft.id)))) {
-        throw new Error("审核意见须涵盖当前提交的全部 Draft Facts。");
-      }
-      if (result.kind === "approve" && drafts.some(draft => !reply.lookedUp.has(draft.id))) {
-        throw new Error("Lead 需要在签署前查询本次全部 Draft Facts。");
-      }
-      if ((result.findings ?? []).some(finding => finding.factId && !context.facts.some(fact => fact.id === finding.factId) &&
-          !reply.lookedUp.has(finding.factId) && !drafts.some(draft => draft.id === finding.factId))) {
-        throw new Error("审核报告引用了未核对的事实 ID。");
-      }
+      const result = readReviewSubmission(reply.result);
       for (const finding of result.findings ?? []) {
         const item = context.facts.find(fact => fact.topicFact && (fact.topicFact.id === finding.factId ||
           fact.topicFact.path + "#" + fact.topicFact.id === finding.factId));

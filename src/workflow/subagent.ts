@@ -16,7 +16,7 @@ import { cleanRevision, type Run } from "./run.ts";
 
 export type Seat = "lead" | "member-a" | "member-b" | "implementer";
 export type WorkTurn = {id: string; work: string; prompt: string; context: unknown; schema: TSchema;
-  summarizeResult?: (result: unknown) => string | undefined};
+  validateResult?: (result: unknown) => void; summarizeResult?: (result: unknown) => string | undefined};
 export type WorkerReceipt = {id: string; seat: Seat; work: string; session: string; model: string; thinking: RoleSelection["thinkingLevel"]};
 export type CommandReceipt = {turn: string; command: string; before: string; cleanBefore?: boolean; revision: string; clean: boolean; failed: boolean; output: string};
 export function commandSnapshot(run: Pick<Run, "root">) {
@@ -46,8 +46,8 @@ export async function subagentTurn({ run, ctx, seat, turn, route, tools = [], bu
       ". Your Work State is " + turn.work + ". The current assignment establishes which judgment you own and which inputs you can rely on.",
     alwaysPrompt(root),
     turn.prompt,
-    "Work on this assignment using its tools. When the result schema has next, select the Work State you need and supply its matching result. Finish by calling " + resultName +
-      " exactly once with the state-specific result. In any permitted reason or evidence fields, identify the observation and its location, including what changed a prior judgment. Use only fields the state accepts, then end the turn.",
+    "Work on this assignment using its tools. When the result schema has next, select the Work State you need and supply its matching result. Submit the state-specific result in a standalone " + resultName +
+      " call. If it returns an error, address the feedback and submit again. In any permitted reason or evidence fields, identify the observation and its location, including what changed a prior judgment. The turn ends when the result is accepted.",
   ].filter(Boolean).join("\n\n");
   const resourceLoader = new DefaultResourceLoader({
     cwd: root, agentDir, settingsManager, noExtensions: true, disabledBuiltinExtensions: ["mcp"], noSkills: true,
@@ -76,6 +76,7 @@ export async function subagentTurn({ run, ctx, seat, turn, route, tools = [], bu
       const calls = submission?.role === "assistant" ? submission.content.filter(item => item.type === "toolCall") : [];
       if (calls.length !== 1 || calls[0]?.name !== resultName) throw new Error("Submit the result in its own tool call.");
       if (!Value.Check(turn.schema, result)) throw new Error("Result does not match the active state.");
+      turn.validateResult?.(result);
       reply = {result: structuredClone(result)};
       return {content: [{type: "text", text: "Recorded."}], details: {}, terminate: true};
     },
@@ -109,6 +110,10 @@ export async function subagentTurn({ run, ctx, seat, turn, route, tools = [], bu
     if (event.type === "tool_execution_start" && event.toolName === "bash" && typeof event.args.command === "string") {
       const start = commandSnapshot(run);
       shellCalls.set(event.toolCallId, {command: event.args.command, before: start.revision, cleanBefore: start.clean});
+    }
+    if (activity && event.type === "tool_execution_end" && event.toolName === resultName && event.isError) {
+      const correction = event.result.content.find((part: TextContent | ImageContent) => part.type === "text")?.text;
+      if (correction) activity(correction.slice(0, 1200));
     }
     if (event.type === "tool_execution_end" && event.toolName === "bash") {
       const call = shellCalls.get(event.toolCallId);
