@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { Type, type Static } from "typebox";
+import { Type, type Static, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 import type { TaskType } from "../transitions.ts";
 import { acceptPlan, planParameter, type ExecutionPlan } from "../design-worker.ts";
@@ -17,15 +17,19 @@ type DesignInput = {runId: string; taskbook: string; taskType: TaskType; baselin
 const text = Type.String({minLength: 1, pattern: "\\S"});
 const shortText = Type.String({minLength: 1, maxLength: 800, pattern: "\\S"});
 const draft = Type.Object({goal: text, facts: Type.Array(text)}, {additionalProperties: false});
-const finding = Type.Object({target: shortText, counterexample: shortText, evidence: shortText, correction: shortText,
-  factId: Type.Optional(shortText)}, {additionalProperties: false});
+function objection<T extends TSchema>(target: T) {
+  const finding = Type.Object({target, counterexample: shortText, evidence: shortText, correction: shortText,
+    factId: Type.Optional(shortText)}, {additionalProperties: false});
+  return Type.Object({kind: Type.Literal("objected"), version: text,
+    findings: Type.Array(finding, {minItems: 1})}, {additionalProperties: false});
+}
 const proposed = {draft, plan: planParameter};
 const initialPlan = Type.Object({kind: Type.Literal("plan"), ...proposed}, {additionalProperties: false});
 const resolution = Type.Object({id: text, disposition: Type.Union([Type.Literal("changed"), Type.Literal("rebutted")]),
   explanation: shortText}, {additionalProperties: false});
 const revisedPlan = Type.Object({kind: Type.Literal("revised"), ...proposed, resolutions: Type.Array(resolution)}, {additionalProperties: false});
 const approved = Type.Object({kind: Type.Literal("approved"), version: text}, {additionalProperties: false});
-const objected = Type.Object({kind: Type.Literal("objected"), version: text, findings: Type.Array(finding, {minItems: 1})}, {additionalProperties: false});
+const objected = objection(shortText);
 const signed = Type.Object({kind: Type.Literal("signed"), version: text}, {additionalProperties: false});
 const needsUser = Type.Object({kind: Type.Literal("needs-user"), question: shortText, evidence: shortText, factId: Type.Optional(shortText)},
   {additionalProperties: false});
@@ -34,7 +38,7 @@ const consultResult = Type.Object({kind: Type.Literal("answered"), answer: text,
   draftFacts: Type.Array(Type.Object({text: text, source: text}, {additionalProperties: false}))}, {additionalProperties: false});
 
 type Candidate = {version: string; draft: Static<typeof draft>; plan: ExecutionPlan};
-type Finding = Static<typeof finding> & {id: string; member: Member};
+type Finding = Static<typeof objected>["findings"][number] & {id: string; member: Member};
 export type DesignReviewRecord = {finding: Finding; reviewedVersion: string; resolution: Static<typeof resolution>};
 type MemberReply = Static<typeof approved> | Static<typeof objected>;
 type PrimaryWork = "draft" | "confirm" | "revise" | "signoff";
@@ -59,6 +63,10 @@ export function startDesigner(input: DesignInput): DesignerState {
   return begin({input: structuredClone(input), serial: 0, findings: [], resolutions: [], consultations: []}, "draft");
 }
 
+function findingTargets({input, candidate}: Progress) {
+  return [...new Set([...input.targetIds, ...(candidate?.plan.steps.map(step => step.id) ?? [])])];
+}
+
 function destinations(job: Job, progress: Progress) {
   const ask = transition("needs-user", needsUser);
   if ("returnTo" in job) {
@@ -66,7 +74,10 @@ function destinations(job: Job, progress: Progress) {
     return job.designer === "lead" ? Type.Union([answer, ask]) : answer;
   }
   const helpers = [transition("consult", consultRequest), ...investigations.map(method => transition(method, investigationRequest))];
-  if (job.work === "confirm") return Type.Union([transition("signoff", approved), transition("revise", objected), ...helpers]);
+  if (job.work === "confirm") {
+    const target = Type.Enum(findingTargets(progress), {description: "Select one Goal, Delivery or plan step ID."});
+    return Type.Union([transition("signoff", approved), transition("revise", objection(target)), ...helpers]);
+  }
   if (job.work === "draft") return Type.Union([transition("confirm", initialPlan), ask, ...helpers]);
   if (job.work === "revise") {
     return Type.Union([...(progress.findings.some(item => item.factId) ? [] : [transition("confirm", revisedPlan)]), ask, ...helpers]);
@@ -110,7 +121,7 @@ export function designerTurns(state: DesignerState) {
       context: structuredClone({...input,
         candidate, ...(job.work === "revise" ? {findings} : {}),
         ...(job.work === "confirm" ? {changesSincePrevious: changedSteps(previous, candidate),
-          findingTargets: [...input.targetIds, ...(candidate?.plan.steps.map(step => step.id) ?? [])],
+          findingTargets: findingTargets(state.progress),
           resolutions: resolutions.filter(item => item.reviewedVersion === previous?.version)} : {}),
         ...(job.work === "signoff" ? {approvedBy: members} : {}),
         ...("returnTo" in job ? {question: job.question, evidence: job.evidence, returnTo: job.returnTo.work} : {}),
@@ -158,12 +169,6 @@ function applyRevision(state: Working, result: Static<typeof revisedPlan>, candi
 function settleConfirmation(state: Working, job: PrimaryJob, review: MemberReply): DesignerState {
   const {candidate, input} = state.progress;
   if (job.designer === "lead" || !candidate || candidate.version !== review.version) throw new Error("Confirmation needs the current candidate version.");
-  if (review.kind === "objected") {
-    const targets = new Set([...input.targetIds, ...candidate.plan.steps.map(step => step.id)]);
-    const invalid = review.findings.filter(item => !targets.has(item.target));
-    if (invalid.length) throw new Error("Use exactly one ID from findingTargets in each finding's target field: " +
-      [...targets].join(", ") + ". Put other affected IDs and explanations in counterexample or evidence. Correct the report and submit again.");
-  }
   const slots = state.slots.map(slot => slot.job.id === job.id ? {...slot, review} : slot);
   if (slots.some(slot => !slot.review)) return {...state, slots};
   const findings = slots.flatMap(({job, review}) => {
