@@ -1,2 +1,2 @@
 id	fact	source	labels
-cmd-new	Use /taskbook-new with a taskbook path or pasted Markdown to explicitly request a new T3 worktree.	index.ts | .fact/command/taskbook-new/branch.tsv#new-branch | .fact/prompts/fact-check.tsv#new-follow	worktree
+cmd-new	Use /taskbook-new with a taskbook path or pasted Markdown to start the task in a new T3 thread and worktree.	index.ts | .fact/command/taskbook-new/branch.tsv#new-branch | .fact/prompts/fact-check.tsv#new-follow	worktree

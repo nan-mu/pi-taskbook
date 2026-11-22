@@ -9,10 +9,28 @@ type T3 = { url: URL; token: string };
 type RpcResponse = { id?: number; result?: unknown; error?: unknown };
 const launchTool = "t3_thread_launch";
 const statusTool = "t3_worktree_status";
-const workspaceTools = [launchTool, statusTool];
+const handoffTool = "t3_worktree_handoff";
+const listTool = "t3_worktree_list";
+const workspaceTools = [launchTool, statusTool, handoffTool, listTool];
 const nullable = Type.Union([Type.String(), Type.Null()]);
 const bindingSchema = Type.Object({attached: Type.Boolean(), worktreePath: nullable, branch: nullable,
   projectWorkspaceRoot: Type.String(), defaultStartFromOrigin: Type.Boolean()});
+const worktreePage = Type.Object({refs: Type.Array(Type.Object({name: Type.String(), worktreePath: nullable})),
+  nextCursor: Type.Union([Type.Integer(), Type.Null()])});
+const handoffSchema = Type.Object({worktreePath: Type.String({minLength: 1}), branch: Type.String(),
+  baseRef: Type.String(), startedFromOrigin: Type.Boolean(),
+  continuation: Type.Union([
+    Type.Object({status: Type.Literal("scheduled"), delivery: Type.String()}),
+    Type.Object({status: Type.Literal("skipped")}),
+    Type.Object({status: Type.Literal("failed"), detail: Type.String()}),
+  ]),
+  setupScript: Type.Union([
+    Type.Object({status: Type.Literal("started"), scriptName: Type.String(), terminalId: Type.String()}),
+    Type.Object({status: Type.Literal("no-script")}),
+    Type.Object({status: Type.Literal("skipped")}),
+    Type.Object({status: Type.Literal("failed"), detail: Type.String()}),
+  ]),
+});
 function readT3Endpoint(): T3 {
   const raw = process.env.T3_MCP_URL;
   const token = process.env.T3_MCP_BEARER_TOKEN;
@@ -114,6 +132,15 @@ async function discoverTools(rpc: Awaited<ReturnType<typeof connectT3>>) {
   return tools;
 }
 
+function canHandoff(tools: Map<string, unknown>) {
+  const input = tools.get(handoffTool);
+  if (!tools.has(statusTool) || !tools.has(listTool) ||
+      typeof input !== "object" || input === null || !("properties" in input)) return false;
+  const {properties} = input;
+  return typeof properties === "object" && properties !== null &&
+    ["branch", "baseRef", "startFromOrigin", "continuationPrompt"].every(name => Object.hasOwn(properties, name));
+}
+
 async function callT3<T extends TSchema>(rpc: Awaited<ReturnType<typeof connectT3>>, name: string, args: object, schema: T) {
   const reply = await rpc("tools/call", {name, arguments: args}) as
     {isError?: boolean; structuredContent?: unknown; content?: {type: string; text?: string}[]};
@@ -148,8 +175,8 @@ export async function readT3Workspace(cwd: string) {
 }
 
 export async function inspectT3() {
-  const gate = {tool: launchTool, worktree: false};
-  const impact = "/taskbook 在未绑定的 T3 会话中按任务书创建工作树。/taskbook-new 可显式请求创建工作树。";
+  const gate = {tool: launchTool, worktree: false, handoff: false};
+  const impact = "/taskbook 可将当前 T3 线程迁到任务工作树。/taskbook-new 在新 T3 线程启动任务。";
   if (!process.env.T3_MCP_URL || !process.env.T3_MCP_BEARER_TOKEN) {
     return { ...gate, status: "missing", transport: "missing",
       reason: "当前 Pi 会话缺少 T3 注入的 MCP 上下文。", impact };
@@ -164,8 +191,9 @@ export async function inspectT3() {
     const rpc = await connectT3(endpoint);
     const tools = await discoverTools(rpc);
     const worktree = hasWorktreeStrategy(tools.get(launchTool));
+    const handoff = canHandoff(tools);
     const binding = tools.has(statusTool) ? await callT3(rpc, statusTool, {}, bindingSchema).catch(() => undefined) : undefined;
-    return {status: worktree ? "discovered" : tools.has(launchTool) ? "unconfirmed" : "missing", transport: "responding", tool: launchTool, worktree,
+    return {status: worktree ? "discovered" : tools.has(launchTool) ? "unconfirmed" : "missing", transport: "responding", tool: launchTool, worktree, handoff,
       binding, reason: tools.has(launchTool) && !worktree ? "工具已注册，但目录未确认托管 worktree 参数。" : undefined, impact};
   }
   catch { return { ...gate, status: "unconfirmed", transport: "unavailable",
@@ -204,4 +232,39 @@ export async function launchT3Thread(args: {
       workspaceStrategy: { type: "worktree", baseRef: args.base, branch: args.branch, startFromOrigin: false },
   }, Type.Object({threadId: Type.String({minLength: 1}), link: Type.Optional(nullable)}));
   return {threadId: result.threadId, link: result.link ?? undefined};
+}
+
+export async function handoffT3Thread(args: {root: string; branch: string; base: string; message: string}) {
+  const rpc = await connectT3(readT3Endpoint());
+  const tools = await discoverTools(rpc);
+  if (!canHandoff(tools)) throw new Error("T3 工具目录未确认当前线程的 worktree 迁移能力。");
+
+  const status = await callT3(rpc, statusTool, {}, bindingSchema);
+  const binding = boundT3Worktree(args.root, status);
+  if (binding) {
+    if (binding.branch !== args.branch) throw new Error("当前 T3 线程已绑定到其他工作分支。");
+    return {kind: "bound" as const, root: binding.root};
+  }
+  if (realpathSync(status.projectWorkspaceRoot) !== realpathSync(args.root)) {
+    throw new Error("T3 项目根目录与任务书仓库不一致。");
+  }
+
+  let cursor: number | null = null;
+  const seen = new Set<number>();
+  do {
+    const page = await callT3(rpc, listTool,
+      {query: args.branch, refKind: "local", limit: 200, ...(cursor === null ? {} : {cursor})}, worktreePage);
+    const occupied = page.refs.find(ref => ref.name === args.branch && ref.worktreePath);
+    if (occupied) throw new Error("任务分支已有 worktree · " + occupied.worktreePath + "。可在其所属线程继续，或指定新的 Work branch。");
+    cursor = page.nextCursor;
+    if (cursor !== null && (seen.has(cursor) || seen.size >= 9)) throw new Error("T3 未能完整核对现有工作区。");
+    if (cursor !== null) seen.add(cursor);
+  } while (cursor !== null);
+
+  const reply = await callT3(rpc, handoffTool, {branch: args.branch, baseRef: args.base, startFromOrigin: false,
+    continuationPrompt: args.message}, handoffSchema);
+  if (reply.branch !== args.branch || reply.baseRef !== args.base || reply.startedFromOrigin) {
+    throw new Error("T3 迁移回执与任务书目标工作区不一致。");
+  }
+  return {kind: "handed-off" as const, ...reply};
 }

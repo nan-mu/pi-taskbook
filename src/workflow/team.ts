@@ -36,7 +36,6 @@ export type Team = {
   placements?: FactPlacement[];
   handoff?: string;
   pullRequest?: PullRequestAction;
-  publicationOffered?: true;
 };
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -310,7 +309,7 @@ export async function runTeam(run: Run, ctx: ExtensionContext, signal: AbortSign
       status("Implement · " + implementation.checkpoint.playbook + " / " + turn.work);
       await settledBatch([turn], work => dispatch("implementer", {...work, prompt: work.prompt + "\n\n" +
         "Use the approved tasks and primary taskbook facts. Start each implementation slice from a known state, change one independently verifiable behavior, and check it on the candidate before moving on. Resolve local decisions in Consult and send plan or scope decisions to the Lead. " +
-        "Keep delivery commits local until Handoff obtains publication approval. Report durable new knowledge as sourced draft facts. " +
+        "Keep delivery commits local until Handoff publishes the signed revision. Report durable new knowledge as sourced draft facts. " +
         "Use taskbook_method to load a reference method when needed."},
         git(run.root, "rev-parse", "HEAD"), {writable: true}), (_turn, reply) => {
         const implement = settleImplementerTurn(implementation, {id: turn.id, settled: true, result: reply.result});

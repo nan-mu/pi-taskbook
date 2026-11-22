@@ -115,6 +115,7 @@ class T3Endpoint(http.server.BaseHTTPRequestHandler):
     launch = {"properties": {"workspaceStrategy": {"properties": {
         "type": {"enum": ["root", "existing_worktree", "worktree"]}, "baseRef": {}, "branch": {}, "startFromOrigin": {},
     }}}}
+    handoff = {"properties": {name: {} for name in ("branch", "baseRef", "startFromOrigin", "continuationPrompt")}}
 
     def log_message(self, *_):
         pass
@@ -132,6 +133,7 @@ class T3Endpoint(http.server.BaseHTTPRequestHandler):
         elif method == "tools/list":
             result = {"tools": [{"name": name, "inputSchema": schema} for name, schema in [
                 ("t3_thread_launch", self.launch), ("t3_worktree_status", {}),
+                ("t3_worktree_handoff", self.handoff), ("t3_worktree_list", {}),
             ]]}
         else:
             assert method == "tools/call"
@@ -165,6 +167,7 @@ def test_t3_endpoint(repo, root, config, model, mcp_log):
         checks = setup_report(repo, root, config, model, mcp_log, [], t3_endpoint=endpoint)
         assert checks["availability"]["t3"]["directTransport"] == "responding"
         assert checks["availability"]["t3"]["taskbookNew"]
+        assert checks["availability"]["t3"]["taskbookHandoff"]
         assert [name for name, _ in server.calls] == ["t3_worktree_status"]
 
         base = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
@@ -405,9 +408,10 @@ def test_setup():
             assert valid["legacy"]["status"] == "ready"
             preflight = valid["availability"]
             assert set(preflight["t3"]["sessionTools"]) == {
-                "t3_thread_launch", "t3_worktree_status"}
+                "t3_thread_launch", "t3_worktree_status", "t3_worktree_handoff", "t3_worktree_list"}
             assert preflight["t3"]["directTransport"] == "rejected"
             assert not preflight["t3"]["taskbookNew"]
+            assert not preflight["t3"]["taskbookHandoff"]
             assert "fixture.invalid" not in str(valid)
             assert preflight["github"]["repositoryAccess"] == "not-tested"
             assert "pullRequestMetadata" in preflight["github"]["read"]

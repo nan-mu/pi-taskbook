@@ -73,10 +73,10 @@ function decode<T extends TSchema>(schema: T, result: unknown, ...keys: string[]
 }
 
 export function githubHandoff(pi: ExtensionAPI, ctx: ExtensionToolContext, repository: string,
-  options: {action: PullRequestAction; comments: boolean; signal?: AbortSignal}) {
+  options: {action?: PullRequestAction; comments?: boolean; signal?: AbortSignal}) {
   const names = githubHandoffTools(pi);
   const required: Method[] = ["list_pull_requests", "pull_request_read",
-    ...(createsPull(options.action) ? ["create_pull_request"] as const :
+    ...(options.action && createsPull(options.action) ? ["create_pull_request"] as const :
       options.action === "update" ? ["update_pull_request"] as const : []),
     ...(options.comments ? ["add_issue_comment"] as const : [])];
   const missing = required.filter(name => !names.has(name) || options.action === "draft" && name === "create_pull_request" &&

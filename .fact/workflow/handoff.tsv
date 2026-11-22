@@ -1,5 +1,5 @@
 id	fact	source	labels
-term-handoff	Handoff prepares the local delivery record for reviewed work. External publication requires separate user authorization.	39c219e56dc3:.fact/terms.tsv#L22 | 39c219e56dc3:src/workflow/publication.ts#L32-L42	terms
-handoff-approval	PR publication binds user approval to an exact GitHub repository, work branch, reviewed delivery commit, and outgoing text.	39c219e56dc3:src/workflow/publication.ts	
-handoff-pr-actions	For a signed delivery, publication can create a regular or draft pull request, update its taskbook summary, or add a discussion comment.	39c219e56dc3:src/workflow/publication.ts#L158-L167	
+term-handoff	Handoff publishes every signed team delivery to a pull request and reports the confirmed URL. The recipient decides whether to merge.	index.ts | src/workflow/publication.ts	terms,handoff
+handoff-approval	A signed delivery enters PR publication automatically. The plugin verifies the repository, task branch, base and signed delivery commit before pushing.	index.ts | src/workflow/publication.ts	handoff
+handoff-pr-actions	Handoff creates a regular PR by default and reuses a matching open PR. A taskbook can specify a draft, summary update or comment.	index.ts | src/workflow/publication.ts	handoff
 handoff-pr-facts	When a committed fact diff exists, publication posts it as a pull request comment and uses deterministic markers to recognize comments already sent.	39c219e56dc3:src/workflow/publication.ts#L111-L132 | 39c219e56dc3:src/workflow/publication.ts#L215-L226	facts

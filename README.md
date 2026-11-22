@@ -29,9 +29,11 @@ pi install https://github.com/nan-mu/pi-taskbook
 | 命令 | 用户会得到什么 |
 | --- | --- |
 | `/taskbook-setup` | 查看当前项目的就绪情况。可继续指定模型配置，或要求处理旧资料。 |
-| `/taskbook <任务书路径或 Markdown 正文>` | 在已有工作树中启动任务。T3 会话尚未绑定工作树时，T3 按任务书指定的基线和 `Work branch` 创建工作树，新会话接着开始事实核查。 |
-| `/taskbook-new <任务书路径或 Markdown 正文>` | 显式请求 T3 创建工作树并启动任务。 |
+| `/taskbook <任务书路径或 Markdown 正文>` | 在当前会话启动任务。T3 会话尚未绑定工作树时，T3 按任务书指定的基线和 `Work branch` 创建工作树，并把当前会话迁过去继续事实核查。 |
+| `/taskbook-new <任务书路径或 Markdown 正文>` | 请求 T3 创建工作树，并在新会话启动任务。 |
 
 粘贴正文时，在命令后留一个空格，再粘贴多行 Markdown。正文中的事实写在 `## Facts` 下。引用相对路径的附件时，提交任务书文件的路径。
+
+审核签署后，插件用 Git 推送任务分支，再用当前 Pi 会话的 Magpie GitHub 工具创建 PR。已有对应 PR 时更新该 PR。任务书无需声明发布，是否合并由你决定。
 
 任务书的输入字段和引用规则见[任务书格式](.fact/taskbook-format/)；各阶段承担的判断见[工作流](.fact/workflow/)。

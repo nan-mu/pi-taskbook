@@ -33,6 +33,7 @@ function verifiedDelivery(run: Run) {
   const revision = state.deliveryRevision;
   if (state.exit !== "ready" || !revision || !state.team?.handoff || state.team.review?.kind !== "approved" ||
       state.team.review.checkpoint.candidate.revision !== state.revision) throw new Error("PR 交付需要本地任务已完成并签署 Review。");
+  if (state.branch === "main") throw new PublicationChanged("PR 交付需要独立于 main 的任务分支。");
   workspace(root, task, state.base, state.branch);
   if (cleanRevision(run) !== revision || !matchesDeliveryHead(run, revision) ||
       readProjectMemory(root).head !== state.approvedProjectHead || readTopicFacts(root).head !== state.topicFactsHead) {
@@ -128,10 +129,6 @@ function factComments(run: Run, revision: string, action: PullRequestAction) {
   });
 }
 
-export function publicationHasComments(run: Run, action: PullRequestAction) {
-  return action === "comment" || Boolean(deliveryFactDiff(run));
-}
-
 export async function preparePublication(run: Run, action: PullRequestAction, client: HandoffGitHub): Promise<Publication> {
   const delivery = verifiedDelivery(run);
   const base = run.task.baseBranch ?? await defaultBranch(run);
@@ -142,13 +139,11 @@ export async function preparePublication(run: Run, action: PullRequestAction, cl
   const pulls = await client.pulls(delivery.branch);
   const target = matchingPull(pulls, delivery.repository, delivery.branch, base);
   const block = blockFor(run);
+  if (!createsPull(action) && !target) action = "create";
   if (createsPull(action) && pulls.some(pull => pull.state === "closed" && pull.body?.includes(block.start))) {
     throw new PublicationChanged("此任务已关联到已关闭或已合并的 PR。");
   }
-  if (createsPull(action) && target && !target.body?.includes(block.content)) {
-    throw new PublicationChanged("当前分支已有 PR。请选择更新说明或追加评论。");
-  }
-  if (!createsPull(action) && !target) throw new PublicationChanged("当前工作分支与任务书基线之间没有可更新的打开 PR。");
+  if (createsPull(action) && target && !target.body?.includes(block.content)) action = "update";
   const remoteHead = await remoteRevision(run, delivery.branch);
   if (remoteHead && remoteHead !== delivery.revision && !gitOk(run.root, "merge-base", "--is-ancestor", remoteHead, delivery.revision)) {
     throw new PublicationChanged("无法确认交付能够快进 origin 工作分支。请先核对或同步远端分支。");
@@ -164,34 +159,22 @@ export async function preparePublication(run: Run, action: PullRequestAction, cl
   return {...plan, action, pull, body};
 }
 
-export const publicationLabels: Record<PullRequestAction, string> = {create: "创建 PR", draft: "创建草稿 PR", update: "更新 PR 说明", comment: "追加 PR 评论"};
-
-export function publicationPreview(plan: Publication) {
-  const action = publicationLabels[plan.action];
-  const text = [plan.repository + (plan.pull ? " #" + plan.pull.number : ""), plan.branch + " → " + plan.base, plan.revision,
-    plan.remoteHead !== plan.revision ? "将先快进推送该交付提交到 origin 工作分支。" : "origin 已包含该交付提交。",
-    ...(createsPull(plan.action) && !plan.pull ? ["标题 " + plan.title] : []),
-    ...(plan.body !== undefined && plan.body !== plan.pull?.body ? ["提交的 PR 说明\n" + plan.body] : []),
-    ...plan.comments.map(body => "提交的 PR 评论\n" + body)].join("\n\n");
-  return {title: action + " · " + plan.repository, text};
-}
-
 export async function publishDelivery(run: Run, plan: Publication, client: HandoffGitHub): Promise<PublicationReceipt> {
   const delivery = verifiedDelivery(run);
   if (plan.revision !== delivery.revision || plan.branch !== delivery.branch || plan.repository !== delivery.repository) {
-    throw new PublicationChanged("批准的 PR 目的地或交付版本已变化。");
+    throw new PublicationChanged("记录的 PR 目的地或交付版本已变化。");
   }
   const currentPull = async () => matchingPull(await client.pulls(plan.branch), plan.repository, plan.branch, plan.base);
   const pull = await currentPull();
   await verifyBase(run, plan.base);
   if (plan.pull ? pull?.number !== plan.pull.number : pull && pull.body !== plan.body) {
-    throw new PublicationChanged("预览后的 PR 目标发生变化。");
+    throw new PublicationChanged("准备发布后，PR 目标发生变化。");
   }
   if (plan.action === "update" && pull?.body !== plan.body && (pull?.body ?? "") !== plan.pull?.body) {
-    throw new PublicationChanged("预览后的 PR 说明发生变化。");
+    throw new PublicationChanged("准备发布后，PR 说明发生变化。");
   }
   const remote = await remoteRevision(run, plan.branch);
-  if (remote !== plan.revision && remote !== plan.remoteHead) throw new PublicationChanged("批准期间 origin 工作分支发生变化。");
+  if (remote !== plan.revision && remote !== plan.remoteHead) throw new PublicationChanged("发布期间 origin 工作分支发生变化。");
   verifiedDelivery(run);
   if (remote !== plan.revision) {
     await remoteGit(run, ["-c", "remote.origin.mirror=false", "push", "--porcelain", "--no-follow-tags", "--recurse-submodules=no",
@@ -206,7 +189,7 @@ export async function publishDelivery(run: Run, plan: Publication, client: Hando
     throw new Error("等待 Magpie 确认 PR 当前提交后重试。");
   }
   if (plan.action === "update" && current.body !== plan.body) {
-    if ((current.body ?? "") !== plan.pull?.body) throw new PublicationChanged("预览后的 PR 说明发生变化。");
+    if ((current.body ?? "") !== plan.pull?.body) throw new PublicationChanged("准备发布后，PR 说明发生变化。");
     await client.update(current.number, plan.body);
     const updated = await currentPull();
     if (updated?.number !== current.number || updated.body !== plan.body) throw new Error("Magpie 尚未确认 PR 说明。");

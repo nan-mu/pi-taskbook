@@ -10,7 +10,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { git, readTaskbook, workspace, type Taskbook } from "./src/taskbook/document.ts";
 import { nextPhase, stages, titles, type Phase } from "./src/workflow/transitions.ts";
 import { prepareTaskLaunch, readEntryArgument, readTaskbookInput } from "./src/taskbook/entry.ts";
-import { hasT3Context, launchT3Thread, readT3Workspace } from "./src/integrations/t3.ts";
+import { handoffT3Thread, hasT3Context, launchT3Thread, readT3Workspace } from "./src/integrations/t3.ts";
 import { loadUpstreamInputs, pinUpstreamInputs } from "./src/methods/upstream.ts";
 
 import { validateConflict, parseFactDecision, taskMemory } from "./src/workflow/task-context.ts";
@@ -30,12 +30,12 @@ import { readFileSync } from "node:fs";
 import { resumeTeam, runTeam, selectedPlaybook } from "./src/workflow/team.ts";
 import { placementParameter, registerReviewedFacts, reviewedDrafts, validatePlacements } from "./src/workflow/register-facts.ts";
 import { githubHandoff, githubHandoffTools, pullRequestActions, type PullRequestAction } from "./src/integrations/github-handoff.ts";
-import { deliveryFactDiff, preparePublication, publicationHasComments, publicationLabels, publicationPreview, publishDelivery, PublicationChanged } from "./src/workflow/publication.ts";
+import { deliveryFactDiff, preparePublication, publishDelivery, PublicationChanged } from "./src/workflow/publication.ts";
 
 const reportTool = "taskbook_report";
 const queryFactsTool = "taskbook_query_facts";
 const designTools = ["taskbook_consult", "taskbook_probe"];
-const directDelegation = (name: string) => /^(?:agent|subagents?|subagentworkflow|get_subagent_result|steer_subagent|workflow|delegate_task|create_threads|t3_thread_launch)(?:_[\da-f]+)?$/i.test(name.split("__").at(-1) ?? name);
+const directDelegation = (name: string) => /^(?:agent|subagents?|subagentworkflow|get_subagent_result|steer_subagent|workflow|delegate_task|create_threads|t3_thread_launch|t3_worktree_handoff)(?:_[\da-f]+)?$/i.test(name.split("__").at(-1) ?? name);
 const kickoffType = "pi-taskbook-stage";
 const t3Continuation = "pi-taskbook-t3-continuation";
 const taskbookPrefix = "/taskbook ";
@@ -82,7 +82,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   let reported = false;
   let launching = false;
   let relocated = false;
-  let publishing: {token: string; run: Run; suggested?: PullRequestAction; previousTools: string[];
+  let publishing: {token: string; run: Run; action: PullRequestAction; previousTools: string[];
     nestedTools: Set<string>; active: boolean; caller?: string} | undefined;
   let phaseInput: string | undefined;
   let workerSnapshot: ProjectSnapshot | undefined;
@@ -446,7 +446,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     }
   }
 
-  function queuePublication(ctx: ExtensionContext, active: Run, suggested?: PullRequestAction) {
+  function queuePublication(ctx: ExtensionContext, active: Run, action: PullRequestAction) {
     const catalogue = githubHandoffTools(pi);
     if (!catalogue.has("list_pull_requests") || !catalogue.has("pull_request_read")) {
       ctx.ui.notify("本地交付已保存。PR 交付等待 Magpie GitHub MCP 的 list_pull_requests 和 pull_request_read。", "warning");
@@ -457,32 +457,26 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       return;
     }
     const token = randomUUID();
-    publishing = {token, run: active, suggested, previousTools: pi.getActiveTools(), active: false,
+    publishing = {token, run: active, action, previousTools: pi.getActiveTools(), active: false,
       nestedTools: new Set([...catalogue.values()].map(tool => tool.name))};
-    pi.setActiveTools([publishTool]);
+    pi.setActiveTools([publishTool, ...[...catalogue.values()].filter(tool => tool.exposure === "direct").map(tool => tool.name)]);
     pi.sendMessage({customType: publishKickoff, details: token, display: false,
-      content: "Call taskbook_publish_pr once with attempt " + token + ". The plugin handles approval. Determine which revision and action succeeded from the receipt returned by this call, then end the turn."},
+      content: "Call taskbook_publish_pr once with attempt " + token + ". Determine which revision and action succeeded from the receipt returned by this call, then end the turn."},
       {triggerTurn: true});
   }
 
-  async function handoffToGitHub(ctx: ExtensionToolContext, active: Run, suggested?: PullRequestAction, signal?: AbortSignal) {
+  async function handoffToGitHub(ctx: ExtensionToolContext, active: Run, selected: PullRequestAction, signal?: AbortSignal) {
     try {
       let plan = active.state.publication;
       if (!plan) {
-        if (!ctx.hasUI) throw new Error("请在支持审批对话的 Pi 会话发布 PR。");
-        const options = pullRequestActions.map(action => publicationLabels[action]);
-        const selected = suggested ?? pullRequestActions[options.indexOf(await ctx.ui.select("选择 Taskbook PR 操作", options) ?? "")];
-        if (!selected) return;
         const receipt = active.state.publications?.find(item => item.action === selected && item.revision === active.state.deliveryRevision);
         if (receipt) {
           ctx.ui.notify("此交付的 PR 操作已完成 · " + receipt.pullRequest, "info");
-          return;
+          return receipt.pullRequest;
         }
         const client = githubHandoff(pi, ctx, active.task.repository.toLowerCase(),
-          {action: selected, comments: publicationHasComments(active, selected), signal});
+          {signal});
         const proposal = await preparePublication(active, selected, client);
-        const {title, text} = publicationPreview(proposal);
-        if (!await ctx.ui.confirm(title, text)) return;
         signal?.throwIfAborted();
         checkpoint(active, {...active.state, publication: proposal});
         plan = proposal;
@@ -492,30 +486,34 @@ export default function taskbookExtension(pi: ExtensionAPI) {
         {action: plan.action, comments: plan.comments.length > 0, signal});
       const receipt = await publishDelivery(active, plan, client);
       checkpoint(active, {...active.state, publication: undefined, publications: [...(active.state.publications ?? []), receipt]});
-      ctx.ui.notify("PR 已登记 · " + [receipt.pullRequest, ...receipt.comments].join("\n"), "info");
+      const summary = "PR 已登记 · " + [receipt.pullRequest, ...receipt.comments].join("\n");
+      ctx.ui.notify(summary, "info");
+      return summary;
     } catch (error) {
       if (error instanceof PublicationChanged && active.state.publication) {
         checkpoint(active, {...active.state, publication: undefined});
       }
       const reason = error instanceof Error ? error.message : String(error);
-      ctx.ui.notify("本地交付已保存。PR 交付等待处理 · " + reason + "\n可重交原任务书重试 · /taskbook " + JSON.stringify(active.task.sourcePath), "warning");
+      const summary = "本地交付已保存。PR 交付等待处理 · " + reason + "\n可重交原任务书重试 · /taskbook " + JSON.stringify(active.task.sourcePath);
+      ctx.ui.notify(summary, "warning");
+      return summary;
     }
   }
 
   pi.registerTool({
-    name: publishTool, label: "发布经批准的 PR 交付", description: "Continue the current Taskbook publication request.",
+    name: publishTool, label: "发布已签署的交付 PR", description: "Continue the current Taskbook publication request.",
     defaultActive: false, executionMode: "sequential",
     parameters: Type.Object({attempt: Type.String()}, {additionalProperties: false}),
     async execute(toolCallId, {attempt: token}, signal, _onUpdate, ctx) {
       const pending = publishing;
       if (!pending?.active || pending.caller || token !== pending.token) throw new Error("当前没有匹配的 PR 交付请求。");
       pending.caller = toolCallId;
-      await handoffToGitHub(ctx, pending.run, pending.suggested, signal);
-      return {content: [{type: "text", text: "交付结果已在 Pi 中报告。"}], details: {}, terminate: true};
+      const summary = await handoffToGitHub(ctx, pending.run, pending.action, signal);
+      return {content: [{type: "text", text: summary}], details: {}, terminate: true};
     },
   });
 
-  async function announce(ctx: ExtensionContext, active: Run, reopened = false) {
+  async function announce(ctx: ExtensionContext, active: Run) {
     const labels = { ready: "可交接", blocked: "有阻塞", cancelled: "已取消" };
     const state = active.state;
     const lines = [labels[state.exit!] + " · " + active.task.id];
@@ -552,11 +550,11 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     if (state.exit === "ready") {
       const team = active.state.team;
       publishAction = active.state.publication?.action;
-      if (!publishAction && team?.pullRequest && (!team.publicationOffered || reopened) &&
-          !state.publications?.some(receipt => receipt.action === team.pullRequest && receipt.revision === state.deliveryRevision)) {
-        checkpoint(active, {...active.state, team: {...team, publicationOffered: true}});
-        publishAction = team.pullRequest;
+      if (!publishAction && team?.handoff &&
+          !active.state.publications?.some(receipt => receipt.revision === active.state.deliveryRevision)) {
+        publishAction = team.pullRequest ?? "create";
       }
+      if (publishAction) lines[0] = "本地已签署，等待发布 PR · " + active.task.id;
       for (const receipt of active.state.publications ?? []) lines.push("PR · " + receipt.pullRequest, ...receipt.comments);
     }
     if (state.revision) lines.splice(1, 0, state.exit === "ready" ? "交付提交 " + (active.state.deliveryRevision ?? state.revision) : "候审提交 " + state.revision);
@@ -578,9 +576,13 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     return !ctx.isIdle() || attempt || launching || publishing || setup.isChecking() || reviewing || coordinating || syncing;
   }
 
-  async function launchTaskbook(ctx: ExtensionContext, task: Taskbook) {
+  function preflightT3Task(task: Taskbook) {
     selectedPlaybook(task.markdown);
     loadUpstreamInputs(pinUpstreamInputs(), stages[0], task.type);
+  }
+
+  async function launchTaskbook(ctx: ExtensionContext, task: Taskbook) {
+    preflightT3Task(task);
     const prepared = prepareTaskLaunch(ctx.cwd, task);
     try {
       const reply = await launchT3Thread({
@@ -602,6 +604,27 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     }
   }
 
+  async function handoffTaskbook(ctx: ExtensionContext, task: Taskbook) {
+    if (!ctx.sessionManager.getSessionFile()) throw new Error("请在有持久会话记录的 Pi thread 中启动任务。");
+    preflightT3Task(task);
+    const saved = savedT3Continuation(ctx, task.digest);
+    const launch = saved ?? prepareTaskLaunch(ctx.cwd, task);
+    if (!saved) pi.appendEntry(t3Continuation, launch.message);
+    const reply = await handoffT3Thread({root: git(ctx.cwd, "rev-parse", "--show-toplevel"), ...launch});
+    if (reply.kind === "bound") return reply.root;
+
+    setup.close(ctx);
+    const {continuation, setupScript} = reply;
+    const lines = ["T3 工作区 · " + reply.worktreePath];
+    if (continuation.status === "scheduled") lines.push("任务将在原线程继续。");
+    else {
+      if (continuation.status === "failed") lines.push(continuation.detail);
+      lines.push("可在原线程继续 · " + taskbookPrefix + JSON.stringify(task.sourcePath));
+    }
+    if (setupScript.status === "failed") lines.push("工作区初始化脚本失败 · " + setupScript.detail);
+    ctx.ui.notify(lines.join("\n"), continuation.status !== "scheduled" || setupScript.status === "failed" ? "warning" : "info");
+  }
+
   async function enterTaskbook(args: string, ctx: ExtensionContext) {
     if (entryBusy(ctx)) return ctx.ui.notify("入口请求已退出：当前会话正在处理任务。", "warning");
     if (!args.trim()) return ctx.ui.notify("用法 /taskbook <任务书路径或 Markdown 正文>", "warning");
@@ -614,9 +637,13 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       if (needsT3Worktree && (input.prepared || run)) {
         throw new Error("当前 T3 线程需要已绑定的 linked worktree。");
       }
-      const cwd = binding?.root ?? ctx.cwd;
+      let cwd = binding?.root ?? ctx.cwd;
       const task = input.prepared ? readTaskbook(cwd, '"' + input.path + '"') : readTaskbookInput(cwd, input.path);
-      if (needsT3Worktree) return await launchTaskbook(ctx, task);
+      if (needsT3Worktree) {
+        const boundRoot = await handoffTaskbook(ctx, task);
+        if (!boundRoot) return;
+        cwd = boundRoot;
+      }
       if (run) {
         if (run.task.digest !== task.digest) return ctx.ui.notify("请先处理当前任务的待决事项。", "warning");
         return await startPhase(ctx);
@@ -625,7 +652,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       const prepared = input.prepared ?? savedT3Continuation(ctx, task.digest)?.prepared;
       const candidate = openRun({ctx, cwd, task, promptDigest: localPromptDigest, prepared});
       setup.close(ctx);
-      if (candidate.state.phase === "exit") return await announce(ctx, candidate, true);
+      if (candidate.state.phase === "exit") return await announce(ctx, candidate);
       initialModel ??= ctx.model;
       initialThinking ??= pi.getThinkingLevel();
       run = candidate;
@@ -638,7 +665,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     } finally { launching = false; }
   }
 
-  pi.registerCommand("taskbook", {description: "按任务书启动工作流，未绑定时由 T3 创建 worktree", handler: enterTaskbook});
+  pi.registerCommand("taskbook", {description: "按任务书启动工作流，未绑定时将当前 T3 线程迁到新 worktree", handler: enterTaskbook});
 
   pi.registerCommand("taskbook-new", {
     description: "按任务书指定的工作分支在新的 T3 worktree 开始任务",
@@ -769,7 +796,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     if (publishing) {
       if ((event.toolName === publishTool && publishing.active && !publishing.caller) ||
           (publishing.caller && event.parentToolCallId === publishing.caller && publishing.nestedTools.has(event.toolName))) return;
-      return {block: true, reason: "PR 交付使用插件的批准和 Magpie GitHub MCP。"};
+      return {block: true, reason: "PR 交付由插件通过 Magpie GitHub MCP 执行。"};
     }
     if (run && directDelegation(event.toolName)) {
       return {block: true, reason: "任务书的子代理由插件按项目配置派发。设计阶段可用 taskbook_consult。"};

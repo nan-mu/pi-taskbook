@@ -1,6 +1,8 @@
 id	fact	source	labels
-t3-worktree-ownership	/taskbook in an unbound T3 session and /taskbook-new call t3_thread_launch with workspaceStrategy.type=worktree. T3 creates and manages the worktree.	index.ts | src/integrations/t3.ts	t3
-t3-launch-retry-key	Taskbook derives the T3 clientRequestId from the taskbook digest. Retrying unchanged input sends the same request identifier.	index.ts	t3
+t3-worktree-ownership	/taskbook-new calls t3_thread_launch with workspaceStrategy.type=worktree. T3 creates and manages the worktree and starts a new thread.	index.ts | src/integrations/t3.ts	t3
+t3-launch-retry-key	/taskbook-new derives the T3 clientRequestId from the taskbook digest. Retrying unchanged input sends the same request identifier.	index.ts	t3
 t3-prepared-entry	A prepared launch rereads the taskbook and verifies its digest, pinned base, worktree when supplied, and expected branch before execution.	39c219e56dc3:src/taskbook/entry.ts	t3
 t3-destination-verification	When reading a T3 worktree binding, the plugin checks the local Git root and current branch against the binding.	39c219e56dc3:src/integrations/t3.ts#L154-L166	t3
 request-new-worktree	launchTaskbook validates launch parameters with prepareTaskLaunch before requesting the T3 worktree through launchT3Thread.	src/taskbook/entry.ts | index.ts | .fact/command/taskbook-new/branch.tsv#new-branch	worktree
+t3-current-thread-handoff	In an unbound T3 thread, /taskbook calls t3_worktree_handoff with the pinned base, requested branch, and prepared continuation. The original thread resumes in the new worktree.	index.ts | src/integrations/t3.ts | tests/workflow_rpc.py	t3,worktree
+t3-occupied-branch	The same-thread handoff checks for an existing worktree on the requested branch before asking T3 to create one.	src/integrations/t3.ts | tests/workflow_rpc.py	t3,worktree

@@ -305,6 +305,7 @@ def consult_turn(messages, body):
 
 requests = []
 launches = []
+handoffs = []
 cancel_started = threading.Event()
 cancel_end = threading.Event()
 interrupted = set()
@@ -484,13 +485,31 @@ class Provider(http.server.BaseHTTPRequestHandler):
                                                 "branch": {"type": "string"}, "startFromOrigin": {"type": "boolean"}}}
                             ]),
                         ]}
-                    }}}]}
+                    }}}, {"name": "t3_worktree_status", "inputSchema": {}},
+                         {"name": "t3_worktree_list", "inputSchema": {}},
+                         {"name": "t3_worktree_handoff", "inputSchema": {"properties": {
+                             name: {} for name in ("branch", "baseRef", "startFromOrigin", "continuationPrompt")}}}]}
                 elif body["method"] == "tools/call" and body["params"]["name"] == "t3_worktree_status":
                     attached = t3_attached.is_set()
                     result = {"structuredContent": {"attached": attached,
                               "worktreePath": str(worktree_root / "t3-managed") if attached else None,
-                              "branch": launches[0]["workspaceStrategy"]["branch"] if attached else None,
+                              "branch": handoffs[0]["branch"] if attached else None,
                               "projectWorkspaceRoot": str(main), "defaultStartFromOrigin": False}}
+                elif body["method"] == "tools/call" and body["params"]["name"] == "t3_worktree_list":
+                    args = body["params"]["arguments"]
+                    assert args["refKind"] == "local"
+                    refs = [{"name": "agent/fixture", "worktreePath": str(work)}] if args["query"] == "agent/fixture" else []
+                    result = {"structuredContent": {"refs": refs, "nextCursor": None}}
+                elif body["method"] == "tools/call" and body["params"]["name"] == "t3_worktree_handoff":
+                    args = body["params"]["arguments"]
+                    assert args["startFromOrigin"] is False
+                    created = worktree_root / "t3-managed"
+                    git(main, "worktree", "add", "-b", args["branch"], str(created), args["baseRef"])
+                    handoffs.append(args)
+                    result = {"structuredContent": {"worktreePath": str(created), "branch": args["branch"],
+                              "baseRef": args["baseRef"], "startedFromOrigin": False,
+                              "continuation": {"status": "scheduled", "delivery": "queued"},
+                              "setupScript": {"status": "no-script"}}}
                 else:
                     assert body["method"] == "tools/call"
                     assert self.headers["Mcp-Session-Id"] == "test-session"
@@ -939,75 +958,69 @@ Complete the shared stages.
         client.notify("T3 工具目录未确认")
         assert not tuple(worktree_root.iterdir()) and not launches
         t3_root_only.clear()
+        submit(client, taskfile(d, "occupied-branch"))
+        client.notify("任务分支已有 worktree")
+        assert not handoffs and not launches and not requests
         inline = new_path.read_text().strip()
         result = client.command(type="prompt", message="/taskbook \n" + inline)
         assert result["success"] and result["data"]["disposition"] == "handled", result
-        notice = client.notify("T3 已接收工作区请求", "T3 线程需要已绑定")
-        assert "T3 已接收工作区请求" in notice["message"], notice
-        assert len(launches) == 1 and not requests
-        strategy = launches[0]["workspaceStrategy"]
-        assert strategy["type"] == "worktree"
-        assert strategy["branch"] == "agent/requested-name"
-        assert strategy["baseRef"] == base
+        notice = client.notify("T3 工作区", "T3 已接收工作区请求", "退出（阻塞）")
+        assert "T3 工作区" in notice["message"] and "原线程" in notice["message"], notice
+        assert len(handoffs) == 1 and not launches and not requests
+        handoff = handoffs[0]
+        assert handoff["branch"] == "agent/requested-name"
+        assert handoff["baseRef"] == base
         created = worktree_root / "t3-managed"
         assert git(created, "rev-parse", "HEAD") == git(main, "rev-parse", "HEAD")
-        assert git(created, "branch", "--show-current") == strategy["branch"]
-        prepared = json.loads(base64.urlsafe_b64decode(launches[0]["message"].split()[-1] + "==="))
+        assert git(created, "branch", "--show-current") == handoff["branch"]
+        message = handoff["continuationPrompt"]
+        assert message.startswith("/taskbook --prepared ")
+        prepared = json.loads(base64.urlsafe_b64decode(message.split()[-1] + "==="))
         saved_input = Path(prepared["path"])
         assert saved_input.read_text() == inline
         assert saved_input.parent == main.resolve() / ".git/pi-taskbook/inputs"
         assert git(main, "status", "--porcelain") == ""
         assert not run_directory(main).exists()
-        result = client.command(type="prompt", message="/taskbook \n" + inline)
-        assert result["success"] and result["data"]["disposition"] == "handled", result
-        client.notify("T3 已接收工作区请求")
-        submit(client, saved_input, "taskbook-new")
-        client.notify("T3 已接收工作区请求")
-        assert len(launches) == 3 and launches[0] == launches[1] == launches[2] and not requests
-        result = client.command(type="prompt", message=launches[0]["message"])
+        result = client.command(type="prompt", message=message)
         assert result["success"] and result["data"]["disposition"] == "handled", result
         client.notify("T3 线程需要已绑定")
-        assert len(launches) == 3
-    finally:
-        client.close()
-
-    message = launches[0]["message"]
-    assert message.startswith("/taskbook --prepared ")
-    t3_attached.set()
-    child = Client(main, config, str(uuid.uuid4()), t3env)
-    try:
-        result = child.command(type="prompt", message=message)
+        assert len(handoffs) == 1 and not launches
+        t3_attached.set()
+        result = client.command(type="prompt", message=message)
         assert result["success"] and result["data"]["disposition"] == "handled"
-        child.notify("Which fixed input")
-        before = state_for(created, launches[0]["title"])
+        client.notify("Which fixed input")
+        task_id = "task-" + prepared["digest"][:12]
+        before = state_for(created, task_id)
+        assert before["session"] == session
         assert before["phase"] == "fact-check" and before["pendingQuestion"]
-        answer = child.command(type="prompt", message="Use input 7.")
+        answer = client.command(type="prompt", message="Use input 7.")
         assert answer["success"] and answer["data"]["disposition"] == "handled", answer
-        child.notify("Unclear scope.")
-        state = state_for(created, launches[0]["title"])
+        client.notify("Unclear scope.")
+        state = state_for(created, task_id)
         assert state["phase"] == "fact-management" and state["intakeConflicts"][0]["id"] == "F1"
         assert [r["phase"] for r in state["reports"]] == ["fact-check", "fact-check", "fact-management"], state
         assert state["reports"][1]["factChecks"][0]["origin"] == base + ":measure.py:4"
         assert not (created / ".fact").exists()
         if "--entry-only" not in sys.argv:
             # Give the pending fact a concrete destination and follow the prepared entry to delivery.
-            decision = child.command(type="prompt", message="F1 create .fact/measurement.tsv")
+            decision = client.command(type="prompt", message="F1 create .fact/measurement.tsv")
             assert decision["success"] and decision["data"]["disposition"] == "handled", decision
-            child.notify("可交接")
-            signed = state_for(created, launches[0]["title"])
+            client.notify("本地已签署，等待发布 PR")
+            signed = state_for(created, task_id)
             assert signed["exit"] == "ready"
             assert [item["phase"] for item in signed["reports"]][-5:] == ["design", "implement", "review", "fact-registration", "handoff"]
             assert (created / ".fact/measurement.tsv").read_text().count("currently diagnoses a missing measurement") == 1
             assert git(created, "status", "--porcelain") == ""
             assert git(created, "rev-parse", "HEAD") == signed["deliveryRevision"]
             assert "Taskbook-Registration" in git(created, "log", "-1", "--format=%B", signed["team"]["registered"]["revision"])
+            client.notify("PR 交付等待 Magpie GitHub MCP")
         if "--entry-only" in sys.argv or "--named-only" in sys.argv:
             assert errors.empty(), list(errors.queue)
-            print("Verified three commands, T3 worktree launch, and a user decision at intake." if "--entry-only" in sys.argv
-                  else "Verified the signed named-team workflow from T3 launch through fact registration and local handoff.")
+            print("Verified T3 worktree handoff and fact intake in the original Pi session." if "--entry-only" in sys.argv
+                  else "Verified the signed named-team workflow in the original Pi session after T3 worktree handoff.")
             sys.exit(0)
     finally:
-        child.close()
+        client.close()
         t3_attached.clear()
 
     legacy_data = json.loads(subprocess.check_output(["node", "--input-type=module", "-e", """

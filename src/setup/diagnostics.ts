@@ -262,13 +262,13 @@ export async function collectSetup(pi: ExtensionAPI, ctx: ExtensionContext) {
   const subagents = { installed, runtime, testedPackageVersions };
   const github = githubHandoffTools(pi);
   const pullRequestDelivery = {transport: "Magpie GitHub MCP", tools: [...github.keys()],
-    scope: "Session tool discovery. Handoff verifies repository access when it previews publication."};
+    scope: "Session tool discovery. Handoff verifies repository access when it prepares the pull request."};
   const mcp = inspectMcpCapabilities(pi, root && workflowDeclaration(root));
   const availability = {
     subagents: {builtinSdk: runtime.status, installedVersions: [...new Set(installed.flatMap(item => item.version ? [item.version] : []))],
       externalRpcResponded: runtime.externalRpcResponded, rpcVersion: runtime.legacyReviewTransport},
     t3: {sessionTools: t3SessionTools(pi), directTransport: t3.transport, reason: t3.reason,
-      taskbookNew: t3.worktree && Boolean(root)},
+      taskbookHandoff: t3.handoff && Boolean(root), taskbookNew: t3.worktree && Boolean(root)},
     github: {read: Object.entries(mcp.github.read).filter(([, value]) => value.status === "discovered").map(([name]) => name),
       t3Tools: t3ForgeSessionTools(pi), pullRequestDeliveryTools: pullRequestDelivery.tools, repositoryAccess: "not-tested"},
     magpieCatalogue: Object.hasOwn(mcp.magpie.byService, "magpie") ? "registered" : magpieCatalogue,
