@@ -1,6 +1,8 @@
-import { realpathSync } from "node:fs";
-import { isAbsolute } from "node:path";
-import { resolveBase, taskRepository, workspace, type Taskbook } from "./document.ts";
+import { randomUUID } from "node:crypto";
+import { realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
+import { privateDirectory } from "../workflow/run-paths.ts";
+import { git, parseTaskbook, readTaskbook, resolveBase, taskRepository, workspace, type Taskbook } from "./document.ts";
 
 export type PreparedEntry = { path: string; worktree?: string; digest: string; base: string; branch?: string };
 const preparedPrefix = "--prepared ";
@@ -19,6 +21,25 @@ export function readEntryArgument(argument: string): { path: string; prepared?: 
     branch: input.branch } };
 }
 
+export function readTaskbookInput(cwd: string, argument: string): Taskbook {
+  const markdown = argument.trim();
+  if (!markdown.includes("\n") || (markdown.startsWith('"') && markdown.endsWith('"'))) {
+    return readTaskbook(cwd, argument);
+  }
+  const task = parseTaskbook(markdown);
+  const common = git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir");
+  const directory = privateDirectory(common, "pi-taskbook", "inputs");
+  const sourcePath = join(directory, task.digest + ".md");
+  const temporary = sourcePath + "." + randomUUID();
+  try {
+    writeFileSync(temporary, markdown, { flag: "wx", mode: 0o600 });
+    renameSync(temporary, sourcePath);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+  return { ...task, sourcePath };
+}
+
 export function verifyPreparedEntry(cwd: string, task: Taskbook, prepared?: PreparedEntry) {
   if (!prepared) return workspace(cwd, task);
   if (prepared.digest !== task.digest) throw new Error("任务书或随附事实在创建 worktree 后发生变化。");
@@ -32,7 +53,7 @@ export function verifyPreparedEntry(cwd: string, task: Taskbook, prepared?: Prep
 
 export function prepareTaskLaunch(cwd: string, task: Taskbook) {
   const branch = task.branch;
-  if (!branch) throw new Error("/taskbook-new 要求任务书通过 Work branch 指定新分支。");
+  if (!branch) throw new Error("创建 T3 worktree 要求任务书通过 Work branch 指定新分支。");
   const project = taskRepository(cwd, task);
   const base = resolveBase(project, task, true);
   const prepared: PreparedEntry = { path: task.sourcePath, digest: task.digest, base, branch };

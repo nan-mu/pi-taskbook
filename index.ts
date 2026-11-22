@@ -7,9 +7,9 @@ import { methodTool, registerMethodTool } from "./src/methods/tool.ts";
 import type { ExtensionAPI, ExtensionContext, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { createHash, randomUUID } from "node:crypto";
-import { git, readTaskbook, workspace } from "./src/taskbook/document.ts";
+import { git, readTaskbook, workspace, type Taskbook } from "./src/taskbook/document.ts";
 import { nextPhase, stages, titles, type Phase } from "./src/workflow/transitions.ts";
-import { prepareTaskLaunch, readEntryArgument } from "./src/taskbook/entry.ts";
+import { prepareTaskLaunch, readEntryArgument, readTaskbookInput } from "./src/taskbook/entry.ts";
 import { hasT3Context, launchT3Thread, readT3Workspace } from "./src/integrations/t3.ts";
 import { loadUpstreamInputs, pinUpstreamInputs } from "./src/methods/upstream.ts";
 
@@ -578,10 +578,19 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     return !ctx.isIdle() || attempt || launching || publishing || setup.isChecking() || reviewing || coordinating || syncing;
   }
 
-  async function taskbookCwd(ctx: ExtensionContext) {
-    const binding = await readT3Workspace(ctx.cwd);
-    if (!binding && hasT3Context()) throw new Error("当前 T3 线程需要已绑定的 linked worktree。");
-    return binding?.root ?? ctx.cwd;
+  async function launchTaskbook(ctx: ExtensionContext, task: Taskbook) {
+    selectedPlaybook(task.markdown);
+    loadUpstreamInputs(pinUpstreamInputs(), stages[0], task.type);
+    const prepared = prepareTaskLaunch(ctx.cwd, task);
+    try {
+      const reply = await launchT3Thread({
+        title: task.id, branch: prepared.branch, base: prepared.base, message: prepared.message,
+        clientRequestId: "pi-taskbook-" + task.digest,
+      });
+      ctx.ui.notify(`T3 已接收工作区请求 · ${reply.link ?? reply.threadId}`, "info");
+    } catch (error) {
+      await exitInvocation(ctx, String(error) + "\n如启动回执丢失，可重交同一任务书沿用请求标识。");
+    }
   }
 
   function savedT3Continuation(ctx: ExtensionContext, digest: string) {
@@ -595,13 +604,19 @@ export default function taskbookExtension(pi: ExtensionAPI) {
 
   async function enterTaskbook(args: string, ctx: ExtensionContext) {
     if (entryBusy(ctx)) return ctx.ui.notify("入口请求已退出：当前会话正在处理任务。", "warning");
-    if (!args.trim()) return ctx.ui.notify("用法 /taskbook <任务书路径>", "warning");
+    if (!args.trim()) return ctx.ui.notify("用法 /taskbook <任务书路径或 Markdown 正文>", "warning");
     const previous = run;
     launching = true;
     try {
-      const cwd = await taskbookCwd(ctx);
       const input = readEntryArgument(args.trim());
-      const task = readTaskbook(cwd, input.prepared ? '"' + input.path + '"' : input.path);
+      const binding = await readT3Workspace(ctx.cwd);
+      const needsT3Worktree = !binding && hasT3Context();
+      if (needsT3Worktree && (input.prepared || run)) {
+        throw new Error("当前 T3 线程需要已绑定的 linked worktree。");
+      }
+      const cwd = binding?.root ?? ctx.cwd;
+      const task = input.prepared ? readTaskbook(cwd, '"' + input.path + '"') : readTaskbookInput(cwd, input.path);
+      if (needsT3Worktree) return await launchTaskbook(ctx, task);
       if (run) {
         if (run.task.digest !== task.digest) return ctx.ui.notify("请先处理当前任务的待决事项。", "warning");
         return await startPhase(ctx);
@@ -623,29 +638,18 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     } finally { launching = false; }
   }
 
-  pi.registerCommand("taskbook", {description: "在当前 linked worktree 按任务书启动工作流", handler: enterTaskbook});
+  pi.registerCommand("taskbook", {description: "按任务书启动工作流，未绑定时由 T3 创建 worktree", handler: enterTaskbook});
 
   pi.registerCommand("taskbook-new", {
     description: "按任务书指定的工作分支在新的 T3 worktree 开始任务",
     async handler(args, ctx) {
       if (run || entryBusy(ctx)) return ctx.ui.notify("入口请求已退出：当前会话正在处理任务。", "warning");
-      if (!args.trim()) return exitInvocation(ctx, "用法 /taskbook-new <任务书路径>");
+      if (!args.trim()) return exitInvocation(ctx, "用法 /taskbook-new <任务书路径或 Markdown 正文>");
       launching = true;
-      let requested = false;
       try {
-        const task = readTaskbook(ctx.cwd, args);
-        selectedPlaybook(task.markdown);
-        loadUpstreamInputs(pinUpstreamInputs(), stages[0], task.type);
-        const prepared = prepareTaskLaunch(ctx.cwd, task);
-        requested = true;
-        const reply = await launchT3Thread({
-          title: task.id, branch: prepared.branch, base: prepared.base, message: prepared.message,
-          clientRequestId: "pi-taskbook-" + task.digest,
-        });
-        ctx.ui.notify(`T3 已接收工作区请求 · ${reply.link ?? reply.threadId}`, "info");
+        await launchTaskbook(ctx, readTaskbookInput(ctx.cwd, args));
       } catch (error) {
-        const recovery = requested ? "\n如启动回执丢失，可重交同一任务书沿用请求标识。" : "";
-        await exitInvocation(ctx, String(error) + recovery);
+        await exitInvocation(ctx, String(error));
       } finally {
         launching = false;
       }

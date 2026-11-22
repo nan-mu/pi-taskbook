@@ -1,2 +1,2 @@
 id	fact	source	labels
-new-branch	The taskbook must supply Work branch for /taskbook-new. A missing branch stops the command before a worktree is requested.	Maintainer decision: required work branch for new tasks | src/taskbook/entry.ts | .fact/plugin/worktree/launch.tsv#request-new-worktree	
+new-branch	The taskbook must supply Work branch when requesting a new T3 worktree. A missing branch stops the command before a worktree is requested.	src/taskbook/entry.ts | .fact/plugin/worktree/launch.tsv#request-new-worktree	worktree

@@ -149,7 +149,7 @@ export async function readT3Workspace(cwd: string) {
 
 export async function inspectT3() {
   const gate = {tool: launchTool, worktree: false};
-  const impact = "/taskbook-new 通过 T3 为任务创建指定分支的工作树。已有 linked worktree 时使用 /taskbook。";
+  const impact = "/taskbook 在未绑定的 T3 会话中按任务书创建工作树。/taskbook-new 可显式请求创建工作树。";
   if (!process.env.T3_MCP_URL || !process.env.T3_MCP_BEARER_TOKEN) {
     return { ...gate, status: "missing", transport: "missing",
       reason: "当前 Pi 会话缺少 T3 注入的 MCP 上下文。", impact };

@@ -32,7 +32,10 @@ function document(path: string) {
 export function readTaskbook(cwd: string, argument: string): Taskbook {
   const input = argument.trim();
   const path = realpathSync(resolve(cwd, input.startsWith('"') && input.endsWith('"') ? input.slice(1, -1) : input));
-  const markdown = document(path);
+  return { ...parseTaskbook(document(path), path), sourcePath: path };
+}
+
+export function parseTaskbook(markdown: string, sourcePath?: string): Omit<Taskbook, "sourcePath"> {
   const goal = markdown.match(/^## Goal[ \t]*\r?\n([\s\S]*?)(?=^## |(?![\s\S]))/m);
   if (!goal || !/^## Delivery[ \t]*$/m.test(markdown.replace(/\r/g, ""))) {
     throw new Error("任务书需要 Goal 和 Delivery 标题。");
@@ -64,7 +67,8 @@ export function readTaskbook(cwd: string, argument: string): Taskbook {
   const factsPath = field("Facts");
   let facts: string | undefined;
   if (factsPath) {
-    const directory = dirname(path);
+    if (!sourcePath) throw new Error("粘贴的任务书请用 ## Facts 提供事实。引用附带文件时请提交任务书路径。");
+    const directory = dirname(sourcePath);
     const candidate = resolve(directory, factsPath);
     if (isAbsolute(factsPath) || !inside(candidate, directory)) throw new Error("Facts 必须指向任务书目录内的相对路径。");
     const factFile = realpathSync(candidate);
@@ -72,8 +76,7 @@ export function readTaskbook(cwd: string, argument: string): Taskbook {
     facts = document(factFile);
   }
   const digest = createHash("sha256").update(JSON.stringify([markdown, facts])).digest("hex");
-  return { id: id || "task-" + digest.slice(0, 12), repository, branch, baseBranch, baseCommit, type, markdown, facts,
-    digest, sourcePath: path };
+  return { id: id || "task-" + digest.slice(0, 12), repository, branch, baseBranch, baseCommit, type, markdown, facts, digest };
 }
 
 export function git(cwd: string, ...args: string[]) {
