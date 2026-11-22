@@ -14,11 +14,12 @@ const independentPass = object({ kind: Type.Literal("pass"), ...support, evidenc
 const judgment = Type.Union([independentPass, changes]);
 const comparison = Type.Union([pass, changes,
   object({ kind: Type.Literal("dispute"), ...support, findings: Type.Array(finding, { minItems: 1 }) })]);
-const lead = Type.Union([
-  object({ kind: Type.Literal("approve"), summary: text }),
-  object({ kind: Type.Literal("rework"), summary: text, selected: Type.Optional(Type.Array(object({ issue: text, detail: text }), { minItems: 1 })) }),
-  object({ kind: Type.Literal("ask-user"), summary: text, question: text }),
-]);
+const approve = object({ kind: Type.Literal("approve"), summary: text });
+const selectedFindings = Type.Array(object({ issue: text, detail: text }), { minItems: 1 });
+const rework = object({ kind: Type.Literal("rework"), summary: text, selected: Type.Optional(selectedFindings) });
+const selectiveRework = object({ kind: Type.Literal("rework"), summary: text, selected: selectedFindings });
+const askUser = object({ kind: Type.Literal("ask-user"), summary: text, question: text });
+const summaryShape = Type.Object({ kind: text, summary: text });
 
 export type ReviewFinding = Static<typeof finding>;
 export type ReviewedFact = Static<typeof factDecision>;
@@ -88,11 +89,19 @@ function materials(stage: Stage, progress: Progress, designer: Designer) {
   }
 }
 
+function leadSchema(stage: Lead) {
+  const {basis, protectedFindings, userAnswer} = stage;
+  if (!userAnswer && (basis.kind === "unresolved" || protectedFindings.length)) return askUser;
+  if (basis.kind === "changes") return Type.Union([rework, askUser]);
+  if (basis.kind === "unresolved") return Type.Union([selectiveRework, askUser]);
+  return protectedFindings.length ? Type.Union([approve, selectiveRework, askUser]) : Type.Union([approve, askUser]);
+}
+
 function schema(stage: Stage) {
   switch (stage.work) {
     case "initial-first": case "initial-rework": case "cross-first": case "cross-repeat": return judgment;
     case "compare": case "respond": case "reconcile": return comparison;
-    case "lead": return lead;
+    case "lead": return leadSchema(stage);
   }
 }
 
@@ -106,6 +115,10 @@ export function reviewTurns(state: ReviewFlow) {
     id: turnId(progress, designer), designer, work: stage.work,
     context: structuredClone({ goals: progress.goals, ...materials(stage, progress, designer) }),
     prompt: `${prompt}\n\n${common}`, schema: schema(stage),
+    summarizeResult(result: unknown) {
+      if (Value.Check(askUser, result)) return result.kind + " · " + result.question;
+      if (Value.Check(summaryShape, result)) return result.kind + " · " + result.summary;
+    },
   }));
 }
 
@@ -200,13 +213,11 @@ export function settleReviewTurn(state: ReviewFlow, event: { id: string; settled
       return a && b ? placeDiscussions(progress, stage, { "member-a": a, "member-b": b }) : { ...state, stage: { ...stage, replies } };
     }
     case "lead": {
-      if (!Value.Check(lead, event.result)) throw new Error("Invalid Lead Designer Review result.");
+      if (!Value.Check(leadSchema(stage), event.result)) throw new Error("Choose a Lead decision offered for the current Review evidence.");
       const result = event.result;
       const { basis, protectedFindings } = stage;
-      const mustAsk = !stage.userAnswer && (basis.kind === "unresolved" || protectedFindings.length > 0);
       if (result.kind === "ask-user") return { kind: "needs-user", progress, stage, summary: result.summary, question: result.question,
         findings: uniqueFindings([...(basis.kind === "pass" ? [] : basis.findings), ...protectedFindings]) };
-      if (mustAsk) throw new Error("The Lead Designer must ask the user about unresolved or protected facts.");
       if (result.kind === "approve") {
         if (basis.kind !== "pass") throw new Error("Review approval needs both members to agree on this candidate.");
         return { kind: "approved", progress, summary: result.summary, draftFacts: basis.draftFacts };

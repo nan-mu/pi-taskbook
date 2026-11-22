@@ -375,22 +375,28 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
     const turns = reviewTurns(review);
     const drafts = fetchDrafts(team).map(draft => draft.id);
     const facts = new Set(context.facts.map(fact => fact.id));
-    status("Review · " + turns.map(turn => turn.designer + "/" + turn.work).join(", "));
-    await settledBatch(turns, turn => dispatch(turn.designer, {...turn, context: {
-      ...turn.context, delivery: context.delivery, userAnswers: state.userAnswers, taskFactLabel: taskFactLabel(run.task),
-    }}, revision, {
-      review: true, evidence: true,
-      validate: (result, observations, lookedUp) => validateReviewSubmission(turn.work, result, {observations, lookedUp, drafts, facts}),
-    }), (turn, reply) => {
-      assertCandidate(run, revision);
-      const result = readReviewSubmission(reply.result);
+    function reviewResult(input: unknown) {
+      const result = readReviewSubmission(structuredClone(input));
       for (const finding of result.findings ?? []) {
         const item = context.facts.find(fact => fact.topicFact && (fact.topicFact.id === finding.factId ||
           fact.topicFact.path + "#" + fact.topicFact.id === finding.factId));
         if (item) finding.factId = item.id;
       }
+      return result;
+    }
+    status("Review · " + turns.map(turn => turn.designer + "/" + turn.work).join(", "));
+    await settledBatch(turns, turn => dispatch(turn.designer, {...turn, context: {
+      ...turn.context, delivery: context.delivery, userAnswers: state.userAnswers, taskFactLabel: taskFactLabel(run.task),
+    }}, revision, {
+      review: true, evidence: true,
+      validate: (result, observations, lookedUp) => {
+        validateReviewSubmission(turn.work, result, {observations, lookedUp, drafts, facts});
+        settleReviewTurn(review, {id: turn.id, settled: true, result: reviewResult(result)});
+      },
+    }), (turn, reply) => {
+      assertCandidate(run, revision);
       const current = run.state.team!;
-      const next = settleReviewTurn(current.review!, {id: turn.id, settled: true, result});
+      const next = settleReviewTurn(current.review!, {id: turn.id, settled: true, result: reviewResult(reply.result)});
       if (next !== current.review) updateTeam({...current, review: next, receipts: [...(current.receipts ?? []), reply.receipt]});
     });
   }
