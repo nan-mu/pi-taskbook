@@ -1,6 +1,5 @@
 id	fact	source	labels
-design-draft-turn	Each designer drafts from the same taskbook, baseline, and fact snapshot without seeing the other designers’ drafts.	39c219e56dc3:src/workflow/designer/v0.1.ts	prompts
-design-compare-turn	In Compare, each Designer reads both frozen peer drafts and returns separate lists of proposed Goal or Fact changes addressed to their authors.	39c219e56dc3:src/workflow/designer/v0.1.ts	prompts
-design-compare-barrier	The plugin collects all three Compare results before delivering any change requests to draft authors.	39c219e56dc3:src/workflow/designer/v0.1.ts	
-design-respond-turn	In Respond, each Designer accepts or counters every request on its draft by issue and draft version.	39c219e56dc3:src/workflow/designer/v0.1.ts	prompts
-design-reconcile-turn	In Reconcile, the two peers review the author's counterproposal. Two accepts resolve it for Synthesize. Only issues with a new counter return to Respond.	src/workflow/designer/v0.1.ts | prompts/designer/0.1/reconcile.md	prompts
+design-draft-turn	The Lead drafts one executable plan from the taskbook and the Fact Check findings.	src/workflow/designer/v0.3.ts | prompts/designer/0.3/draft.md	design,prompts
+design-review-barrier	The two members independently review the same candidate. The plugin collects both results before routing to Revise or Signoff.	src/workflow/designer/v0.3.ts | src/workflow/team.ts	design
+design-finding	A member finding identifies an affected Goal, Delivery item or step, a concrete counterexample, its evidence, and a correction. An approval identifies the reviewed version.	src/workflow/designer/v0.3.ts | prompts/designer/0.3/confirm.md	design,review
+design-revision	The Lead addresses each finding individually in a revision or rebuttal. Both members review the resulting candidate before signoff.	src/workflow/designer/v0.3.ts | prompts/designer/0.3/revise.md	design,prompts

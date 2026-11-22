@@ -1,3 +1,0 @@
-Review each counter with the original request and the current proposal. Respond once per issue. When a counterproposal recurs, compare what the two alternatives predict for one observation. Accept when the proposal resolves the concern. Otherwise give a specific counter with its reason, or report `needs-user` if the decision belongs to the user.
-
-When both reviewers accept the author's revised proposal, the issue is resolved for Synthesize.

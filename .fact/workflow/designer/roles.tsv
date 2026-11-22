@@ -3,5 +3,5 @@ term-design	The output of Design is an approved implementation taskbook.	39c219e
 term-designer	Designer is the subagent assigned to produce and assess design proposals.	39c219e56dc3:.fact/terms.tsv#L7	terms
 term-designer-group	A Designer Group consists of a lead Designer and two member Designers.	39c219e56dc3:.fact/terms.tsv#L8	terms
 term-lead-designer	Lead Designer owns the version of the design taskbook sent to Implementer and coordinates resolution of Review findings.	39c219e56dc3:.fact/terms.tsv#L9	terms
-term-member-designer	Member Designer contributes an independent design and reviews approved plans or implementation within the Designer Group.	39c219e56dc3:.fact/terms.tsv#L10	terms
-designer-lifecycle	The plugin retains Designer identities and sessions from Design through Review.	39c219e56dc3:src/workflow/team.ts	review
+term-member-designer	Member Designer independently checks the Lead’s candidate and reviews implementation within the Designer Group.	39c219e56dc3:.fact/terms.tsv#L10	terms
+designer-lifecycle	The plugin retains named roles and their model settings from Design through Review. Each Work Turn uses a fresh session.	src/workflow/team.ts | src/workflow/subagent.ts	review

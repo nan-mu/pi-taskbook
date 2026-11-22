@@ -15,7 +15,8 @@ import { git } from "../taskbook/document.ts";
 import { cleanRevision, type Run } from "./run.ts";
 
 export type Seat = "lead" | "member-a" | "member-b" | "implementer";
-export type WorkTurn = {id: string; work: string; prompt: string; context: unknown; schema: TSchema};
+export type WorkTurn = {id: string; work: string; prompt: string; context: unknown; schema: TSchema;
+  summarizeResult?: (result: unknown) => string | undefined};
 export type WorkerReceipt = {id: string; seat: Seat; work: string; session: string; model: string; thinking: RoleSelection["thinkingLevel"]};
 export type CommandReceipt = {turn: string; command: string; before: string; cleanBefore?: boolean; revision: string; clean: boolean; failed: boolean; output: string};
 export function commandSnapshot(run: Pick<Run, "root">) {
@@ -171,7 +172,9 @@ export function registerSubagentTool(pi: ExtensionAPI) {
       onUpdate?.(snapshot("正在处理 " + identity.task));
       try {
         work.result = await subagentTurn({...work.input, signal: workerSignal, activity: text => onUpdate?.(snapshot(text))});
-        return snapshot("已提交 " + identity.task + " 的结果", "stop");
+        const summary = turn.summarizeResult?.(work.result.result);
+        const heading = "已提交 " + identity.task + " 的结果";
+        return snapshot(summary ? heading + "\n" + summary.slice(0, 3000) : heading, "stop");
       } catch (error) {
         work.failure = {error};
         return workerSignal.aborted ? snapshot("子代理已中断", "aborted") : snapshot("子代理工作失败，见任务书退出原因", "error");

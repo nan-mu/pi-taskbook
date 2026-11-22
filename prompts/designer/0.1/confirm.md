@@ -1,3 +1,0 @@
-Check the candidate plan and its acceptance criteria against the taskbook and resolved decisions. On a revised candidate, start with `changesSincePrevious` and check those changes and their effects on related criteria. The candidate and recorded decisions are the evidence for applying an agreed change. Look up a specific observation or source passage only when it can resolve a concrete discrepancy.
-
-Submit `approved` with the exact `version` when the plan is ready to implement. Use `objected` for a remaining change that affects the delivered behavior, scope, a governing fact, or how an acceptance criterion can pass. Name the affected step or passage and the change required.

@@ -1,5 +1,5 @@
 id	fact	source	labels
-design-reconcile-stop	When reconciliation repeats an unresolved set of proposals, the Lead must refer the disagreement to the user.	39c219e56dc3:src/workflow/designer/v0.2.ts	
-design-consult-return	A Designer entering Consult saves the interrupted assignment; an accepted answer accompanies the resumed assignment.	39c219e56dc3:src/workflow/designer/v0.1.ts	prompts
-design-user-resume	Design records the user's answer and resumes the interrupted round for an escalation or returns to synthesis after a signoff question or repeated disagreement.	39c219e56dc3:src/workflow/designer/v0.2.ts	
-designer-lead-authority	Member designers refer questions outside their responsibility to the lead, who owns design and review sign-off.	39c219e56dc3:src/workflow/designer/v0.2.ts	review
+design-repeated-review	If the same unchanged candidate has already been reconsidered after objections and members still object, another unchanged response pauses for a user decision.	src/workflow/designer/v0.3.ts	design
+design-consult-return	Designers can choose Consult, How or Why and return to the interrupted Work State with the scoped findings.	src/workflow/designer/v0.3.ts | src/workflow/playbook.ts	design,prompts
+design-user-resume	Design adds the user answer to the current run and repeats the interrupted Lead Work State. A decision during signoff returns the plan to revision and independent confirmation.	src/workflow/designer/v0.3.ts	design
+designer-lead-authority	Members report protected fact conflicts to the Lead. The Lead asks the user to decide before proposing a revision.	src/workflow/designer/v0.3.ts | src/workflow/team.ts	design,review

@@ -11,7 +11,7 @@ import { inspectionTool, type Inspection } from "../review/reviewer.ts";
 import { git, workspace } from "../taskbook/document.ts";
 import { setRunState, cleanRevision, type Run } from "./run.ts";
 import { archiveDesign } from "./design-archive.ts";
-import { answerDesigner, designerTurns, settleDesignerTurn, startDesigner, type DesignerState } from "./designer/v0.2.ts";
+import { answerDesigner, designerTurns, settleDesignerTurn, startDesigner, type DesignerState } from "./designer/v0.3.ts";
 import { implementerTurn, playbooks, resumeImplementer, reworkImplementer, settleImplementerTurn, startImplementer,
   type ImplementerState, type Playbook } from "./implement/v0.1.ts";
 import { readRunContext } from "./phase-input.ts";
@@ -223,10 +223,12 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
     if (state.phase === "design") {
       if (!team.design) {
         const baseline = git(run.root, "rev-parse", "HEAD");
-        const observations = state.reports.slice(state.cycleStart ?? 0).findLast(r => r.phase === "fact-check" && r.outcome === "pass")?.factChecks ?? [];
+        const factCheck = state.reports.slice(state.cycleStart ?? 0).findLast(r => r.phase === "fact-check" && r.outcome === "pass");
+        const observations = factCheck?.factChecks ?? [];
         const userAnswers = state.userAnswers ?? [];
         const factsVersion = hash([state.topicFactsHead, state.approvedProjectHead, state.factView, context.facts, observations, userAnswers]);
-        const design = startDesigner({runId: id + ":design:" + (state.plan?.version ?? 0), baseline, factsVersion, observations, userAnswers,
+        const design = startDesigner({runId: id + ":design:" + (state.plan?.version ?? 0), baseline, factsVersion, observations, factSummary: factCheck?.summary,
+          userAnswers, previousPlanVersion: state.plan?.version,
           taskbook: run.task.markdown, facts: context.facts.map(fact => fact.id + " " + fact.text +
             (fact.userDecision ? " (User decision: " + JSON.stringify(fact.userDecision) + ")" : "")),
           targetIds: [...context.goals, ...context.delivery].map(item => item.id)});
@@ -240,12 +242,13 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
       }
       if (team.design.kind === "approved") {
         const {candidate, progress: designProgress} = team.design;
-        const plan = {...candidate.plan, version: (state.plan?.version ?? 0) + 1};
-        const authored = designProgress.drafts.reduce((all, entry) =>
-          addDrafts(all, entry.draft.facts.map(text => ({text, source: "Designer draft " + entry.version})), entry.designer, "draft"), fetchDrafts(team));
+        const {plan} = candidate;
+        const authored = addDrafts(fetchDrafts(team), candidate.draft.facts.map(text => ({text, source: "Signed design " + candidate.version})),
+          "lead", "draft");
         const drafts = designProgress.consultations.reduce((all, entry) =>
           addDrafts(all, entry.result.draftFacts, entry.designer, "consult"), authored);
-        const archiveRevision = archiveDesign(run.root, run.task, state.base, state.branch, plan, state.taskFacts!, candidate.draft);
+        const archiveRevision = archiveDesign(run.root, run.task, state.base, state.branch, plan, state.taskFacts!,
+          {...candidate.draft, version: candidate.version, review: designProgress.resolutions});
         const report = {phase: "design", outcome: "pass", summary: candidate.draft.goal, evidence: [candidate.version],
           plan, planVersion: plan.version} as const;
         updateTeam({...team, drafts, archiveRevision}, {phase: "implement", plan, reports: [...state.reports, {...report, evidence: [...report.evidence]}]});
