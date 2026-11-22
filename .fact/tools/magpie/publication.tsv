@@ -1,2 +1,2 @@
 id	fact	source	labels
-delivery-github-routing	Handoff pushes the signed task branch with Git and calls the session’s Magpie GitHub create_pull_request tool to open the PR. A missing tool or failed call leaves PR delivery pending.	src/integrations/github-handoff.ts | src/workflow/publication.ts | https://github.com/nan-mu/poteto-delivery/blob/d28745b358b2c87a195d32297068a88e1795fae2/SKILL.md	handoff
+delivery-github-routing	Handoff pushes the signed task branch with Git and uses the session's Magpie GitHub tool to open the PR. The publication tool declares its Magpie dependency to Pi so discovery can complete before the call. A missing tool or failed call leaves PR delivery pending.	index.ts | src/integrations/github-handoff.ts | src/workflow/publication.ts	handoff

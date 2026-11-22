@@ -377,7 +377,9 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
     }
     const turns = reviewTurns(review);
     status("Review · " + turns.map(turn => turn.designer + "/" + turn.work).join(", "));
-    await settledBatch(turns, turn => dispatch(turn.designer, {...turn, context: {...turn.context, taskFactLabel: taskFactLabel(run.task)}}, revision, {
+    await settledBatch(turns, turn => dispatch(turn.designer, {...turn, context: {
+      ...turn.context, delivery: context.delivery, userAnswers: state.userAnswers, taskFactLabel: taskFactLabel(run.task),
+    }}, revision, {
       review: true, cleanContext: turn.cleanContext || turn.work.startsWith("initial-"), evidence: true,
     }), (turn, reply) => {
       assertCandidate(run, revision);

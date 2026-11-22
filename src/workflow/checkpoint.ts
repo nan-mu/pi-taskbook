@@ -23,6 +23,7 @@ import type { Team } from "./team.ts";
 import type { Publication, PublicationReceipt } from "./publication.ts";
 
 const preScopedDesignPromptDigest = "c03e7859192581f3549ab123712cca28240f2d20689d544bb11a40f7272bb7b1";
+const preDeliveryReviewPromptDigest = "ae38d0f7c5aaff8886c412c8c6e5ece214f2dd7ece3672ef666345e93854fb10";
 
 export type RunObservation = { revision: string; toolName: string; toolCallId: string; input: unknown; isError: boolean; observed: string };
 export type Report = { planVersion?: number; plan?: ExecutionPlan; gap?: PlanGap; model?: string; phase: Phase; outcome: Outcome; summary: string; evidence: string[];
@@ -147,7 +148,7 @@ export function openRun({ ctx, cwd = ctx.cwd, task, promptDigest, prepared }: {
     save(path, state, task);
   }
   if (saved.version === 3 && state.phase !== "exit" && state.reviewPolicy === 2 && state.taskFacts !== undefined &&
-      state.promptDigest === preScopedDesignPromptDigest &&
+      (state.promptDigest === preScopedDesignPromptDigest || state.promptDigest === preDeliveryReviewPromptDigest) &&
       usesCurrentInputs(state.upstream)) {
     state.promptDigest = promptDigest;
     save(path, state, task);

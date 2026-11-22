@@ -84,7 +84,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   let launching = false;
   let relocated = false;
   let publishing: {token: string; run: Run; action: PullRequestAction; previousTools: string[];
-    nestedTools: Set<string>; active: boolean; caller?: string} | undefined;
+    active: boolean; caller?: string} | undefined;
   let phaseInput: string | undefined;
   let workerSnapshot: ProjectSnapshot | undefined;
   let intakeSnapshot: ReturnType<typeof readFactTables> | undefined;
@@ -494,17 +494,12 @@ export default function taskbookExtension(pi: ExtensionAPI) {
 
   function queuePublication(ctx: ExtensionContext, active: Run, action: PullRequestAction) {
     const catalogue = githubHandoffTools(pi);
-    if (!catalogue.has("list_pull_requests") || !catalogue.has("pull_request_read")) {
-      ctx.ui.notify("本地交付已保存。PR 交付等待 Magpie GitHub MCP 的 list_pull_requests 和 pull_request_read。", "warning");
-      return;
-    }
     if (!ctx.model) {
       ctx.ui.notify("请选择可用的 Pi 会话模型以继续 PR 交付。", "warning");
       return;
     }
     const token = randomUUID();
-    publishing = {token, run: active, action, previousTools: pi.getActiveTools(), active: false,
-      nestedTools: new Set([...catalogue.values()].map(tool => tool.name))};
+    publishing = {token, run: active, action, previousTools: pi.getActiveTools(), active: false};
     pi.setActiveTools([publishTool, ...[...catalogue.values()].filter(tool => tool.exposure === "direct").map(tool => tool.name)]);
     pi.sendMessage({customType: publishKickoff, details: token, display: false,
       content: "Call taskbook_publish_pr once with attempt " + token + ". Determine which revision and action succeeded from the receipt returned by this call, then end the turn."},
@@ -549,6 +544,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: publishTool, label: "发布已签署的交付 PR", description: "Continue the current Taskbook publication request.",
     defaultActive: false, executionMode: "sequential",
+    reachesTools: () => ["magpie"],
     parameters: Type.Object({attempt: Type.String()}, {additionalProperties: false}),
     async execute(toolCallId, {attempt: token}, signal, _onUpdate, ctx) {
       const pending = publishing;
@@ -868,7 +864,8 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   pi.on("tool_call", (event, ctx) => {
     if (publishing) {
       if ((event.toolName === publishTool && publishing.active && !publishing.caller) ||
-          (publishing.caller && event.parentToolCallId === publishing.caller && publishing.nestedTools.has(event.toolName))) return;
+          (publishing.caller && event.parentToolCallId === publishing.caller &&
+            [...githubHandoffTools(pi).values()].some(tool => tool.name === event.toolName))) return;
       return {block: true, reason: "PR 交付由插件通过 Magpie GitHub MCP 执行。"};
     }
     if (event.toolName === subagentTool && coordinating && event.parentToolCallId === coordinating.caller) return;
@@ -1012,7 +1009,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
         if (outcome === "blocked") {
           checkpoint(active, {...active.state, pendingQuestion: {question: summary}, reports: [...active.state.reports, report]});
           reported = true;
-          return {content: [{type:"text", text:"记录已保存，等待用户裁决。"}], details: {}};
+          return {content: [{type:"text", text:"记录已保存，等待用户裁决。"}], details: {}, terminate: true};
         }
         const next = {...team, handoff: summary, pullRequest: params.pullRequest};
         checkpoint(active, {...active.state, team: next, reports: [...active.state.reports, report]});
@@ -1020,7 +1017,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
           syncCaller = {id: toolCallId, path: active.path, revision: active.state.revision, transport: magpieSessionTransport(pi, ctx)};
         }
         reported = true;
-        return {content: [{type:"text", text:"记录已保存，请结束当前轮次。"}], details: {}};
+        return {content: [{type:"text", text:"交付说明已保存。"}], details: {}, terminate: true};
       }
       if (phase === "fact-management") {
         if (!intakeSnapshot || !workerSnapshot || readProjectMemory(run.root).head !== workerSnapshot.head ||
