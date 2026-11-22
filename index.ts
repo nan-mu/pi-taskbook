@@ -4,7 +4,7 @@ import { checkpoint, cleanRevision, matchesDeliveryHead, openRun, type Report, t
 import { magpieSessionTransport, readSourceProjectFacts, recallMagpieMemory, syncMagpieMemory, type MagpieSyncResult } from "./src/integrations/magpie-memory.ts";
 import { readStageMethod, workerMethodStages } from "./src/methods/catalog.ts";
 import { methodTool, registerMethodTool } from "./src/methods/tool.ts";
-import type { ExtensionAPI, ExtensionContext, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { createHash, randomUUID } from "node:crypto";
 import { git, readTaskbook, workspace, type Taskbook } from "./src/taskbook/document.ts";
@@ -33,6 +33,7 @@ import { githubHandoff, githubHandoffTools, pullRequestActions, type PullRequest
 import { deliveryFactDiff, preparePublication, publishDelivery, PublicationChanged } from "./src/workflow/publication.ts";
 
 const reportTool = "taskbook_report";
+const teamTool = "taskbook_run_team";
 const queryFactsTool = "taskbook_query_facts";
 const designTools = ["taskbook_consult", "taskbook_probe"];
 const directDelegation = (name: string) => /^(?:agent|subagents?|subagentworkflow|get_subagent_result|steer_subagent|workflow|delegate_task|create_threads|t3_thread_launch|t3_worktree_handoff)(?:_[\da-f]+)?$/i.test(name.split("__").at(-1) ?? name);
@@ -123,7 +124,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   });
 
   function toggleReportTool(enabled: boolean) {
-    const tools = pi.getActiveTools().filter(name => name !== reportTool && name !== methodTool && !designTools.includes(name));
+    const tools = pi.getActiveTools().filter(name => name !== reportTool && name !== teamTool && name !== methodTool && !designTools.includes(name));
     if (!run) {
       tools.push(...[...suspendedTools].filter(name => !tools.includes(name)));
       suspendedTools.clear();
@@ -156,6 +157,45 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       "。\n请直接回复 <条目> use <已有事实>、<条目> update <已有事实>、<条目> delete <已有事实> 或 <条目> create <目标路径或区分理由>", "warning");
   }
 
+  function teamPhase(active: Run) {
+    const phase = active.state.phase;
+    return active.state.taskFacts !== undefined && (phase === "design" || phase === "implement" || phase === "performance" || phase === "review");
+  }
+
+  async function waitForTeam(active: Run, ctx: ExtensionToolContext, signal: AbortSignal | undefined,
+    onUpdate: Parameters<ToolDefinition["execute"]>[3]) {
+    const controller = new AbortController();
+    const teamSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
+    const settled = runTeam(active, ctx, teamSignal, text => {
+      ctx.ui.setStatus("pi-taskbook", text);
+      onUpdate?.({content: [{type: "text", text}], details: {}});
+    });
+    coordinating = {controller, settled};
+    try {
+      await settled;
+      return "团队工作已到达下一检查点。";
+    } catch (error) {
+      if (run === active && !controller.signal.aborted) await exitInvocation(ctx, String(error), active);
+      return "团队工作已暂停，可从检查点恢复。\n" + String(error);
+    } finally {
+      if (coordinating?.controller === controller) coordinating = undefined;
+    }
+  }
+
+  pi.registerTool({
+    name: teamTool, label: "继续任务书团队工作", description: "Run the pending team work from its checkpoint.",
+    defaultActive: false, executionMode: "sequential",
+    parameters: Type.Object({attempt: Type.String()}, {additionalProperties: false}),
+    async execute(_id, params, signal, onUpdate, ctx) {
+      if (!run || !started || reported || coordinating || attempt !== params.attempt || !teamPhase(run)) {
+        throw new Error("当前没有匹配的团队任务。");
+      }
+      reported = true;
+      const text = await waitForTeam(run, ctx, signal, onUpdate);
+      return {content: [{type: "text", text}], details: {}, terminate: true};
+    },
+  });
+
   async function startPhase(ctx: ExtensionContext): Promise<void> {
     if (!run || run.state.phase === "exit") return;
     workspace(run.root, run.task, run.state.base, run.state.branch);
@@ -169,19 +209,15 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     }
     if (run.state.phase === "implement" && !run.state.plan) checkpoint(run, {...run.state, phase: "design"});
     const phase = run.state.phase;
-    if (run.state.taskFacts && (phase === "design" || phase === "implement" || phase === "performance" || phase === "review")) {
-      const active = run;
-      const controller = new AbortController();
+    if (teamPhase(run)) {
       toggleReportTool(false);
-      const settled = runTeam(active, ctx, controller.signal, value => ctx.ui.setStatus("pi-taskbook", value));
-      coordinating = {controller, settled};
-      void settled.then(async () => {
-        if (coordinating?.controller === controller) coordinating = undefined;
-        if (!controller.signal.aborted && run === active) await startPhase(ctx);
-      }).catch(async error => {
-        if (coordinating?.controller === controller) coordinating = undefined;
-        if (!controller.signal.aborted && run === active) await exitInvocation(ctx, String(error), active);
-      });
+      pi.setActiveTools([...pi.getActiveTools(), teamTool]);
+      attempt = randomUUID();
+      reported = false;
+      started = false;
+      phaseInput = "Call " + teamTool + " once with attempt " + attempt + " to resume the checkpoint.";
+      ctx.ui.setStatus("pi-taskbook", titles[phase]);
+      pi.sendMessage({customType: kickoffType, content: phaseInput, display: false, details: attempt}, {triggerTurn: true});
       return;
     }
     if (phase === "fact-registration" && (run.state.team?.placements || !reviewedDrafts(run).length)) {
@@ -810,6 +846,9 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       return { block: true, reason: "当前由独立审核者或用户裁决。" };
     }
     if (started && reported) return { block: true, reason: "当前阶段已提交，等待 Pi 结束这一轮。" };
+    if (started && run && teamPhase(run) && event.toolName !== teamTool) {
+      return {block: true, reason: "请调用 " + teamTool + " 从团队检查点继续。"};
+    }
     if (started && run && ["fact-management", "fact-registration", "handoff"].includes(run.state.phase) && ![reportTool, queryFactsTool, methodTool, "read"].includes(event.toolName)) {
       return {block: true, reason: "Fact Management 通过阶段报告提交已核对的事实。"};
     }
@@ -910,7 +949,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     description: "在本阶段结束时登记结论和证据，随后结束当前模型轮次。",
     defaultActive: false,
     parameters: reportParameters,
-    async execute(toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
       if (!run || !started || reported || !attempt || params.attempt !== attempt || run.state.phase === "exit") {
         throw new Error("执行标识已失效，或当前阶段已经提交。");
       }
@@ -977,6 +1016,10 @@ export default function taskbookExtension(pi: ExtensionAPI) {
           ...(complete ? {topicFactsHead: complete.head, taskFacts: complete.facts, factView: complete.view, approvedProjectHead: complete.projectHead} : {}),
           reports: [...run.state.reports, report]});
         reported = true;
+        if (complete) {
+          const text = await waitForTeam(run, ctx, signal, onUpdate);
+          return {content: [{type: "text", text}], details: {}, terminate: true};
+        }
         return {content: [{type: "text", text: conflicts?.length ? "事实同步等待用户裁决。" : "事实同步结果已登记。"}], details: {}};
       }
       if (params.intakeConflicts) throw new Error("同步冲突仅用于 Fact Management。");
