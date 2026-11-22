@@ -12,7 +12,7 @@ type Designer = "lead" | Member;
 
 type DesignInput = {runId: string; taskbook: string; taskType: TaskType; baseline: string; factsVersion: string; facts: readonly string[];
   userAnswers: readonly {question: string; answer: string}[];
-  targetIds: readonly string[]; previousPlanVersion?: number};
+  requirements: readonly {id: string; text: string}[]; previousPlanVersion?: number};
 
 const text = Type.String({minLength: 1, pattern: "\\S"});
 const shortText = Type.String({minLength: 1, maxLength: 800, pattern: "\\S"});
@@ -41,20 +41,24 @@ type Candidate = {version: string; draft: Static<typeof draft>; plan: ExecutionP
 type Finding = Static<typeof objected>["findings"][number] & {id: string; member: Member};
 export type DesignReviewRecord = {finding: Finding; reviewedVersion: string; resolution: Static<typeof resolution>};
 type MemberReply = Static<typeof approved> | Static<typeof objected>;
-type PrimaryWork = "draft" | "confirm" | "revise" | "signoff";
+type PrimaryWork = "draft" | "confirm" | "reconfirm" | "revise" | "signoff";
 type HelpWork = "consult" | Investigation;
 type PrimaryJob = {id: string; designer: Designer; work: PrimaryWork};
 type Job = PrimaryJob | {id: string; designer: Designer; work: HelpWork; question: string; evidence?: string; returnTo: PrimaryJob};
-type Progress = {input: DesignInput; serial: number; candidate?: Candidate; previous?: Candidate; findings: Finding[];
-  resolutions: DesignReviewRecord[]; reconsideredVersion?: string;
+type Progress = {input: DesignInput; serial: number; candidate?: Candidate; findings: Finding[];
+  resolutions: DesignReviewRecord[]; reconsideredVersion?: string; recheck?: ReturnType<typeof revisionScope>;
   consultations: {designer: Designer; question: string; result: Static<typeof consultResult>}[]};
 type Working = {kind: "working"; work: PrimaryWork; progress: Progress; slots: {job: Job; review?: MemberReply}[]};
 type Paused = {kind: "paused"; previous: Working; question: string; evidence: string; factId?: string};
 export type DesignerState = Working | Paused | {kind: "approved"; progress: Progress; candidate: Candidate};
 type Proposal = Static<typeof initialPlan> | Static<typeof revisedPlan>;
 
+function confirmation(work: Job["work"]) {
+  return work === "confirm" || work === "reconfirm";
+}
+
 function begin(progress: Progress, work: PrimaryWork): Working {
-  const seats: readonly Designer[] = work === "confirm" ? members : ["lead"];
+  const seats: readonly Designer[] = confirmation(work) ? members : ["lead"];
   const slots = seats.map((designer, index) => ({job: {id: `${progress.input.runId}:design:${progress.serial + index + 1}`, designer, work}}));
   return {kind: "working", work, progress: {...progress, serial: progress.serial + slots.length}, slots};
 }
@@ -64,7 +68,7 @@ export function startDesigner(input: DesignInput): DesignerState {
 }
 
 function findingTargets({input, candidate}: Progress) {
-  return [...new Set([...input.targetIds, ...(candidate?.plan.steps.map(step => step.id) ?? [])])];
+  return [...new Set([...input.requirements.map(item => item.id), ...(candidate?.plan.steps.map(step => step.id) ?? [])])];
 }
 
 function destinations(job: Job, progress: Progress) {
@@ -74,26 +78,43 @@ function destinations(job: Job, progress: Progress) {
     return job.designer === "lead" ? Type.Union([answer, ask]) : answer;
   }
   const helpers = [transition("consult", consultRequest), ...investigations.map(method => transition(method, investigationRequest))];
-  if (job.work === "confirm") {
-    const target = Type.Enum(findingTargets(progress), {description: "Select one Goal, Delivery or plan step ID."});
+  if (confirmation(job.work)) {
+    const allowed = job.work === "reconfirm" ? progress.recheck?.findingTargets : findingTargets(progress);
+    if (!allowed?.length) throw new Error("Confirmation requires review targets.");
+    const target = Type.Enum(allowed, {description: "Select one Goal, Delivery or plan step ID."});
     return Type.Union([transition("signoff", approved), transition("revise", objection(target)), ...helpers]);
   }
   if (job.work === "draft") return Type.Union([transition("confirm", initialPlan), ask, ...helpers]);
   if (job.work === "revise") {
-    return Type.Union([...(progress.findings.some(item => item.factId) ? [] : [transition("confirm", revisedPlan)]), ask, ...helpers]);
+    return Type.Union([...(progress.findings.some(item => item.factId) ? [] :
+      [transition(progress.findings.length ? "reconfirm" : "confirm", revisedPlan)]), ask, ...helpers]);
   }
   return Type.Union([transition("implement", signed), ask, ...helpers]);
 }
 
-function changedSteps(previous: Candidate | undefined, current: Candidate | undefined) {
-  if (!previous || !current) return;
+function revisionScope(input: DesignInput, previous: Candidate, current: Candidate, resolutions: DesignReviewRecord[]) {
   const oldSteps = new Map(previous.plan.steps.map(step => [step.id, step]));
   const newSteps = new Map(current.plan.steps.map(step => [step.id, step]));
-  return {goal: previous.draft.goal !== current.draft.goal,
-    facts: JSON.stringify(previous.draft.facts) !== JSON.stringify(current.draft.facts),
-    steps: [...new Set([...oldSteps.keys(), ...newSteps.keys()])]
-      .filter(id => JSON.stringify(oldSteps.get(id)) !== JSON.stringify(newSteps.get(id))),
-    order: JSON.stringify([...oldSteps.keys()]) !== JSON.stringify([...newSteps.keys()])};
+  const changes = [...new Set([...oldSteps.keys(), ...newSteps.keys()])].flatMap(id => {
+    const before = oldSteps.get(id), after = newSteps.get(id);
+    return JSON.stringify(before) === JSON.stringify(after) ? [] : [{id, before, after}];
+  });
+  const beforeOrder = [...oldSteps.keys()];
+  const afterOrder = [...newSteps.keys()];
+  const reordered = JSON.stringify(beforeOrder.filter(id => newSteps.has(id))) !==
+    JSON.stringify(afterOrder.filter(id => oldSteps.has(id)));
+  const broad = reordered || previous.draft.goal !== current.draft.goal ||
+    JSON.stringify(previous.draft.facts) !== JSON.stringify(current.draft.facts);
+  const affected = new Set([...resolutions.map(item => item.finding.target), ...changes.flatMap(({id, before, after}) =>
+    [id, ...(before?.targets ?? []), ...(after?.targets ?? [])])]);
+  for (const id of affected) {
+    if (!oldSteps.has(id)) continue;
+    for (const requirement of oldSteps.get(id)?.targets ?? []) affected.add(requirement);
+  }
+  const requirements = input.requirements.filter(item => broad || affected.has(item.id));
+  return {previousVersion: previous.version, candidateVersion: current.version, resolutions, requirements, changes,
+    stepOrder: afterOrder, ...(broad ? {candidate: current} : {}),
+    findingTargets: [...new Set([...requirements.map(item => item.id), ...afterOrder.filter(id => broad || affected.has(id))])]};
 }
 
 function reviewSummary(value: unknown) {
@@ -112,24 +133,24 @@ function revisionSummary(value: unknown) {
 
 export function designerTurns(state: DesignerState) {
   if (state.kind !== "working") return [];
-  const {input, candidate, previous, findings, resolutions, consultations} = state.progress;
+  const {input, candidate, findings, recheck, consultations} = state.progress;
   return state.slots.filter(slot => !slot.review).map(({job}) => {
     const prompt = job.work === "how" || job.work === "why" ? investigationPrompt(job.work) :
       readFileSync(new URL(`../../../prompts/designer/0.3/${job.work}.md`, import.meta.url), "utf8").trim();
     return {id: job.id, designer: job.designer, work: job.work, schema: destinations(job, state.progress),
       prompt: job.work === "draft" || job.work === "revise" ? prompt + "\n\n" + pstackGuidance("architect", "design") : prompt,
-      context: structuredClone({...input,
-        candidate, ...(job.work === "revise" ? {findings} : {}),
-        ...(job.work === "confirm" ? {changesSincePrevious: changedSteps(previous, candidate),
-          findingTargets: findingTargets(state.progress),
-          resolutions: resolutions.filter(item => item.reviewedVersion === previous?.version)} : {}),
+      context: structuredClone({...(job.work === "reconfirm"
+        ? {...recheck, baseline: input.baseline, facts: input.facts, userAnswers: input.userAnswers}
+        : {...input, candidate}),
+        ...(job.work === "revise" ? {findings} : {}),
+        ...(job.work === "confirm" ? {findingTargets: findingTargets(state.progress)} : {}),
         ...(job.work === "signoff" ? {approvedBy: members} : {}),
         ...("returnTo" in job ? {question: job.question, evidence: job.evidence, returnTo: job.returnTo.work} : {}),
         consultations: consultations.filter(entry => entry.designer === job.designer).slice(-6)}),
       validateResult(result: unknown) {
         settleDesignerTurn(state, {id: job.id, settled: true, result});
       },
-      summarizeResult: job.work === "confirm" ? reviewSummary : job.work === "revise" ? revisionSummary : undefined};
+      summarizeResult: confirmation(job.work) ? reviewSummary : job.work === "revise" ? revisionSummary : undefined};
   });
 }
 
@@ -140,7 +161,7 @@ function replaceJob(state: Working, uid: string, next: Omit<PrimaryJob, "id"> | 
 }
 
 function prepareCandidate(progress: Progress, result: Proposal): Candidate {
-  const plan = acceptPlan(result.plan.steps, [...progress.input.targetIds],
+  const plan = acceptPlan(result.plan.steps, progress.input.requirements.map(item => item.id),
     progress.candidate?.plan.version ?? progress.input.previousPlanVersion);
   const version = createHash("sha256").update(JSON.stringify([result.draft, plan.steps, progress.input.factsVersion])).digest("hex");
   return progress.candidate?.version === version ? progress.candidate : {version, plan, draft: result.draft};
@@ -162,8 +183,9 @@ function applyRevision(state: Working, result: Static<typeof revisedPlan>, candi
       evidence: progress.findings.map(item => `${item.member} · ${item.target} · ${item.counterexample} · ${item.evidence}`).join("\n")};
   }
   const resolutions = progress.findings.map(item => ({finding: item, reviewedVersion: previous.version, resolution: byID.get(item.id)!}));
-  return begin({...progress, previous, candidate, findings: [], resolutions: [...progress.resolutions, ...resolutions],
-    reconsideredVersion: unchanged ? candidate.version : undefined}, "confirm");
+  const recheck = resolutions.length ? revisionScope(progress.input, previous, candidate, resolutions) : undefined;
+  return begin({...progress, candidate, findings: [], resolutions: [...progress.resolutions, ...resolutions],
+    recheck, reconsideredVersion: unchanged ? candidate.version : undefined}, recheck ? "reconfirm" : "confirm");
 }
 
 function settleConfirmation(state: Working, job: PrimaryJob, review: MemberReply): DesignerState {

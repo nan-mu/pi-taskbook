@@ -219,7 +219,7 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
           userAnswers, previousPlanVersion: state.plan?.version, taskType: run.task.type,
           taskbook: run.task.markdown, facts: context.facts.map(fact => fact.id + " " + fact.text +
             (fact.userDecision ? " (User decision: " + JSON.stringify(fact.userDecision) + ")" : "")),
-          targetIds: [...context.goals, ...context.delivery].map(item => item.id)});
+          requirements: [...context.goals, ...context.delivery].map(({id, text}) => ({id, text}))});
         updateTeam({...team, design, designBase: baseline});
         continue;
       }
