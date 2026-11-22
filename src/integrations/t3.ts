@@ -144,8 +144,13 @@ function canHandoff(tools: Map<string, unknown>) {
 async function callT3<T extends TSchema>(rpc: Awaited<ReturnType<typeof connectT3>>, name: string, args: object, schema: T) {
   const reply = await rpc("tools/call", {name, arguments: args}) as
     {isError?: boolean; structuredContent?: unknown; content?: {type: string; text?: string}[]};
-  if (reply.isError) throw new Error("T3 拒绝调用 " + name + "。");
   const content = reply.content?.find(item => item.type === "text")?.text;
+  if (reply.isError) {
+    const error = reply.structuredContent;
+    const detail = typeof error === "object" && error !== null && "message" in error && typeof error.message === "string"
+      ? error.message : content;
+    throw new Error("T3 拒绝调用 " + name + (detail?.trim() ? " · " + detail.trim() : "。"));
+  }
   const output: unknown = reply.structuredContent ?? (content ? JSON.parse(content) : undefined);
   if (!Value.Check(schema, output)) throw new Error("T3 回执格式不符合预期 · " + name);
   return output;
@@ -254,8 +259,9 @@ export async function handoffT3Thread(args: {root: string; branch: string; base:
   do {
     const page = await callT3(rpc, listTool,
       {query: args.branch, refKind: "local", limit: 200, ...(cursor === null ? {} : {cursor})}, worktreePage);
-    const occupied = page.refs.find(ref => ref.name === args.branch && ref.worktreePath);
-    if (occupied) throw new Error("任务分支已有 worktree · " + occupied.worktreePath + "。可在其所属线程继续，或指定新的 Work branch。");
+    const existing = page.refs.find(ref => ref.name === args.branch);
+    if (existing?.worktreePath) throw new Error("任务分支已有 worktree · " + existing.worktreePath + "。可在其所属线程继续，或指定新的 Work branch。");
+    if (existing) throw new Error("本地分支 " + args.branch + " 已存在，当前没有绑定 worktree。T3 迁移需要新分支。要沿用原任务书，可先重命名现有分支，再重试。");
     cursor = page.nextCursor;
     if (cursor !== null && (seen.has(cursor) || seen.size >= 9)) throw new Error("T3 未能完整核对现有工作区。");
     if (cursor !== null) seen.add(cursor);
