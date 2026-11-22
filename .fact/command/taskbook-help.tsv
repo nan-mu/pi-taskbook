@@ -1,0 +1,3 @@
+id	fact	source	labels
+help-entry	/taskbook-help explains Pi Taskbook's commands and delivery workflow. /taskbook-help status reports the running or most recent task in the current plugin session, including a pending decision or the recorded PR URL when available.	src/taskbook/help.ts | index.ts	workflow
+help-question	An idle Pi session with a selected model answers a specific /taskbook-help question using the built-in guide and current status. Help answers without invoking tools. The command shows built-in guidance directly while work is active or no model is selected.	src/taskbook/help.ts	prompts

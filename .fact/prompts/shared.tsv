@@ -1,4 +1,5 @@
 id	fact	source	labels
+role-and-phase	Taskbook kickoff prompts name the main agent's current phase. Named workers receive their seat, phase and Work State with the current assignment. Independent reviewers and PR publication receive their own role and phase.	index.ts | src/workflow/subagent.ts | src/review/reviewer.ts	prompts,workflow
 consult-playbook	During consultation, the agent follows the instructions for its assigned role.	39c219e56dc3:.fact/workflow.tsv	
 attention	Designer and Implementer prompts direct their recipients to consult the facts associated with the current task label.	Maintainer decision: recoverable task-scoped fact view | src/workflow/team.ts | src/workflow/phase-input.ts | .fact/approach/facts/task-view.tsv#provenance	
 handoff-context	When handing work to another stage, carry forward its question, the governing fact versions, decisions, and evidence locations. Separate unresolved judgments so the receiving role can reopen the originals.	prompts/common.md | https://github.com/cursor/plugins/blob/e58dd043600587dbaf58ba315e7f2b38373eeb43/pstack/skills/principle-guard-the-context-window/SKILL.md	

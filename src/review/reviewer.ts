@@ -158,7 +158,9 @@ export async function runIndependentReview(ctx: ExtensionContext, input: ReviewI
   const packet = JSON.stringify({ ...data, requiredIds, runSources });
   const role = reviewRoles.find(section => section.startsWith(input.role + "\n"));
   if (!role) throw new Error("缺少独立审核角色提示词：" + input.role);
-  const system = [reviewInstruction.trim(), "## " + role.trim(),
+  const system = ["You are Pi Taskbook's independent reviewer. Current phase: " + input.role +
+      ". Examine the supplied revision and return a judgment the main agent can apply.",
+    reviewInstruction.trim(), "## " + role.trim(),
     ...methods.map(method => "## " + method.source + "\n" + method.text)].join("\n\n");
   const reply = await readOnlySession(input, model, thinkingLevel, system, packet, signal, pi);
   const result = parseVerdict(reply.text, requiredIds, input.facts, input.role, reply.observations, runSources,
@@ -170,7 +172,8 @@ export async function runIndependentReview(ctx: ExtensionContext, input: ReviewI
 
 export async function consultDesign(ctx: ExtensionContext, input: Omit<ReviewInput,"role">, question: string,
   model: NonNullable<ExtensionContext["model"]>, signal?: AbortSignal, pi?: ExtensionAPI, thinkingLevel = ctx.thinkingLevel) {
-  const system = [designConsultInstruction,
+  const system = ["You are a Pi Taskbook design consultant. Current phase: Design / Consult. Resolve the supplied question for the designer who owns the plan.",
+    designConsultInstruction,
     ...input.methods.map(method => "## " + method.source + "\n" + method.text)].join("\n\n");
   const {root: _root, methods: _methods, ...data} = input;
   const packet = JSON.stringify({...data, role:"design-consult", question});

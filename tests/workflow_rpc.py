@@ -538,7 +538,13 @@ class Provider(http.server.BaseHTTPRequestHandler):
             messages = body["messages"]
             system = "\n".join(str(m["content"]) for m in messages if m["role"] in ("system", "developer"))
             latest = prompt_text(messages[-1])
-            if "这是 /taskbook-setup 的普通对话" in latest:
+            if "You are the Pi Taskbook help agent." in system:
+                help_input = json.loads(latest)
+                assert help_input["question"] == "谁负责合并 PR？"
+                assert "Setup" in help_input["status"] and "## Pi Taskbook Setup" not in system
+                delta = {"role": "assistant", "content": "由用户决定是否合并 PR。"}
+                finish = "stop"
+            elif "这是 /taskbook-setup 的普通对话" in latest:
                 assert body.get("tools")
                 assert "FIXTURE_CONFIG_SECRET" not in latest
                 setup_reports.append(latest)
@@ -926,9 +932,13 @@ with tempfile.TemporaryDirectory(prefix="pi-taskbook-rpc-") as tmp:
     client = Client(main, config, session, t3env)
     try:
         commands = client.command(type="get_commands")
-        assert {item["name"] for item in commands["data"]["commands"] if item["name"].startswith("taskbook")} == {"taskbook", "taskbook-new", "taskbook-setup"}, commands
+        assert {item["name"] for item in commands["data"]["commands"] if item["name"].startswith("taskbook")} == {
+            "taskbook", "taskbook-new", "taskbook-setup", "taskbook-help",
+        }, commands
         client.command(type="prompt", message="/taskbook-setup")
         client.settled("setup fixture report")
+        client.command(type="prompt", message="/taskbook-help 谁负责合并 PR？")
+        client.settled("由用户决定是否合并 PR。")
         assert "t3_thread_launch" in setup_reports[-1] and "discovered" in setup_reports[-1]
         assert not tuple(worktree_root.iterdir()) and not launches
         new_path = d / "entry path with spaces.md"
@@ -1011,6 +1021,9 @@ Complete the shared stages.
             assert decision["success"] and decision["data"]["disposition"] == "handled", decision
             try:
                 assert design_started.wait(timeout=20)
+                client.command(type="prompt", message="/taskbook-help status")
+                status = client.notify("澄清与设计")
+                assert task_id in status["message"] and "Design ·" in status["message"], status
                 parent = client.command(type="get_state")
                 assert parent["data"]["isStreaming"], parent
                 assert any(event.get("type") == "tool_execution_update" and event.get("toolName") == "taskbook_report"

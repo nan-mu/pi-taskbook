@@ -334,7 +334,7 @@ export function registerSetupCommand(pi: ExtensionAPI, workflowIsBusy: () => boo
       ...(missing.length ? ["Unavailable Setup tools in this turn: " + missing.join(", ")] : [])].join("\n\n")};
   });
   pi.on("session_start", () => exposeSetupTools());
-  return {isChecking: () => checking, close: (ctx: ExtensionContext) => {
+  return {isChecking: () => checking, isActive: (ctx: ExtensionContext) => Boolean(currentSetup(ctx)), close: (ctx: ExtensionContext) => {
     if (currentSetup(ctx)) pi.appendEntry(stateType, null);
   }};
 }

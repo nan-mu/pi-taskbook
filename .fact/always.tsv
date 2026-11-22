@@ -1,0 +1,2 @@
+id	fact	source	labels
+refresh-pi-after-change	When maintaining pi-taskbook itself, after publishing the requested extension changes run p4 pi update --extensions in the maintainer's Pi environment and check the result. Carry out the update directly as part of delivery.	Maintainer decision: Pi extension update after publishing	setup

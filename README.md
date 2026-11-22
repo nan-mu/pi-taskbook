@@ -28,6 +28,7 @@ pi install https://github.com/nan-mu/pi-taskbook
 
 | 命令 | 用户会得到什么 |
 | --- | --- |
+| `/taskbook-help [问题]` | 了解 Taskbook 的入口、分工和交付方式。用 `/taskbook-help status` 查看当前会话的任务阶段、待决事项或 PR。 |
 | `/taskbook-setup` | 查看当前项目的就绪情况。可继续指定模型配置，或要求处理旧资料。 |
 | `/taskbook <任务书路径或 Markdown 正文>` | 在当前会话启动任务。T3 会话尚未绑定工作树时，T3 按任务书指定的基线和 `Work branch` 创建工作树，并把当前会话迁过去继续事实核查。 |
 | `/taskbook-new <任务书路径或 Markdown 正文>` | 请求 T3 创建工作树，并在新会话启动任务。 |

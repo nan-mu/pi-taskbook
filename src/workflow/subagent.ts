@@ -49,6 +49,8 @@ export async function subagentTurn({ run, ctx, seat, turn, route, tools = [], bu
   const settingsManager = SettingsManager.inMemory();
   const agentDir = getAgentDir();
   const systemPrompt = [
+    "You are Pi Taskbook's " + seat + " for run " + run.task.id + ". Current phase: " + run.state.phase +
+      ". Your Work State is " + turn.work + ". The current assignment establishes which judgment you own and which inputs you can rely on.",
     alwaysPrompt(root),
     turn.prompt,
     "The plugin owns scheduling. Work only on this assignment and use its tools. Finish by calling " + resultName +

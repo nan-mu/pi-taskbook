@@ -10,6 +10,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { git, readTaskbook, workspace, type Taskbook } from "./src/taskbook/document.ts";
 import { nextPhase, stages, titles, type Phase } from "./src/workflow/transitions.ts";
 import { prepareTaskLaunch, readEntryArgument, readTaskbookInput } from "./src/taskbook/entry.ts";
+import { registerHelpCommand } from "./src/taskbook/help.ts";
 import { handoffT3Thread, hasT3Context, launchT3Thread, readT3Workspace } from "./src/integrations/t3.ts";
 import { loadUpstreamInputs, pinUpstreamInputs } from "./src/methods/upstream.ts";
 
@@ -76,6 +77,7 @@ function requireApprovedFacts(run: Run, snapshot: ProjectSnapshot) {
 
 export default function taskbookExtension(pi: ExtensionAPI) {
   let run: Run | undefined;
+  let lastRun: Run | undefined;
   let attempt: string | undefined;
   let started = false;
   let syncCaller: { id: string; path: string; revision: string; transport: ReturnType<typeof magpieSessionTransport> } | undefined;
@@ -93,6 +95,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   let reviewing: AbortController | undefined;
   let assisting: AbortController | undefined;
   let coordinating: {controller: AbortController; settled: Promise<void>} | undefined;
+  let teamProgress: string | undefined;
   let initialModel: ExtensionContext["model"];
   let initialThinking: ExtensionContext["thinkingLevel"] | undefined;
   const suspendedTools = new Set<string>();
@@ -167,6 +170,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     const controller = new AbortController();
     const teamSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
     const settled = runTeam(active, ctx, teamSignal, text => {
+      teamProgress = text;
       ctx.ui.setStatus("pi-taskbook", text);
       onUpdate?.({content: [{type: "text", text}], details: {}});
     });
@@ -178,7 +182,10 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       if (run === active && !controller.signal.aborted) await exitInvocation(ctx, String(error), active);
       return "团队工作已暂停，可从检查点恢复。\n" + String(error);
     } finally {
-      if (coordinating?.controller === controller) coordinating = undefined;
+      if (coordinating?.controller === controller) {
+        coordinating = undefined;
+        teamProgress = undefined;
+      }
     }
   }
 
@@ -412,6 +419,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     coordinating?.controller.abort();
     if (coordinating) await coordinating.settled.catch(() => {});
     coordinating = undefined;
+    teamProgress = undefined;
     run = undefined;
     relocated = false;
     attempt = undefined;
@@ -612,6 +620,29 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     return !ctx.isIdle() || attempt || launching || publishing || setup.isChecking() || reviewing || coordinating || syncing;
   }
 
+  registerHelpCommand(pi, ctx => {
+    if (setup.isChecking()) return "当前阶段 · Setup 正在检查当前 Pi 会话和项目。";
+    if (publishing) return "当前阶段 · Handoff 正通过 Magpie GitHub 发布 PR · " + publishing.run.task.id;
+    if (launching && !run) return "正在准备任务入口和工作树。";
+    if (setup.isActive(ctx)) return "当前阶段 · Setup 正在处理配置或迁移问题。";
+    const current = run ?? (lastRun?.state.session === ctx.sessionManager.getSessionId() ? lastRun : undefined);
+    if (!current) return "当前会话没有正在执行的任务书。";
+    const {task, state} = current;
+    if (state.phase === "exit") {
+      const receipt = state.publications?.findLast(item => item.revision === state.deliveryRevision);
+      if (receipt) return task.id + " · PR 已登记 · " + receipt.pullRequest;
+      if (state.exit === "ready") return task.id + " · 本地已签署，等待发布 PR。可在原会话重交同一任务书重试。";
+      return task.id + " · " + (state.exit === "cancelled" ? "已取消" : "有阻塞") +
+        (state.stopReason ? " · " + state.stopReason : "");
+    }
+    const stage = task.id + " · " + titles[state.phase];
+    if (!run) return stage + " · 已暂停，可在原会话重交同一任务书。";
+    if (state.pendingQuestion) return stage + " · 等待你的决定\n" + state.pendingQuestion.question;
+    if (state.intakeConflicts?.length) return stage + " · 等待事实同步裁决 · " + state.intakeConflicts.map(item => item.id).join("、");
+    if (state.pendingConflicts?.length) return stage + " · 等待事实冲突裁决 · " + state.pendingConflicts.map(item => item.factId).join("、");
+    return teamProgress ? stage + "\n" + teamProgress : stage;
+  }, ctx => Boolean(entryBusy(ctx)));
+
   function preflightT3Task(task: Taskbook) {
     selectedPlaybook(task.markdown);
     loadUpstreamInputs(pinUpstreamInputs(), stages[0], task.type);
@@ -687,6 +718,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       selectedPlaybook(task.markdown);
       const prepared = input.prepared ?? savedT3Continuation(ctx, task.digest)?.prepared;
       const candidate = openRun({ctx, cwd, task, promptDigest: localPromptDigest, prepared});
+      lastRun = candidate;
       setup.close(ctx);
       if (candidate.state.phase === "exit") return await announce(ctx, candidate);
       initialModel ??= ctx.model;
@@ -817,6 +849,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     if (publishing && event.messageType === "custom" && event.message.customType === publishKickoff && event.message.details === publishing.token) {
       publishing.active = true;
       return {systemPrompt: [projectInstructions,
+        "You are the Pi Taskbook delivery agent. Current phase: Handoff / PR publication. Review has signed the delivery; your remaining job is to obtain the Magpie GitHub receipt.",
         "Run the single Taskbook publication tool with the supplied attempt token. Use the returned receipt to determine which revision and action succeeded, and end the turn."].filter(Boolean).join("\n\n")};
     }
     if (!run || !attempt || !phaseInput || run.state.phase === "exit" || event.messageType !== "custom" ||
@@ -825,7 +858,9 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       return;
     }
     started = true;
-    return {systemPrompt: [relocated ? "" : event.systemPrompt, projectInstructions, phaseInput].filter(Boolean).join("\n\n")};
+    const role = "You are the main agent for Pi Taskbook run " + run.task.id + ". Current phase: " + run.state.phase +
+      ". Complete the phase assignment below. The plugin owns checkpoints, dispatch to other agents, and the transition after your report.";
+    return {systemPrompt: [relocated ? "" : event.systemPrompt, role, projectInstructions, phaseInput].filter(Boolean).join("\n\n")};
   });
 
   pi.on("tool_call", event => {

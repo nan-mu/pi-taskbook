@@ -1,7 +1,7 @@
 id	fact	source	labels
 setup-operation-authorization	Setup resolves the scope of each requested write from the command argument and subsequent direct replies in the current conversation; an empty or vague approval requires clarification.	39c219e56dc3:prompts/setup.md	
 setup-entry-scope	A Setup response distinguishes capabilities found in the tool catalog from remote permissions verified by an access check.	39c219e56dc3:prompts/setup.md	
-status-ready	For a bare command with ready model settings, report the status and end the turn.	39c219e56dc3:prompts/setup.md	
+status-ready	A bare Setup response leads with readiness and concrete blockers, summarizes current role assignments and mentions legacy audit when present. For a specific request, use the diagnostics that affect the user's next step.	prompts/setup.md	setup
 setup-no-facts-init	Setup readiness depends on models and environment; fact and glossary registration belongs to Fact Management.	39c219e56dc3:prompts/setup.md	
 setup-refresh-catalog	The Setup agent refreshes the catalog when the user requests a model check or the available models may have changed.	39c219e56dc3:prompts/setup.md | .fact/tools/model-catalog.tsv#setup-tools	
 setup-plan-options	Compare model assignments in one row per role, with a column for each of Work, Plus, Pro, and Pro Plus.	39c219e56dc3:prompts/setup.md	
