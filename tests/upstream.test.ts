@@ -11,7 +11,7 @@ const owners = ["pstack", "matt"] as const;
 const reviews = ["fact-review", "correctness", "quality"] as const;
 
 function catalog(owner: typeof owners[number]) {
-  const raw = readFileSync(new URL("../methods/" + owner + ".json", import.meta.url));
+  const raw = readFileSync(new URL("../method-catalogs/" + owner + ".json", import.meta.url));
   return { data: JSON.parse(raw.toString("utf8")), digest: createHash("sha256").update(raw).digest("hex") };
 }
 

@@ -5,7 +5,7 @@ import { readStageMethod, type MethodStage } from "../src/methods/catalog.ts";
 
 type Skill = { name: string; path: string; stage: MethodStage[]; status: string; kind: string; adaptation: string };
 for (const [owner, expected] of [["pstack", 52], ["matt", 28]] as const) {
-  const file = new URL("../methods/" + owner + ".json", import.meta.url);
+  const file = new URL("../method-catalogs/" + owner + ".json", import.meta.url);
   const {commit, skills} = JSON.parse(readFileSync(file, "utf8")) as {commit: string; skills: Skill[]};
   test(owner + " methods are callable only within their declared stage and source", () => {
     assert.equal(skills.length, expected);

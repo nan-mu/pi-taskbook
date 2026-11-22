@@ -10,7 +10,7 @@ DEFAULT_OUTPUT = ROOT.parent / "deliverables" / "pi-skill-catalog.html"
 def load_entries():
     entries = []
     for owner in ("pstack", "matt"):
-        document = json.loads((ROOT / "methods" / f"{owner}.json").read_text())
+        document = json.loads((ROOT / "method-catalogs" / f"{owner}.json").read_text())
         remote = document["repo"]
         if not remote.startswith("https://"):
             remote = f"https://github.com/{remote}"

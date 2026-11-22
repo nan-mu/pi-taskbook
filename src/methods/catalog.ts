@@ -14,7 +14,7 @@ type Entry = {
 type Source = { repo: string; commit: string; skills: Entry[] };
 
 function loadCatalog(owner: CatalogOwner) {
-  const bytes = readFileSync(new URL("../../methods/" + owner + ".json", import.meta.url));
+  const bytes = readFileSync(new URL("../../method-catalogs/" + owner + ".json", import.meta.url));
   const catalog: Source = JSON.parse(bytes.toString("utf8"));
   const pin: CatalogPin = { commit: catalog.commit, digest: createHash("sha256").update(bytes).digest("hex") };
   return {

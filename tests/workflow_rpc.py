@@ -1143,7 +1143,7 @@ Complete the shared stages.
         assert [r["phase"] for r in s["reports"]] == ["fact-check", "fact-review", "design"] + [
             "fact-check", "fact-review", "design", "implement", "correctness", "quality"], s
         for owner in ("matt", "pstack"):
-            content = (repo / "methods" / (owner + ".json")).read_bytes()
+            content = (repo / "method-catalogs" / (owner + ".json")).read_bytes()
             pin = s["upstream"][owner]
             assert pin["commit"] == json.loads(content)["commit"] and pin["digest"] == hashlib.sha256(content).hexdigest()
         previous = len(s["reports"])
