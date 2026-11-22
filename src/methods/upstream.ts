@@ -1,38 +1,6 @@
-import { catalogPins, phaseMethod, type CatalogOwner } from "./catalog.ts";
+import { phaseMethod } from "./catalog.ts";
 import type { Taskbook } from "../taskbook/document.ts";
 import type { Phase } from "../workflow/transitions.ts";
-
-// Old checkpoints have {root, commit}. They are readable for migration, but
-// cannot authorize work against a different version of the adapted methods.
-type Pin = { commit: string; digest?: string; root?: string };
-export type UpstreamPins = Record<CatalogOwner, Pin>;
-
-// The cleanup removed catalog-only entries. These exact releases ship the same callable methods.
-const equivalentCatalogDigests = {
-  pstack: {
-    before: "ff01e9b32cfec78556c1395e5de0351f0bc1051d03f923d711debdd0e87dd36f",
-    after: "635627dd9c437fc5344516f7edd7b788c3c5ffd7153ab4d90c1f66eb20f34d70",
-  },
-  matt: {
-    before: "1b03965df22b8541aa6f289b4b4647d0f028042a3552b753a02eeb15b23e2ddf",
-    after: "1c4bdbba7b61f3e800a4939ac2ce1dce9d9f7ad129e39e13180424d434336c2e",
-  },
-};
-
-export function pinUpstreamInputs(): UpstreamPins {
-  return catalogPins();
-}
-
-export function usesCurrentInputs(pins: UpstreamPins | undefined): boolean {
-  if (!pins) return false;
-  const current = catalogPins();
-  return (["pstack", "matt"] as const).every(owner => {
-    const {before, after} = equivalentCatalogDigests[owner];
-    const {commit, digest} = current[owner];
-    const pin = pins[owner];
-    return commit === pin?.commit && (digest === pin.digest || (digest === after && pin.digest === before));
-  });
-}
 
 export function phaseSources(phase: Phase, type: Taskbook["type"]): string[] {
   const fix = type.startsWith("fix-");
@@ -66,9 +34,4 @@ export function phaseSources(phase: Phase, type: Taskbook["type"]): string[] {
     case "performance":
       return ["pstack:benchmark-checklist", "pstack:principle-explain-the-number", "matt:research"];
   }
-}
-
-export function loadUpstreamInputs(pins: UpstreamPins | undefined, phase: Phase, type: Taskbook["type"]) {
-  if (!usesCurrentInputs(pins)) throw new Error("任务的方法版本与随包编审版本不同，需要从事实核查重新建立审计。");
-  return phaseSources(phase, type).map(name => phaseMethod(name, phase));
 }

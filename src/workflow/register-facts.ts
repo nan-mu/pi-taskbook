@@ -1,11 +1,8 @@
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { commitRegisteredMemory, readProjectMemory } from "../facts/project-memory.ts";
 import { defaultFactTable, readFactTables, validateFactTablePath } from "../facts/taskbook-intake.ts";
 import { decodeTsv, encodeTsv } from "../facts/tsv.ts";
 import { git } from "../taskbook/document.ts";
-import { checkpoint, cleanRevision, type Run } from "./checkpoint.ts";
+import { cleanRevision, type Run } from "./run.ts";
 
 export type FactPlacement = {id: string; path: string; labels: string[]};
 const columns = "id\tfact\tsource\tlabels";
@@ -14,7 +11,7 @@ const labelPath = ".fact/label.tsv";
 export function reviewedDrafts(run: Run) {
   const {team} = run.state;
   const {review} = team ?? {};
-  if (review?.kind !== "approved" || review.checkpoint.candidate.revision !== run.state.revision) {
+  if (review?.kind !== "approved" || review.progress.candidate.revision !== run.state.revision) {
     throw new Error("登记事实需要当前交付提交的签署审核。");
   }
   const approved = new Set(review.draftFacts.filter(item => item.decision === "keep").map(item => item.id));
@@ -27,7 +24,7 @@ function validatePlacements(run: Run, drafts: ReturnType<typeof reviewedDrafts>,
   labels.add("terms");
   if (placements.length !== drafts.length || new Set(placements.map(item => item.id)).size !== drafts.length ||
       placements.some(item => !drafts.some(draft => draft.id === item.id))) {
-    throw new Error("事实登记检查点中的草稿记录不匹配。");
+    throw new Error("事实登记位置与审核通过的草稿不匹配。");
   }
   for (const {path, labels: selected} of placements) {
     validateFactTablePath(run.root, path, snapshot.tables);
@@ -35,7 +32,6 @@ function validatePlacements(run: Run, drafts: ReturnType<typeof reviewedDrafts>,
   }
 }
 
-const sha = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const norm = (value: string) => value.normalize("NFKC").trim().replace(/\s+/gu, " ").replace(/[.。]+$/u, "");
 
 export function registerReviewedFacts(run: Run, savedPlacements = run.state.team?.placements) {
@@ -47,28 +43,9 @@ export function registerReviewedFacts(run: Run, savedPlacements = run.state.team
   const head = cleanRevision(run);
   const view = run.state.factView;
   const marker = "Taskbook-Registration: " + run.task.digest;
-  const input = sha(JSON.stringify([run.task.digest, base, view, drafts, placements]));
   const snapshot = readFactTables(run.root);
   const project = readProjectMemory(run.root);
-  const receipt = (revision: string) => ({revision,
-    diff: revision === base ? "" : git(run.root, "diff", "--no-ext-diff", base, revision, "--", ".fact"),
-    topicHead: readFactTables(run.root).head, projectHead: readProjectMemory(run.root).head});
-
-  if (head !== base) {
-    // A process can stop after the Git commit but before the transition to Handoff.
-    const intent = run.state.registrationIntent;
-    const paths = git(run.root, "diff", "--name-only", "-z", base, head).split("\0").filter(Boolean);
-    const validCommit = git(run.root, "rev-list", "--parents", "-n", "1", head) === head + " " + base &&
-      git(run.root, "log", "-1", "--format=%B", head).split("\n").includes(marker);
-    if (!validCommit) throw new Error("已审核提交在登记事实前发生变化。");
-    if (intent?.input === input && paths.length === intent.files.length &&
-        intent.files.every(([path, hash]) => paths.includes(path) && sha(readFileSync(join(run.root, path))) === hash)) return receipt(head);
-    // Registration commits made by the previous release had no intent checkpoint.
-    const legacyComplete = !view && !intent && paths.every(path => placements.some(item => item.path === path)) &&
-      drafts.every(draft => [...snapshot.tables.values()].flat().some(row => norm(row.fact) === norm(draft.text)));
-    if (legacyComplete) return receipt(head);
-    throw new Error("现有登记提交与签署的事实变更不符。");
-  }
+  if (head !== base) throw new Error("已审核提交在登记事实前发生变化。");
   if ((run.state.topicFactsHead !== undefined && run.state.topicFactsHead !== snapshot.head) ||
       (run.state.approvedProjectHead !== undefined && run.state.approvedProjectHead !== project.head) ||
       (view && (view.topicHead !== snapshot.head || view.projectHead !== project.head))) {
@@ -117,9 +94,7 @@ export function registerReviewedFacts(run: Run, savedPlacements = run.state.team
   commitRegisteredMemory(run.root, project, run.task, run.state.base, view?.memoryChanges ?? [], view?.sessionId ?? run.state.session,
     changes, "Register reviewed facts · " + run.task.id + "\n\n" + marker, () => {
       if (cleanRevision(run) !== base || readFactTables(run.root).head !== snapshot.head) throw new Error("登记前项目事实发生变化。");
-    }, mutations => {
-      const files: [string, string][] = [...mutations].map(([path, content]) => [path, sha(content)]);
-      checkpoint(run, {...run.state, registrationIntent: {input, files}});
     });
-  return receipt(git(run.root, "rev-parse", "HEAD"));
+  return {revision: git(run.root, "rev-parse", "HEAD"),
+    topicHead: readFactTables(run.root).head, projectHead: readProjectMemory(run.root).head};
 }

@@ -1,0 +1,3 @@
+id	fact	source	labels
+session-run	A Taskbook run holds its state in the active Pi process. Submitting a taskbook after an interruption or restart starts a new run.	src/workflow/run.ts | index.ts | README.md	workflow
+worker-context	Each named work turn starts a Pi worker session with the role prompt and the inputs for that turn. T3 shows the worker activity under the original call.	src/workflow/subagent.ts | src/workflow/team.ts	workflow

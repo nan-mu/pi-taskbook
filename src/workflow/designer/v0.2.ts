@@ -11,7 +11,7 @@ export type { DesignInput };
 type Drafting = Extract<DraftState, {kind: "working"}>;
 type DraftApproval = Extract<DraftState, {kind: "approved"}>;
 type DraftPause = Extract<DraftState, {kind: "paused"}>;
-type Checkpoint = Drafting["checkpoint"];
+type Progress = Drafting["progress"];
 type Direction = {author: "lead" | "user"; text: string; question?: string; evidence?: string; factId?: string; designer?: Designer};
 type Escalation = {designer: Designer; question: string; evidence: string; factId?: string};
 type Decision = {kind: "signoff"; approved: DraftApproval} |
@@ -19,7 +19,7 @@ type Decision = {kind: "signoff"; approved: DraftApproval} |
   {kind: "disagreement"; previous: Drafting; issue: Escalation};
 
 type DraftWork = Drafting & {authority: Direction[]};
-type LeadWork = {kind: "working"; work: "lead-decision"; checkpoint: Checkpoint; id: string; decision: Decision; authority: Direction[]};
+type LeadWork = {kind: "working"; work: "lead-decision"; progress: Progress; id: string; decision: Decision; authority: Direction[]};
 type Paused = {kind: "paused"; previous: LeadWork; question: string; evidence: string; factId?: string};
 type Approved = DraftApproval & {authority: Direction[]; signedBy: "lead"};
 export type DesignerState = (DraftWork | LeadWork | Paused | Approved) & {protocol: typeof designerVersion};
@@ -41,8 +41,8 @@ function schemaFor(decision: Decision) {
 
 function leadDecision(decision: Decision, authority: Direction[]): LeadWork & Pick<DesignerState, "protocol"> {
   const previous = decision.kind === "signoff" ? decision.approved : decision.previous;
-  const checkpoint = {...previous.checkpoint, serial: previous.checkpoint.serial + 1};
-  return {kind: "working", work: "lead-decision", protocol: designerVersion, checkpoint, id: `${checkpoint.input.runId}:lead-decision:${checkpoint.serial}`,
+  const progress = {...previous.progress, serial: previous.progress.serial + 1};
+  return {kind: "working", work: "lead-decision", protocol: designerVersion, progress, id: `${progress.input.runId}:lead-decision:${progress.serial}`,
     decision, authority};
 }
 
@@ -58,8 +58,8 @@ export function designerTurns(state: DesignerState) {
     const material = state.decision.kind === "signoff" ? {candidate: state.decision.approved.candidate,
       approvedBy: ["member-a", "member-b"]} : {issue: state.decision.issue};
     return [{id: state.id, designer: "lead" as const, work: state.work, prompt: decisionPrompt,
-      schema: schemaFor(state.decision), context: structuredClone({protocol: designerVersion, ...designContext(state.checkpoint.input),
-        round: state.checkpoint.round, kind: state.decision.kind, materials: material, authority: state.authority})}];
+      schema: schemaFor(state.decision), context: structuredClone({protocol: designerVersion, ...designContext(state.progress.input),
+        round: state.progress.round, kind: state.decision.kind, materials: material, authority: state.authority})}];
   }
   return draftTurns(state).map(turn => {
     const draft = state.work === "draft";
@@ -77,33 +77,33 @@ function pause(state: LeadWork, request: Omit<Escalation, "designer">): Designer
 }
 
 function resumeRound(state: LeadWork, previous: Drafting, authority: Direction[]): DesignerState {
-  let serial = state.checkpoint.serial;
+  let serial = state.progress.serial;
   const slots = previous.slots.map(slot => slot.reply ? slot : {...slot, job: {...slot.job,
-    id: `${state.checkpoint.input.runId}:${state.checkpoint.round}:${slot.job.designer}:${++serial}`}});
-  return {...previous, checkpoint: {...state.checkpoint, serial}, slots, authority, protocol: designerVersion};
+    id: `${state.progress.input.runId}:${state.progress.round}:${slot.job.designer}:${++serial}`}});
+  return {...previous, progress: {...state.progress, serial}, slots, authority, protocol: designerVersion};
 }
 
 function resynthesize(state: LeadWork, authority: Direction[]): DesignerState {
-  const {checkpoint} = state;
-  const round = checkpoint.round + 1;
-  const serial = checkpoint.serial + 1;
-  return {kind: "working", work: "synthesize", protocol: designerVersion, checkpoint: {...checkpoint, round, serial, issues: []}, authority,
-    slots: [{job: {id: `${checkpoint.input.runId}:${round}:lead:${serial}`, designer: "lead", work: "synthesize",
-      input: {drafts: checkpoint.candidate ? [] : checkpoint.drafts, resolved: checkpoint.resolved, previous: checkpoint.candidate}}}]};
+  const {progress} = state;
+  const round = progress.round + 1;
+  const serial = progress.serial + 1;
+  return {kind: "working", work: "synthesize", protocol: designerVersion, progress: {...progress, round, serial, issues: []}, authority,
+    slots: [{job: {id: `${progress.input.runId}:${round}:lead:${serial}`, designer: "lead", work: "synthesize",
+      input: {drafts: progress.candidate ? [] : progress.drafts, resolved: progress.resolved, previous: progress.candidate}}}]};
 }
 
 function reconsider(state: LeadWork, changes: Change[]): DesignerState {
-  const {checkpoint} = state;
-  const round = checkpoint.round + 1;
-  let serial = checkpoint.serial;
-  const version = checkpoint.candidate!.version;
-  const slots = designers.slice(1).map(designer => ({job: {id: `${checkpoint.input.runId}:${round}:${designer}:${++serial}`,
+  const {progress} = state;
+  const round = progress.round + 1;
+  let serial = progress.serial;
+  const version = progress.candidate!.version;
+  const slots = designers.slice(1).map(designer => ({job: {id: `${progress.input.runId}:${round}:${designer}:${++serial}`,
     designer, work: "respond" as const, input: {issues: changes.map((proposal, index) => ({
       id: `${round}:lead:${designer}:${index + 1}`, author: designer, proposer: "lead" as const, version,
       original: proposal, proposal, replies: [],
     }))}}}));
   const issues = slots.flatMap(slot => slot.job.input.issues);
-  return {kind: "working", work: "respond", protocol: designerVersion, checkpoint: {...checkpoint, round, serial, issues},
+  return {kind: "working", work: "respond", protocol: designerVersion, progress: {...progress, round, serial, issues},
     authority: state.authority, slots};
 }
 
@@ -115,7 +115,7 @@ export function settleDesignerTurn(state: DesignerState, event: Parameters<typeo
     const {decision} = state;
     if (decision.kind === "signoff" && Value.Check(approve, event.result)) {
       if (event.result.version !== decision.approved.candidate.version) throw new Error("Lead must sign the confirmed plan version.");
-      return {...decision.approved, protocol: designerVersion, checkpoint: state.checkpoint, authority: state.authority, signedBy: "lead"};
+      return {...decision.approved, protocol: designerVersion, progress: state.progress, authority: state.authority, signedBy: "lead"};
     }
     if (decision.kind === "signoff" && Value.Check(revise, event.result)) {
       return reconsider(state, structuredClone(event.result.changes));

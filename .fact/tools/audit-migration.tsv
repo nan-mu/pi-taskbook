@@ -1,4 +1,4 @@
 id	fact	source	labels
 setup-archive-scope	After the user approves archival, taskbook_migrate preserves the original .audit directory.	39c219e56dc3:src/setup/command.ts | 39c219e56dc3:prompts/setup.md	
 legacy-cleanup	Cleanup requires a verified archive. An active glossary inside .audit, a legacy fact still awaiting import, or an unresolved recognized source blocks deletion.	src/setup/command.ts | src/setup/audit-facts.ts	facts
-legacy-archive	An approved audit archive lives under the absolute worktree Git directory in pi-taskbook/legacy-audit; recoverable checkpoints are copied to pi-taskbook/runs.	39c219e56dc3:src/setup/audit-migration.ts | 39c219e56dc3:src/setup/command.ts	facts
+legacy-archive	An approved audit archive lives under the absolute worktree Git directory in pi-taskbook/legacy-audit.	src/setup/audit-migration.ts | src/setup/command.ts	facts

@@ -63,11 +63,11 @@ function migrationPlan(run: MigrationSession, operation: MigrationOperation, inp
   }
   if (operation === "delete-audit") checkCleanup();
   const title = operation === "migrate" ? "归档 .audit" : "清理已归档的 .audit";
-  const description = operation === "migrate" ? `归档到 ${audit.archive}，复制可恢复的检查点并保留原件。` :
+  const description = operation === "migrate" ? `归档到 ${audit.archive} 并保留原件。` :
     `删除 ${root}/.audit。核对过的归档保存在 ${audit.archive}。`;
   return {title, description, apply() {
     if (inventoryDigest(inspectAuditMigration(root)) !== inventoryDigest(audit)) throw new Error("旧资料已变化，需重新盘点并批准。");
-    if (operation === "migrate") return {audit: migrateAudit(root, repository, audit.snapshot.digest)};
+    if (operation === "migrate") return {audit: migrateAudit(root, audit.snapshot.digest)};
     checkCleanup();
     deleteMigratedAudit(root, audit.snapshot.digest);
     return {deleted: ".audit", archive: audit.archive};

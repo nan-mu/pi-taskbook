@@ -1,3 +1,3 @@
 id	fact	source	labels
-legacy-syntax	A taskbook with legacy Project memory instructions requires the legacy fact store. If it includes a term operation, the declared glossary must also exist.	39c219e56dc3:src/workflow/checkpoint.ts#L101-L108 | 39c219e56dc3:docs/project-memory.md	facts,migration
+legacy-syntax	A taskbook with legacy Project memory instructions requires the legacy fact store. If it includes a term operation, the declared glossary must also exist.	src/workflow/run.ts | 39c219e56dc3:docs/project-memory.md	facts,migration
 legacy-operation-format	A legacy memory instruction names the operation, kind, key, expected version, scope, and fact text or retirement reason.	39c219e56dc3:src/facts/project-memory-format.ts | 39c219e56dc3:docs/project-memory.md#L11-L22	facts,migration

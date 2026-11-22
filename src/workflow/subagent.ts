@@ -1,5 +1,4 @@
-import { lstatSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   createAgentSession, DefaultResourceLoader, getAgentDir, ModelRuntime, SessionManager, SettingsManager,
@@ -13,8 +12,7 @@ import { modelKey, type RoleSelection } from "../models/config.ts";
 import { alwaysPrompt } from "../facts/always.ts";
 import { factAccessRestriction } from "../facts/access.ts";
 import { git } from "../taskbook/document.ts";
-import { privateDirectory } from "./run-paths.ts";
-import { cleanRevision, type Run } from "./checkpoint.ts";
+import { cleanRevision, type Run } from "./run.ts";
 
 export type Seat = "lead" | "member-a" | "member-b" | "implementer";
 export type WorkTurn = {id: string; work: string; prompt: string; context: unknown; schema: TSchema};
@@ -33,24 +31,13 @@ const resultName = "taskbook_work_result";
 export const subagentTool = "subagent";
 const subagentDescription = "Report a Taskbook-dispatched worker to the host. Invoked by the Taskbook coordinator.";
 
-export async function subagentTurn({ run, ctx, seat, turn, route, tools = [], builtins = [], cleanContext = false, signal, activity }: {
+export async function subagentTurn({ run, ctx, seat, turn, route, tools = [], builtins = [], signal, activity }: {
   run: Run; ctx: ExtensionContext; seat: Seat; turn: WorkTurn; route: RoleSelection; tools?: ToolDefinition[];
-  builtins?: string[]; cleanContext?: boolean; signal: AbortSignal; activity?: (text: string) => void;
+  builtins?: string[]; signal: AbortSignal; activity?: (text: string) => void;
 }) {
   signal.throwIfAborted();
   const {root} = run;
-  const directory = privateDirectory(dirname(run.path), "workers", seat);
-  const [saved, ...duplicates] = readdirSync(directory).filter(name => name.endsWith(".jsonl"));
-  if (duplicates.length || (saved && !lstatSync(join(directory, saved)).isFile())) {
-    throw new Error("子代理会话目录无效 " + seat);
-  }
-  const parentSession = ctx.sessionManager.getSessionFile() ?? undefined;
-  const manager = saved ? SessionManager.open(join(directory, saved), directory)
-    : SessionManager.create(root, directory, {parentSession});
-  if (manager.getCwd() !== root) throw new Error("子代理会话的工作区不匹配 " + seat);
-  if (cleanContext && manager.getLeafId()) {
-    manager.appendCompaction("Previous turns are archived. Use the current assignment, revision and available evidence to locate the behavior to check; use earlier verdicts only as leads.", null, 0);
-  }
+  const manager = SessionManager.inMemory(root);
   const settingsManager = SettingsManager.inMemory();
   const agentDir = getAgentDir();
   const systemPrompt = [

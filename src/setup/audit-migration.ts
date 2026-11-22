@@ -3,7 +3,7 @@ import { chmodSync, constants, copyFileSync, lstatSync, mkdirSync, readFileSync,
 import { dirname, join } from "node:path";
 import { projectGlossaryPath } from "../facts/project-memory.ts";
 import { git } from "../taskbook/document.ts";
-import { ensureRunDirectory, privateDirectory } from "../workflow/run-paths.ts";
+import { privateDirectory } from "../taskbook/private-directory.ts";
 
 type AuditEntry = { path: string; digest: string | null };
 type AuditSnapshot = { digest: string; entries: AuditEntry[] };
@@ -50,38 +50,7 @@ export function inspectAuditMigration(root: string) {
   }
 }
 
-function restoreRuns(root: string, archive: string, snapshot: AuditSnapshot, repository: string) {
-  const unresolved: string[] = [];
-  let copied = 0;
-  for (const {path, digest} of snapshot.entries) {
-    const match = /^pi-taskbook\/([\w.-]+-[a-f0-9]{16})\/state\.json$/.exec(path);
-    if (!match || !digest) continue;
-    const source = join(archive, path);
-    let state;
-    try { state = JSON.parse(readFileSync(source, "utf8")); }
-    catch { unresolved.push(path); continue; }
-    if (![1, 2, 3].includes(state?.version) || typeof state.session !== "string" ||
-        typeof state.taskbook?.id !== "string" || typeof state.digest !== "string" ||
-        state.taskbook.digest !== state.digest || typeof state.taskbook.repository !== "string" ||
-        state.taskbook.repository.toLowerCase() !== repository ||
-        !Array.isArray(state.reports) || state.taskbook.id + "-" + state.digest.slice(0, 16) !== match[1]) {
-      unresolved.push(path);
-      continue;
-    }
-    const target = join(ensureRunDirectory(root, match[1]), "state.json");
-    const current = lstatSync(target, {throwIfNoEntry: false});
-    if (current) {
-      if (!current.isFile() || hash(readFileSync(target)) !== digest) unresolved.push(path);
-      continue;
-    }
-    copyFileSync(source, target, constants.COPYFILE_EXCL);
-    chmodSync(target, 0o600);
-    copied++;
-  }
-  return {copied, unresolved};
-}
-
-export function migrateAudit(root: string, repository: string, expectedDigest: string) {
+export function migrateAudit(root: string, expectedDigest: string) {
   const source = join(root, ".audit");
   const snapshot = scanAudit(source);
   if (snapshot?.digest !== expectedDigest) throw new Error(".audit 在批准前后发生变化，重新运行 /taskbook-setup。");
@@ -106,7 +75,7 @@ export function migrateAudit(root: string, repository: string, expectedDigest: s
     } finally { rmSync(temporary, {recursive: true, force: true}); }
   }
   if (scanAudit(archive)?.digest !== expectedDigest) throw new Error("现有审计归档与原件不符。");
-  return {archive, ...restoreRuns(root, archive, snapshot, repository)};
+  return {archive};
 }
 
 export function deleteMigratedAudit(root: string, expectedDigest: string) {

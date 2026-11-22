@@ -1,3 +1,3 @@
 id	fact	source	labels
 refresh-maintainer-extension	Publishing pi-taskbook changes includes updating the maintainer's installed extensions with p4 pi update --extensions and checking the update result.	.fact/always.tsv#refresh-pi-after-change	setup
-review-command-source-map	Trace a command from index.ts into src/setup for setup, src/taskbook and src/integrations/t3.ts for launch, or src/workflow/checkpoint.ts, phase-input.ts and transitions.ts for a running task.	39c219e56dc3:docs/review-guide.md#L5-L18 | 39c219e56dc3:index.ts#L592-L631	
+review-command-source-map	Trace a command from index.ts into src/setup for setup, src/taskbook and src/integrations/t3.ts for launch, or src/workflow/run.ts, phase-input.ts and team.ts for a running task.	39c219e56dc3:docs/review-guide.md#L5-L18 | 39c219e56dc3:index.ts#L592-L631	workflow

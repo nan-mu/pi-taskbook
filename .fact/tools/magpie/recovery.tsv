@@ -1,5 +1,4 @@
 id	fact	source	labels
-magpie-completion	Completion sync requires a reviewed candidate and the same approved project-memory revision. Current task-fact runs check the Review result; legacy runs check correctness and quality reports.	39c219e56dc3:index.ts	facts,handoff
-magpie-retry	The completion checkpoint stores the candidate revision, project-memory revision, item results and confirmations; a complete result for that pair skips another sync.	39c219e56dc3:index.ts | .fact/tools/magpie/recovery.tsv#magpie-completion	facts,handoff
+magpie-completion	Completion sync requires a reviewed candidate and the same approved project-memory revision. The active run checks the signed Review and reports the sync result in the current Pi session.	index.ts	facts,handoff
 magpie-source-mirror	The plugin stores a source-project mirror in .fact/<source-repository>/facts.tsv with its full owner identity and remote IDs. It establishes a local Git exclusion before writing and treats tracked files separately.	39c219e56dc3:src/integrations/magpie-memory.ts	facts
 magpie-source-retirement	A mirror keeps explicit retirement state and version; failed queries, missing pages or absent records leave existing entries available pending reconciliation.	39c219e56dc3:src/integrations/magpie-memory.ts	facts

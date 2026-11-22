@@ -1,6 +1,5 @@
 import type { Taskbook } from "../taskbook/document.ts";
 import type { CheckedFact } from "../facts/fact-check.ts";
-import type { Phase } from "./transitions.ts";
 
 export type TaskItem = { id: string; text: string; operation?: import("../facts/taskbook-intake.ts").FactOperation; userDecision?: FactDecision; topicFact?: {path: string; id: string} };
 export type FactConflict = { factId: string; observation: string; projectVersion?: number; projectHead?: string | null };
@@ -100,31 +99,4 @@ export function parseFactDecision(argument: string, conflict: FactConflict): Fac
     throw new Error("请针对 " + conflict.factId + " 给出 keep 和保留理由，或 replace 和完整的新事实。");
   }
   return { factId: match[1], action: match[2] as FactDecision["action"], text: match[3].trim() };
-}
-
-type PhaseReport = { phase: Phase; outcome: string; summary: string; evidence: string[] };
-export function workerContext<T extends PhaseReport>(phase: Phase, reports: T[]): T[] {
-  // The authoritative fact snapshot is supplied separately. Exclude obsolete
-  // approvals and superseded implementation summaries from new model calls.
-  if (phase === "fact-check") {
-    const review = reports.findLast(report => report.phase === "fact-review");
-    return review?.outcome === "rework" ? [review] : [];
-  }
-  const latest = (name: Phase) => reports.findLast(report => report.phase === name);
-  const chosen: (T | undefined)[] = [];
-  if (phase !== "design") chosen.push(latest("design"));
-  if (phase === "implement") {
-    const lastReview = reports.findLast(report => report.phase === "review" || report.phase === "correctness" || report.phase === "quality");
-    if (lastReview?.outcome === "rework") chosen.push(lastReview);
-  }
-  if (phase === "performance") {
-    const implementation = reports.findLastIndex(report => report.phase === "implement");
-    if (implementation >= 0) {
-      chosen.push(reports[implementation]);
-      const request = reports.slice(implementation + 1).findLast(report =>
-        (report.phase === "review" || report.phase === "correctness" || report.phase === "quality") && report.outcome === "measure");
-      if (request) chosen.push(request);
-    }
-  }
-  return chosen.filter((report): report is T => report !== undefined);
 }

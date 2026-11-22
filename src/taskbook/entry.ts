@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { privateDirectory } from "../workflow/run-paths.ts";
+import { privateDirectory } from "./private-directory.ts";
 import { git, parseTaskbook, readTaskbook, resolveBase, taskRepository, workspace, type Taskbook } from "./document.ts";
 
 export type PreparedEntry = { path: string; worktree?: string; digest: string; base: string; branch?: string };

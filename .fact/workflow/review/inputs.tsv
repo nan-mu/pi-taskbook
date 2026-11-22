@@ -1,3 +1,4 @@
 id	fact	source	labels
 term-review	Review determines whether the current candidate is ready for delivery.	39c219e56dc3:.fact/terms.tsv#L12	terms
 review-fact-scope	Reviewers assess the candidate against the taskbook goals, delivery requirements, recorded user answers, and applicable project conventions. They use current candidate evidence and review the draft facts from Design and Implement.	src/workflow/team.ts | prompts/review/common.md	facts,review
+verify-command-evidence	Review can read the latest verification and paginated command receipts for the current candidate.	src/workflow/team.ts | prompts/review/common.md	review

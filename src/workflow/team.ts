@@ -9,7 +9,7 @@ import { readProjectMemory } from "../facts/project-memory.ts";
 import { resolveModel, roleSelection, type RoleSelection } from "../models/config.ts";
 import { inspectionTool, type Inspection } from "../review/reviewer.ts";
 import { git, workspace } from "../taskbook/document.ts";
-import { checkpoint, cleanRevision, type Run } from "./checkpoint.ts";
+import { setRunState, cleanRevision, type Run } from "./run.ts";
 import { archiveDesign } from "./design-archive.ts";
 import { answerDesigner, designerTurns, settleDesignerTurn, startDesigner, type DesignerState } from "./designer/v0.2.ts";
 import { implementerTurn, playbooks, resumeImplementer, reworkImplementer, settleImplementerTurn, startImplementer,
@@ -32,7 +32,7 @@ export type Team = {
   designBase?: string;
   archiveRevision?: string;
   trialBase?: string;
-  registered?: {revision: string; diff: string};
+  registered?: {revision: string};
   placements?: FactPlacement[];
   handoff?: string;
   pullRequest?: PullRequestAction;
@@ -67,7 +67,7 @@ function factTool(run: Run, lookup: Set<string>): ToolDefinition<typeof factPara
       const evidence = /^observation:P([1-9]\d*)$/iu.exec(query.trim());
       if (evidence && run.state.phase === "design") {
         const design = run.state.team?.design;
-        const observation = design?.kind === "working" ? design.checkpoint.input.observations?.[Number(evidence[1]) - 1] : undefined;
+        const observation = design?.kind === "working" ? design.progress.input.observations?.[Number(evidence[1]) - 1] : undefined;
         if (!observation) throw new Error("没有该核查观察。请选择当前任务包中的观察 ID。");
         const {claim, observed, origin, source} = observation;
         return {content: [{type: "text", text: JSON.stringify({claim, observed, origin, source})}], details: {}};
@@ -128,21 +128,21 @@ export function resumeTeam(run: Run, answer: string) {
   if (!team || !pendingQuestion) return false;
   const next = {...team};
   if (phase === "fact-registration" || phase === "handoff") {
-    checkpoint(run, {...run.state, pendingQuestion: undefined,
+    setRunState(run, {...run.state, pendingQuestion: undefined,
       userAnswers: [...(run.state.userAnswers ?? []), {question: pendingQuestion.question, answer}]});
     return true;
   }
   if (phase === "review" && team.review?.kind === "needs-user") next.review = answerReviewUser(team.review, answer);
   else if (phase === "review" && team.review?.kind === "rework" && team.implement?.kind === "handoff") {
     next.implement = reworkImplementer(team.implement, JSON.stringify({findings: team.review.findings, userDecision: answer}));
-    checkpoint(run, {...run.state, team: next, phase: "implement", revision: undefined, candidateId: undefined, pendingQuestion: undefined,
+    setRunState(run, {...run.state, team: next, phase: "implement", revision: undefined, candidateId: undefined, pendingQuestion: undefined,
       userAnswers: [...(run.state.userAnswers ?? []), {question: pendingQuestion.question, answer}]});
     return true;
   }
   else if (phase === "design" && team.design?.kind === "paused") next.design = answerDesigner(team.design, answer);
   else if (phase === "implement" && team.implement?.kind === "paused") next.implement = resumeImplementer(team.implement, answer);
   else return false;
-  checkpoint(run, {...run.state, team: next, pendingQuestion: undefined,
+  setRunState(run, {...run.state, team: next, pendingQuestion: undefined,
     userAnswers: [...(run.state.userAnswers ?? []), {question: pendingQuestion.question, answer}]});
   return true;
 }
@@ -150,17 +150,17 @@ export function resumeTeam(run: Run, answer: string) {
 export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: AbortSignal,
   status: (value: string) => void, runWorker: ReturnType<typeof registerSubagentTool>) {
   const id = run.task.digest;
-  const persist = (team: Team, patch: Partial<Run["state"]> = {}) => checkpoint(run, {...run.state, ...patch, team});
-  const pause = (question: string) => checkpoint(run, {...run.state, pendingQuestion: {question}});
+  const updateTeam = (team: Team, patch: Partial<Run["state"]> = {}) => setRunState(run, {...run.state, ...patch, team});
+  const pause = (question: string) => setRunState(run, {...run.state, pendingQuestion: {question}});
   const pauseForFact = (factId: string, observation: string) => {
     const snapshot = readProjectMemory(run.root);
     const record = snapshot.records[factId];
-    checkpoint(run, {...run.state, pendingConflicts: [{factId, observation, projectVersion: record?.version,
+    setRunState(run, {...run.state, pendingConflicts: [{factId, observation, projectVersion: record?.version,
       projectHead: record ? snapshot.head : undefined}]});
   };
   const fetchDrafts = (team: Team) => team.drafts ?? [];
   const dispatch = async (seat: Seat, turn: WorkTurn, snapshot: string, options: {
-    review?: boolean; cleanContext?: boolean; writable?: boolean; evidence?: boolean;
+    review?: boolean; writable?: boolean; evidence?: boolean;
   } = {}) => {
     const observations: Inspection[] = [];
     const lookedUp = new Set<string>();
@@ -171,13 +171,15 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
     if (options.evidence) {
       tools.push({
         name: "taskbook_review_evidence", label: "Read candidate verification",
-        description: "Read the Implementer's verification and other work records for this particular candidate.",
-        parameters: Type.Object({}, {additionalProperties: false}),
-        async execute() {
+        description: "Read the Implementer's latest verification and a page of command receipts for this candidate.",
+        parameters: Type.Object({offset: Type.Optional(Type.Integer({minimum: 0}))}, {additionalProperties: false}),
+        async execute(_id, {offset = 0}) {
           const implementation = run.state.team?.implement;
           if (implementation?.kind !== "handoff" || run.state.revision !== snapshot) throw new Error("Candidate evidence no longer applies.");
-          const commands = (run.state.team?.commands ?? []).filter(command => isCandidateReceipt(command, snapshot));
-          const text = JSON.stringify({records: implementation.checkpoint.records, commands});
+          const commands = (run.state.team?.commands ?? []).filter(command => isCandidateReceipt(command, snapshot)).reverse();
+          const page = commands.slice(offset, offset + 4);
+          const text = JSON.stringify({verification: offset === 0 ? implementation.progress.records.at(-1)?.result : undefined,
+            commands: page, nextOffset: offset + page.length < commands.length ? offset + page.length : undefined});
           return {content: [{type: "text", text}], details: {}};
         },
       });
@@ -187,7 +189,7 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
     const route: RoleSelection = prior
       ? {model: resolveModel(ctx, prior.model), thinkingLevel: prior.thinking}
       : roleSelection(ctx, run.root, run.state.routes!, role);
-    const reply = await runWorker({run, ctx, seat, turn, route, tools, cleanContext: options.cleanContext || seat === "implementer", signal,
+    const reply = await runWorker({run, ctx, seat, turn, route, tools, signal,
       builtins: options.writable ? ["read", "bash", "edit", "write", "grep", "find", "ls"] : []});
     return {...reply, observations, lookedUp};
   };
@@ -229,7 +231,7 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
           taskbook: run.task.markdown, facts: context.facts.map(fact => fact.id + " " + fact.text +
             (fact.userDecision ? " (User decision: " + JSON.stringify(fact.userDecision) + ")" : "")),
           targetIds: [...context.goals, ...context.delivery].map(item => item.id)});
-        persist({...team, design, designBase: baseline});
+        updateTeam({...team, design, designBase: baseline});
         continue;
       }
       if (team.design.kind === "paused") {
@@ -238,16 +240,16 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
         return pause([question, factId, evidence].filter(Boolean).join("\n"));
       }
       if (team.design.kind === "approved") {
-        const {candidate, checkpoint: designCheckpoint} = team.design;
+        const {candidate, progress: designProgress} = team.design;
         const plan = {...candidate.plan, version: (state.plan?.version ?? 0) + 1};
-        const authored = designCheckpoint.drafts.reduce((all, entry) =>
+        const authored = designProgress.drafts.reduce((all, entry) =>
           addDrafts(all, entry.draft.facts.map(text => ({text, source: "Designer draft " + entry.version})), entry.designer, "draft"), fetchDrafts(team));
-        const drafts = designCheckpoint.consultations.reduce((all, entry) =>
+        const drafts = designProgress.consultations.reduce((all, entry) =>
           addDrafts(all, entry.result.draftFacts, entry.designer, "consult"), authored);
         const archiveRevision = archiveDesign(run.root, run.task, state.base, state.branch, plan, state.taskFacts!, candidate.draft);
         const report = {phase: "design", outcome: "pass", summary: candidate.draft.goal, evidence: [candidate.version],
           plan, planVersion: plan.version} as const;
-        persist({...team, drafts, archiveRevision}, {phase: "implement", plan, reports: [...state.reports, {...report, evidence: [...report.evidence]}]});
+        updateTeam({...team, drafts, archiveRevision}, {phase: "implement", plan, reports: [...state.reports, {...report, evidence: [...report.evidence]}]});
         continue;
       }
       const turns: (WorkTurn & {designer: Exclude<Seat, "implementer">})[] = designerTurns(team.design);
@@ -255,10 +257,10 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
       await settledBatch(turns, turn => dispatch(turn.designer, {
         ...turn, prompt: turn.prompt + "\n\n" + "Primary taskbook facts are tagged " + taskFactLabel(run.task) +
           ". Query project facts or an observation ID through taskbook_query_facts when the decision needs it. Inspect only the source passage needed for the current judgment. For a conflict with an authored fact, flag both source locations and the affected decision for the Lead.",
-      }, team.designBase!, {cleanContext: true}), (turn, reply) => {
+      }, team.designBase!), (turn, reply) => {
         const current = run.state.team!;
         const design = settleDesignerTurn(current.design!, {id: turn.id, settled: true, result: reply.result});
-        if (design !== current.design) persist({...current, design, receipts: [...(current.receipts ?? []), reply.receipt]});
+        if (design !== current.design) updateTeam({...current, design, receipts: [...(current.receipts ?? []), reply.receipt]});
       }, true);
       continue;
     }
@@ -270,7 +272,7 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
         const approved = team.design?.kind === "approved" ? team.design.candidate.draft : undefined;
         const playbook = selectedPlaybook(run.task.markdown);
         const hillclimb = playbook === "hillclimb" ? {target: context.goals.map(item => item.text).join("\n"), minAttempts: 1, maxAttempts: 3} : undefined;
-        persist({...team, implement: startImplementer({runId: id + ":implement:" + state.plan.version, taskType: run.task.type,
+        updateTeam({...team, implement: startImplementer({runId: id + ":implement:" + state.plan.version, taskType: run.task.type,
           taskbook: run.task.markdown + "\n\nApproved design, taskbook fact label, facts and decisions:\n" +
             JSON.stringify({approved, taskFactLabel: taskFactLabel(run.task), facts: state.taskFacts, userAnswers: state.userAnswers}),
           tasks: state.plan.steps.map(step => JSON.stringify(step)), playbook, hillclimb})});
@@ -288,7 +290,7 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
           const result = reply.result;
           if (!Value.Check(answerSchema, result)) throw new Error("无效的 Lead Consult 答案。");
           const outcome: Static<typeof answerSchema> = result;
-          persist({...team, implement: outcome.kind === "answer" ? resumeImplementer(implementation, outcome.answer) : implementation,
+          updateTeam({...team, implement: outcome.kind === "answer" ? resumeImplementer(implementation, outcome.answer) : implementation,
             receipts: [...(team.receipts ?? []), reply.receipt]},
             outcome.kind === "ask-user" ? {pendingQuestion: {question: outcome.question + "\n" + evidence}} : {});
         });
@@ -300,21 +302,21 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
         if (!team.archiveRevision || git(run.root, "diff", "--name-only", team.archiveRevision, revision, "--", ".fact")) {
           throw new Error("Implement 提交更改了项目事实。请将待审核的事实提交为 Draft Facts。");
         }
-        const verify = implementation.checkpoint.records.at(-1);
+        const verify = implementation.progress.records.at(-1);
         if (!verify || verify.work !== "verify" || verify.result.kind !== "verified") throw new Error("Implement 交接缺少验证结果。");
         const review = startReviewFlow({runId: id, goals: context.goals,
-          candidate: {revision, evidenceVersion: hash([implementation.checkpoint.records, fetchDrafts(team), team.commands])}, previous: team.review});
+          candidate: {revision, evidenceVersion: hash([implementation.progress.records, fetchDrafts(team), team.commands])}, previous: team.review});
         const candidateId = randomUUID();
         const summary = verify.result.summary;
-        persist({...team, review}, {phase: "review", revision, candidateId,
+        updateTeam({...team, review}, {phase: "review", revision, candidateId,
           reports: [...state.reports, {phase: "implement", outcome: "pass", summary, evidence: verify.result.evidence,
             candidateId, planVersion: state.plan?.version}]});
         continue;
       }
       const turn = implementerTurn(implementation)!;
-      const hillclimb = implementation.checkpoint.playbook === "hillclimb";
+      const hillclimb = implementation.progress.playbook === "hillclimb";
       const trialBase = hillclimb && turn.work === "choose" ? cleanRevision(run) : team.trialBase;
-      status("Implement · " + implementation.checkpoint.playbook + " / " + turn.work);
+      status("Implement · " + implementation.progress.playbook + " / " + turn.work);
       await settledBatch([turn], work => dispatch("implementer", {...work, prompt: work.prompt + "\n\n" +
         "Use the approved tasks and primary taskbook facts. Start each implementation slice from a known state, change one independently verifiable behavior, and check it on the candidate before moving on. Resolve local decisions in Consult and send plan or scope decisions to the Lead. " +
         "Keep delivery commits local until Handoff publishes the signed revision. Report durable new knowledge as sourced draft facts. " +
@@ -341,7 +343,7 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
         }
         const schema = Type.Object({draftFacts: Type.Optional(Type.Array(Type.Object({text: Type.String(), source: Type.String()})))});
         const drafts = Value.Check(schema, reply.result) ? addDrafts(fetchDrafts(team), reply.result.draftFacts ?? [], "implementer", turn.work) : fetchDrafts(team);
-        persist({...team, implement, drafts, trialBase, commands: [...(team.commands ?? []), ...reply.commands], receipts: [...(team.receipts ?? []), reply.receipt]});
+        updateTeam({...team, implement, drafts, trialBase, commands: [...(team.commands ?? []), ...reply.commands], receipts: [...(team.receipts ?? []), reply.receipt]});
       });
       continue;
     }
@@ -363,14 +365,14 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
       if (already) return pause("同一提交再次被退回。请决定如何推进。\n" + review.summary);
       const report = {phase: "review", outcome: "rework", reviewInput: revision, summary: review.summary, evidence: review.findings.map(finding => finding.detail)} as const;
       const feedback = JSON.stringify({summary: review.summary, findings: review.findings});
-      persist({...team, implement: reworkImplementer(implementation, feedback)}, {phase: "implement", revision: undefined,
+      updateTeam({...team, implement: reworkImplementer(implementation, feedback)}, {phase: "implement", revision: undefined,
         candidateId: undefined, reports: [...state.reports, report]});
       continue;
     }
     if (review.kind === "approved") {
       const approvedDrafts = review.draftFacts.filter(fact => fact.decision === "keep");
       const evidence = [revision, ...approvedDrafts.map(fact => fact.id)];
-      persist(team, {phase: "fact-registration",
+      updateTeam(team, {phase: "fact-registration",
         reports: [...state.reports, {phase: "review", outcome: "pass", summary: review.summary, evidence,
           candidateId: state.candidateId, projectHead: state.approvedProjectHead}]});
       return;
@@ -380,7 +382,7 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
     await settledBatch(turns, turn => dispatch(turn.designer, {...turn, context: {
       ...turn.context, delivery: context.delivery, userAnswers: state.userAnswers, taskFactLabel: taskFactLabel(run.task),
     }}, revision, {
-      review: true, cleanContext: turn.cleanContext || turn.work.startsWith("initial-"), evidence: true,
+      review: true, evidence: true,
     }), (turn, reply) => {
       assertCandidate(run, revision);
       const result = reply.result;
@@ -414,7 +416,7 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
       }
       const current = run.state.team!;
       const next = settleReviewTurn(current.review!, {id: turn.id, settled: true, result});
-      if (next !== current.review) persist({...current, review: next, receipts: [...(current.receipts ?? []), reply.receipt]});
+      if (next !== current.review) updateTeam({...current, review: next, receipts: [...(current.receipts ?? []), reply.receipt]});
     });
   }
 }

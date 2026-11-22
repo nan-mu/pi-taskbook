@@ -18,38 +18,3 @@ export const titles: Record<Phase, string> = {
   "fact-registration": "Fact Management · 登记审核通过的草稿事实",
   handoff: "Handoff · 整理交付",
 };
-
-export function restorePhase(type: TaskType, savedPhase: string): Phase {
-  const fix = type.startsWith("fix-");
-  if (savedPhase === (fix ? "reproduce-defect" : "confirm-premises")) return "fact-check";
-  if (savedPhase === (fix ? "implement-fix" : "implement-new")) return "implement";
-  const phase = stages.find(candidate => candidate === savedPhase);
-  if (!phase) throw new Error("审计中的阶段与任务书类型不匹配。");
-  return phase;
-}
-
-export function nextPhase(type: TaskType, phase: Phase, outcome: Outcome, measured = false, unifiedReview = false): Phase | "ready" | "blocked" {
-  if (outcome === "needs-user" && phase === "fact-check") return "fact-check";
-  if (outcome === "plan-gap" || outcome === "needs-user") {
-    if (phase !== (outcome === "plan-gap" ? "implement" : "design")) throw new Error("此阶段不能作此设计决定。");
-    return "design";
-  }
-  if (outcome === "blocked") return "blocked";
-  if (outcome === "fact-conflict") return phase;
-  if (outcome === "pass" && phase === "fact-check") return unifiedReview ? "fact-management" : "fact-review";
-  if (outcome === "pass" && phase === "fact-review") return unifiedReview ? "fact-management" : "design";
-  if (outcome === "pass" && phase === "fact-management") return "design";
-  if (outcome === "rework") {
-    if (phase === "fact-review") return "fact-check";
-    if (phase === "review" || phase === "correctness" || phase === "quality") return "implement";
-    throw new Error("返工须由独立审核提出。");
-  }
-  if (outcome === "measure") {
-    if (phase !== "review" && phase !== "correctness" && phase !== "quality") throw new Error("正式测量须由交付审核提出。");
-    return measured ? "blocked" : "performance";
-  }
-  if (phase === "implement" && type.endsWith("-experiment")) return "performance";
-  if (phase === "review" || phase === "quality") return "ready";
-  if (phase === "performance" || (phase === "implement" && unifiedReview)) return unifiedReview ? "review" : "correctness";
-  return stages[stages.indexOf(phase) + 1]!;
-}

@@ -21,24 +21,24 @@ type RoundJob = {id: string; designer: Designer; work: RoundWork; input: WorkInp
 type ConsultJob = {id: string; designer: Designer; work: "consult"; question: string; evidence: string; returnTo: RoundJob};
 type Job = RoundJob | ConsultJob;
 type Slot = {job: Job; reply?: CompletedReply};
-type Checkpoint = {
+type Progress = {
   protocol: typeof designerVersion; input: DesignInput; round: number; serial: number; drafts: DraftEntry[];
   issues: Issue[]; resolved: Issue[]; seenProposals: string[]; candidate?: Candidate;
   consultations: {designer: Designer; question: string; result: Consultation}[];
 };
-type Working = {kind: "working"; work: RoundWork; checkpoint: Checkpoint; slots: Slot[]};
+type Working = {kind: "working"; work: RoundWork; progress: Progress; slots: Slot[]};
 export type DesignerState = Working |
   {kind: "paused"; previous: Working; question: string; evidence: string; factId?: string} |
-  {kind: "approved"; checkpoint: Checkpoint; candidate: Candidate};
+  {kind: "approved"; progress: Progress; candidate: Candidate};
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
-function begin(checkpoint: Checkpoint, work: RoundWork, turns: {designer: Designer; input: WorkInput}[]): Working {
-  const round = checkpoint.round + 1;
+function begin(progress: Progress, work: RoundWork, turns: {designer: Designer; input: WorkInput}[]): Working {
+  const round = progress.round + 1;
   const slots = turns.map(({designer, input}, index) => ({job: {
-    id: `${checkpoint.input.runId}:${round}:${designer}:${checkpoint.serial + index + 1}`, designer, work, input,
+    id: `${progress.input.runId}:${round}:${designer}:${progress.serial + index + 1}`, designer, work, input,
   }}));
-  return {kind: "working", work, slots, checkpoint: {...checkpoint, round, serial: checkpoint.serial + slots.length}};
+  return {kind: "working", work, slots, progress: {...progress, round, serial: progress.serial + slots.length}};
 }
 
 export function startDesigner(input: DesignInput): DesignerState {
@@ -57,7 +57,7 @@ export function designContext(input: DesignInput) {
 
 export function designerTurns(state: DesignerState) {
   if (state.kind !== "working") return [];
-  const {input, consultations, round} = state.checkpoint;
+  const {input, consultations, round} = state.progress;
   const assignment = designContext(input);
   return state.slots.filter(slot => !slot.reply).map(({job}) => {
     const current = job.work === "consult" ? job.returnTo.input : job.input;
@@ -87,7 +87,7 @@ function sameIds(actual: string[], expected: string[]) {
 }
 
 function validateReply(state: Working, job: RoundJob, reply: CompletedReply) {
-  const {issues, resolved, candidate} = state.checkpoint;
+  const {issues, resolved, candidate} = state.progress;
   if (reply.kind === "compare" && !sameIds(reply.reviews.map(item => item.designer), designers.filter(id => id !== job.designer))) {
     throw new Error("Compare needs one result for each peer draft.");
   }
@@ -103,7 +103,7 @@ function validateReply(state: Working, job: RoundJob, reply: CompletedReply) {
   }
   if (reply.kind === "synthesize") {
     if (!sameIds(reply.appliedIssues, resolved.map(issue => issue.id))) throw new Error("The final design needs to account for all resolved issues.");
-    acceptPlan(reply.plan.steps, [...state.checkpoint.input.targetIds]);
+    acceptPlan(reply.plan.steps, [...state.progress.input.targetIds]);
   }
   if ((reply.kind === "approved" || reply.kind === "objected") && reply.version !== candidate?.version) {
     throw new Error("Confirmation needs the current candidate version.");
@@ -124,8 +124,8 @@ export function settleDesignerTurn(state: DesignerState, event: {id: string; set
       work: "consult", designer: slot.job.designer, returnTo: slot.job});
   }
   if (result.kind === "answered" && slot.job.work === "consult") {
-    const consultations = [...state.checkpoint.consultations, {designer: slot.job.designer, question: slot.job.question, result}];
-    return replaceJob({...state, checkpoint: {...state.checkpoint, consultations}}, slot, slot.job.returnTo);
+    const consultations = [...state.progress.consultations, {designer: slot.job.designer, question: slot.job.question, result}];
+    return replaceJob({...state, progress: {...state.progress, consultations}}, slot, slot.job.returnTo);
   }
   if (result.kind === "consult" || result.kind === "answered" || slot.job.work === "consult") throw new Error("Invalid Consult transition.");
   validateReply(state, slot.job, result);
@@ -135,27 +135,27 @@ export function settleDesignerTurn(state: DesignerState, event: {id: string; set
 }
 
 function replaceJob(state: Working, slot: Slot, job: Omit<ConsultJob, "id"> | RoundJob): Working {
-  const {checkpoint} = state;
-  const serial = checkpoint.serial + 1;
-  const id = `${checkpoint.input.runId}:${checkpoint.round}:${job.designer}:${serial}`;
-  return {...state, checkpoint: {...checkpoint, serial}, slots: state.slots.map(item => item === slot ? {job: {...job, id}} : item)};
+  const {progress} = state;
+  const serial = progress.serial + 1;
+  const id = `${progress.input.runId}:${progress.round}:${job.designer}:${serial}`;
+  return {...state, progress: {...progress, serial}, slots: state.slots.map(item => item === slot ? {job: {...job, id}} : item)};
 }
 
 function makeIssue(id: string, author: Designer, proposer: Designer, version: string, change: Change): Issue {
   return {id, author, proposer, version, original: change, proposal: change, replies: []};
 }
 
-function assignIssues(checkpoint: Checkpoint, work: "respond" | "reconcile") {
+function assignIssues(progress: Progress, work: "respond" | "reconcile") {
   const turns = designers.flatMap(designer => {
-    const issues = checkpoint.issues.filter(issue => work === "respond" ? issue.author === designer : issue.author !== designer);
+    const issues = progress.issues.filter(issue => work === "respond" ? issue.author === designer : issue.author !== designer);
     return issues.length ? [{designer, input: {issues}}] : [];
   });
-  return begin(checkpoint, work, turns);
+  return begin(progress, work, turns);
 }
 
-function synthesize(checkpoint: Checkpoint) {
-  return begin(checkpoint, "synthesize", [{designer: "lead",
-    input: {drafts: checkpoint.candidate ? [] : checkpoint.drafts, resolved: checkpoint.resolved, previous: checkpoint.candidate}}]);
+function synthesize(progress: Progress) {
+  return begin(progress, "synthesize", [{designer: "lead",
+    input: {drafts: progress.candidate ? [] : progress.drafts, resolved: progress.resolved, previous: progress.candidate}}]);
 }
 
 function confirmationChanges(previous: Candidate, current: Candidate): ConfirmationChanges {
@@ -175,19 +175,19 @@ function pauseRepeated(state: Working, issues: Issue[]): DesignerState {
 }
 
 function advance(state: Working): DesignerState {
-  const checkpoint = state.checkpoint;
+  const progress = state.progress;
   switch (state.work) {
     case "draft": {
       const drafts = submitted(state.slots, "draft").map(({designer, reply}) => ({designer, draft: reply.draft, version: digest(reply.draft)}));
-      return begin({...checkpoint, drafts}, "compare", designers.map(designer => ({designer, input: {drafts}})));
+      return begin({...progress, drafts}, "compare", designers.map(designer => ({designer, input: {drafts}})));
     }
     case "compare": {
       const issues = submitted(state.slots, "compare").flatMap(({designer, reply}) => reply.reviews.flatMap(review => {
-        const target = checkpoint.drafts.find(item => item.designer === review.designer)!;
-        return review.changes.map((change, index) => makeIssue(`${checkpoint.round}:${designer}:${target.designer}:${index + 1}`,
+        const target = progress.drafts.find(item => item.designer === review.designer)!;
+        return review.changes.map((change, index) => makeIssue(`${progress.round}:${designer}:${target.designer}:${index + 1}`,
           target.designer, designer, target.version, change));
       }));
-      return issues.length ? assignIssues({...checkpoint, issues}, "respond") : synthesize(checkpoint);
+      return issues.length ? assignIssues({...progress, issues}, "respond") : synthesize(progress);
     }
     case "respond": {
       const responses = new Map<string, Response>();
@@ -196,41 +196,41 @@ function advance(state: Working): DesignerState {
       }
       const accepted: Issue[] = [];
       const issues: Issue[] = [];
-      for (const issue of checkpoint.issues) {
+      for (const issue of progress.issues) {
         const response = responses.get(issue.id)!;
         if (response.decision === "accept") accepted.push(issue);
         else issues.push({...issue, proposal: {...issue.proposal, proposal: response.proposal, reason: response.reason}, replies: []});
       }
-      const next = {...checkpoint, resolved: [...checkpoint.resolved, ...accepted], issues};
+      const next = {...progress, resolved: [...progress.resolved, ...accepted], issues};
       if (!issues.length) return synthesize(next);
       const key = digest(issues.map(issue => [issue.id, normalizeProposal(issue.proposal.proposal)]).sort());
-      if (checkpoint.seenProposals.includes(key)) return pauseRepeated({...state, checkpoint: next}, issues);
-      return assignIssues({...next, seenProposals: [...checkpoint.seenProposals, key]}, "reconcile");
+      if (progress.seenProposals.includes(key)) return pauseRepeated({...state, progress: next}, issues);
+      return assignIssues({...next, seenProposals: [...progress.seenProposals, key]}, "reconcile");
     }
     case "reconcile": {
       const replies = submitted(state.slots, "reconcile");
-      const issues = checkpoint.issues.map(issue => ({...issue, replies: replies.flatMap(({designer, reply}) =>
+      const issues = progress.issues.map(issue => ({...issue, replies: replies.flatMap(({designer, reply}) =>
         reply.responses.filter(response => response.issue === issue.id).map(response => ({designer, response})))}));
-      return assignIssues({...checkpoint, issues}, "respond");
+      return assignIssues({...progress, issues}, "respond");
     }
     case "synthesize": {
       const {reply} = submitted(state.slots, "synthesize")[0];
-      const plan = acceptPlan(reply.plan.steps, [...checkpoint.input.targetIds], checkpoint.candidate?.plan.version);
-      const candidate = {draft: reply.draft, plan, version: digest({draft: reply.draft, plan, factsVersion: checkpoint.input.factsVersion})};
-      const changesSincePrevious = checkpoint.candidate ? confirmationChanges(checkpoint.candidate, candidate) : undefined;
-      return begin({...checkpoint, candidate}, "confirm", designers.slice(1).map(designer => ({
-        designer, input: {candidate, resolved: checkpoint.resolved, changesSincePrevious},
+      const plan = acceptPlan(reply.plan.steps, [...progress.input.targetIds], progress.candidate?.plan.version);
+      const candidate = {draft: reply.draft, plan, version: digest({draft: reply.draft, plan, factsVersion: progress.input.factsVersion})};
+      const changesSincePrevious = progress.candidate ? confirmationChanges(progress.candidate, candidate) : undefined;
+      return begin({...progress, candidate}, "confirm", designers.slice(1).map(designer => ({
+        designer, input: {candidate, resolved: progress.resolved, changesSincePrevious},
       })));
     }
     case "confirm": {
-      const candidate = checkpoint.candidate!;
+      const candidate = progress.candidate!;
       const issues = submitted(state.slots, "objected").flatMap(({designer, reply}) => reply.changes.map((change, index) =>
-        makeIssue(`${checkpoint.round}:${designer}:lead:${index + 1}`, "lead", designer, candidate.version, change)));
-      if (!issues.length) return {kind: "approved", checkpoint, candidate};
+        makeIssue(`${progress.round}:${designer}:lead:${index + 1}`, "lead", designer, candidate.version, change)));
+      if (!issues.length) return {kind: "approved", progress, candidate};
       const key = digest([candidate.draft, candidate.plan.steps, issues.map(issue => [issue.proposer, issue.original.section,
         normalizeProposal(issue.original.target), normalizeProposal(issue.original.proposal)]).sort()]);
-      if (checkpoint.seenProposals.includes(key)) return pauseRepeated(state, issues);
-      return assignIssues({...checkpoint, issues, seenProposals: [...checkpoint.seenProposals, key]}, "respond");
+      if (progress.seenProposals.includes(key)) return pauseRepeated(state, issues);
+      return assignIssues({...progress, issues, seenProposals: [...progress.seenProposals, key]}, "respond");
     }
   }
 }

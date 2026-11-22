@@ -1,2 +1,0 @@
-id	fact	source	labels
-worktree-checkpoint-location	Each worktree stores run checkpoints under pi-taskbook/runs in its own Git metadata directory.	39c219e56dc3:src/workflow/run-paths.ts	worktree

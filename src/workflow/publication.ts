@@ -4,7 +4,7 @@ import { createsPull, type HandoffGitHub, type HandoffPullRequest, type PullRequ
 import { readProjectMemory } from "../facts/project-memory.ts";
 import { readFactTables } from "../facts/taskbook-intake.ts";
 import { git, githubRepository, gitOk, workspace } from "../taskbook/document.ts";
-import { cleanRevision, matchesDeliveryHead, type Run } from "./checkpoint.ts";
+import { cleanRevision, matchesDeliveryHead, type Run } from "./run.ts";
 
 type PullTarget = {number: number; body: string};
 export type Publication = {
@@ -32,7 +32,7 @@ function verifiedDelivery(run: Run) {
   const {state, root, task} = run;
   const revision = state.deliveryRevision;
   if (state.exit !== "ready" || !revision || !state.team?.handoff || state.team.review?.kind !== "approved" ||
-      state.team.review.checkpoint.candidate.revision !== state.revision) throw new Error("PR 交付需要本地任务已完成并签署 Review。");
+      state.team.review.progress.candidate.revision !== state.revision) throw new Error("PR 交付需要本地任务已完成并签署 Review。");
   if (state.branch === "main") throw new PublicationChanged("PR 交付需要独立于 main 的任务分支。");
   workspace(root, task, state.base, state.branch);
   if (cleanRevision(run) !== revision || !matchesDeliveryHead(run, revision) ||

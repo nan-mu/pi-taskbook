@@ -246,10 +246,9 @@ export function applyApprovedMemory(root: string, snapshot: ProjectSnapshot, tas
 }
 
 export function commitRegisteredMemory(root: string, snapshot: ProjectSnapshot, task: Taskbook, base: string,
-  changes: MemoryChange[], sessionId: string, topics: Map<string, string>, message: string, validate: () => void,
-  prepare: (mutations: Map<string, string>) => void) {
+  changes: MemoryChange[], sessionId: string, topics: Map<string, string>, message: string, validate: () => void) {
   const document = prepareProjectChanges(snapshot, task, base, changes, sessionId);
-  return commitProjectMemory(root, snapshot, document, message, document.modified, undefined, {mutations: topics, validate, prepare});
+  return commitProjectMemory(root, snapshot, document, message, document.modified, undefined, {mutations: topics, validate});
 }
 
 function prepareProjectChanges(snapshot: ProjectSnapshot, task: Pick<Taskbook, "repository" | "id" | "digest">,
@@ -334,7 +333,7 @@ export function lockProjectMemory(root: string) {
 }
 
 export function commitProjectMemory(root: string, snapshot: ProjectSnapshot, document: ProjectDocument, message: string, modified = true,
-  migration?: {projectJsonVersion?: string}, extra?: {mutations: Map<string, string>; validate: () => void; prepare?: (mutations: Map<string, string>) => void}) {
+  migration?: {projectJsonVersion?: string}, extra?: {mutations: Map<string, string>; validate: () => void}) {
   const unlock = lockProjectMemory(root);
   try {
     const options = {allowUnmigratedLegacy: migration !== undefined};
@@ -359,7 +358,6 @@ export function commitProjectMemory(root: string, snapshot: ProjectSnapshot, doc
     }
     const paths = [...mutations.keys()].filter(path => regularFile(root, path) !== mutations.get(path));
     if (!paths.length) return snapshot;
-    extra?.prepare?.(new Map(paths.map(path => [path, mutations.get(path)!])));
     const untracked = new Set(git(root, ["ls-files", "--others", "--exclude-standard", "-z", "--", ...paths]).split("\0"));
     const previous = new Map(paths.map(path => [path, regularFile(root, path)]));
     for (const path of paths) {

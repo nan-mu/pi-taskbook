@@ -36,28 +36,28 @@ type Done = Static<typeof done>;
 type Consultation = Static<typeof answer>;
 type StageResult = Done | Static<typeof reproduced> | Static<typeof baseline> | Static<typeof chosen> | Static<typeof measured> | Static<typeof decision> | Static<typeof verified>;
 type RecordEntry = {work: Work; result: StageResult};
-type Checkpoint = {protocol: typeof implementerVersion; input: ImplementInput; playbook: Playbook; serial: number; index: number; records: RecordEntry[]; consultations: Consultation[]; feedback?: string; attempts: number; stopAfterRollback?: boolean};
-type Working = {kind: "working"; checkpoint: Checkpoint; work: Work; id: string; question?: string; evidence?: string; returnTo?: Work};
-export type ImplementerState = Working | {kind: "paused"; previous: Working; reason: "lead" | "plan-gap" | "unreproduced"; question: string; evidence: string; stepId?: string} | {kind: "handoff"; checkpoint: Checkpoint};
+type Progress = {protocol: typeof implementerVersion; input: ImplementInput; playbook: Playbook; serial: number; index: number; records: RecordEntry[]; consultations: Consultation[]; feedback?: string; attempts: number; stopAfterRollback?: boolean};
+type Working = {kind: "working"; progress: Progress; work: Work; id: string; question?: string; evidence?: string; returnTo?: Work};
+export type ImplementerState = Working | {kind: "paused"; previous: Working; reason: "lead" | "plan-gap" | "unreproduced"; question: string; evidence: string; stepId?: string} | {kind: "handoff"; progress: Progress};
 
-function next(checkpoint: Checkpoint, work: Work, extra: Partial<Pick<Working, "question" | "evidence" | "returnTo">> = {}): Working {
-  const serial = checkpoint.serial + 1;
-  return {kind: "working", checkpoint: {...checkpoint, serial}, work, id: `${checkpoint.input.runId}:implementer:${serial}`, ...extra};
+function next(progress: Progress, work: Work, extra: Partial<Pick<Working, "question" | "evidence" | "returnTo">> = {}): Working {
+  const serial = progress.serial + 1;
+  return {kind: "working", progress: {...progress, serial}, work, id: `${progress.input.runId}:implementer:${serial}`, ...extra};
 }
 export function startImplementer(input: ImplementInput): ImplementerState {
   if (!input.runId.trim() || !input.taskbook.trim() || !input.tasks.length || input.tasks.some(task => !task.trim())) throw new Error("Implementer needs a run, taskbook and ordered tasks.");
   const playbook = input.playbook ?? (input.taskType === "fix-feature" ? "bug-fix" : input.taskType === "fix-experiment" ? "experiment-fix" : input.taskType === "new-experiment" ? "experiment" : "feature");
   if (!playbooks[playbook]) throw new Error("Unknown implementation playbook.");
   if (playbook === "hillclimb" && (!input.hillclimb || !Number.isInteger(input.hillclimb.maxAttempts) || !Number.isInteger(input.hillclimb.minAttempts) || input.hillclimb.minAttempts < 1 || input.hillclimb.maxAttempts < input.hillclimb.minAttempts || !input.hillclimb.target.trim())) throw new Error("Hillclimb needs a target and valid attempt budget.");
-  const checkpoint: Checkpoint = {protocol: implementerVersion, input: structuredClone(input), playbook, serial: 0, index: 0, attempts: 0, records: [], consultations: []};
-  return next(checkpoint, playbooks[playbook][0]!);
+  const progress: Progress = {protocol: implementerVersion, input: structuredClone(input), playbook, serial: 0, index: 0, attempts: 0, records: [], consultations: []};
+  return next(progress, playbooks[playbook][0]!);
 }
 function schemaFor(state: Working) {
   const options = [consult, gap];
   if (state.work === "consult") return implementerSchemas.consult;
   if (state.work === "reproduce") return Type.Union([reproduced, unreproduced, ...options]);
   if (state.work === "verify") return Type.Union([verified, retry, ...options]);
-  if (state.checkpoint.playbook === "hillclimb") {
+  if (state.progress.playbook === "hillclimb") {
     if (state.work === "baseline") return Type.Union([baseline, ...options]);
     if (state.work === "choose") return Type.Union([chosen, ...options]);
     if (state.work === "measure") return Type.Union([measured, ...options]);
@@ -67,7 +67,10 @@ function schemaFor(state: Working) {
 }
 export function implementerTurn(state: ImplementerState) {
   if (state.kind !== "working") return undefined;
-  return {id: state.id, work: state.work, context: structuredClone({ ...state.checkpoint, question: state.question, evidence: state.evidence }),
+  const {input, playbook, attempts, records, consultations, feedback} = state.progress;
+  const latest = records.filter(record => record === records.findLast(other => other.work === record.work));
+  return {id: state.id, work: state.work, context: structuredClone({input, playbook, attempts, records: latest,
+    consultations, feedback, question: state.question, evidence: state.evidence}),
     prompt: readFileSync(new URL(`../../../prompts/implementer/${implementerVersion}/${state.work}.md`, import.meta.url), "utf8").trim(),
     schema: schemaFor(state)};
 }
@@ -79,46 +82,46 @@ export function settleImplementerTurn(state: ImplementerState, event: {id: strin
   if (result.kind === "plan-gap") return {kind: "paused", previous: state, reason: "plan-gap", question: result.question, evidence: result.observation, stepId: result.stepId};
   if (result.kind === "unreproduced") return {kind: "paused", previous: state, reason: "unreproduced", question: result.question, evidence: `${result.attempts}\n${result.observation}`};
   if (result.kind === "retry") {
-    const index = playbooks[state.checkpoint.playbook].indexOf(result.route);
-    if (index < 0) return next(state.checkpoint, "rework");
-    return next({...state.checkpoint, index}, result.route);
+    const index = playbooks[state.progress.playbook].indexOf(result.route);
+    if (index < 0) return next(state.progress, "rework");
+    return next({...state.progress, index}, result.route);
   }
   if (result.kind === "consult") {
     if (result.scope === "lead") return {kind: "paused", previous: state, reason: "lead", question: result.question, evidence: result.evidence};
-    return next(state.checkpoint, "consult", {question: result.question, evidence: result.evidence, returnTo: state.work});
+    return next(state.progress, "consult", {question: result.question, evidence: result.evidence, returnTo: state.work});
   }
-  if (result.kind === "answered") return next({...state.checkpoint, consultations: [...state.checkpoint.consultations, result]}, state.returnTo!);
-  let checkpoint = {...state.checkpoint, records: [...state.checkpoint.records, {work: state.work, result}]};
-  if (state.checkpoint.playbook === "hillclimb") {
+  if (result.kind === "answered") return next({...state.progress, consultations: [...state.progress.consultations, result]}, state.returnTo!);
+  let progress = {...state.progress, records: [...state.progress.records, {work: state.work, result}]};
+  if (state.progress.playbook === "hillclimb") {
     if (result.kind === "decision") {
-      const measurement = [...checkpoint.records].reverse().find(entry => entry.result.kind === "measured")?.result;
+      const measurement = [...progress.records].reverse().find(entry => entry.result.kind === "measured")?.result;
       if (measurement?.kind !== "measured") throw new Error("A decision needs a measurement.");
       if (measurement.regressionGate === "fail" && result.verdict === "keep") throw new Error("A failing regression gate cannot be kept.");
-      const attempts = checkpoint.attempts + 1;
-      const budget = checkpoint.input.hillclimb!;
+      const attempts = progress.attempts + 1;
+      const budget = progress.input.hillclimb!;
       if (result.next === "stop" && attempts < budget.minAttempts) throw new Error("Hillclimb has not met its minimum attempts.");
       const stop = result.next === "stop" || attempts >= budget.maxAttempts;
-      checkpoint = {...checkpoint, attempts, stopAfterRollback: stop};
-      if (result.verdict === "revert") return next(checkpoint, "rollback");
-      return next(checkpoint, stop ? "verify" : "choose");
+      progress = {...progress, attempts, stopAfterRollback: stop};
+      if (result.verdict === "revert") return next(progress, "rollback");
+      return next(progress, stop ? "verify" : "choose");
     }
-    if (state.work === "rollback") return next(checkpoint, checkpoint.stopAfterRollback ? "verify" : "choose");
-    if (state.work === "choose") return next(checkpoint, "experiment");
-    if (state.work === "experiment") return next(checkpoint, "measure");
-    if (state.work === "measure") return next(checkpoint, "decide");
-    if (state.work === "baseline") return next(checkpoint, "choose");
-    if (state.work === "verify") return {kind: "handoff", checkpoint};
+    if (state.work === "rollback") return next(progress, progress.stopAfterRollback ? "verify" : "choose");
+    if (state.work === "choose") return next(progress, "experiment");
+    if (state.work === "experiment") return next(progress, "measure");
+    if (state.work === "measure") return next(progress, "decide");
+    if (state.work === "baseline") return next(progress, "choose");
+    if (state.work === "verify") return {kind: "handoff", progress};
   }
-  if (state.work === "rework") return next({...checkpoint, index: playbooks[checkpoint.playbook].length - 1}, "verify");
-  const index = checkpoint.index + 1;
-  return index >= playbooks[checkpoint.playbook].length ? {kind: "handoff", checkpoint: {...checkpoint, index}} : next({...checkpoint, index}, playbooks[checkpoint.playbook][index]!);
+  if (state.work === "rework") return next({...progress, index: playbooks[progress.playbook].length - 1}, "verify");
+  const index = progress.index + 1;
+  return index >= playbooks[progress.playbook].length ? {kind: "handoff", progress: {...progress, index}} : next({...progress, index}, playbooks[progress.playbook][index]!);
 }
 export function resumeImplementer(state: ImplementerState, answer: string): ImplementerState {
   if (state.kind !== "paused" || !answer.trim()) throw new Error("A paused Implementer needs an answer.");
-  const checkpoint = {...state.previous.checkpoint, consultations: [...state.previous.checkpoint.consultations, {kind: "answered" as const, answer, evidence: state.evidence}]};
-  return next(checkpoint, state.previous.work, {question: state.previous.question, evidence: state.previous.evidence, returnTo: state.previous.returnTo});
+  const progress = {...state.previous.progress, consultations: [...state.previous.progress.consultations, {kind: "answered" as const, answer, evidence: state.evidence}]};
+  return next(progress, state.previous.work, {question: state.previous.question, evidence: state.previous.evidence, returnTo: state.previous.returnTo});
 }
 export function reworkImplementer(state: ImplementerState, feedback: string): ImplementerState {
   if (state.kind !== "handoff" || !feedback.trim()) throw new Error("Review rework needs a handoff and feedback.");
-  return next({...state.checkpoint, feedback}, "rework");
+  return next({...state.progress, feedback}, "rework");
 }

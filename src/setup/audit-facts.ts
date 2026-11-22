@@ -5,7 +5,7 @@ import { inspectLegacyProjectMemory } from "../facts/project-memory-migration.ts
 import { defaultFactTable, readFactTables, validateFactTablePath } from "../facts/taskbook-intake.ts";
 import { decodeTsv } from "../facts/tsv.ts";
 import { git, gitOk, readTaskbook, validTaskBranch } from "../taskbook/document.ts";
-import { privateDirectory } from "../workflow/run-paths.ts";
+import { privateDirectory } from "../taskbook/private-directory.ts";
 import { taskAuthoredFacts } from "../workflow/task-context.ts";
 
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");

@@ -1,6 +1,5 @@
 id	fact	source	labels
-overlay	Stage proposed changes in a recoverable task-specific view before writing them to their destination files.	Maintainer decision: recoverable task-scoped fact view | .fact/plugin/facts/intake.tsv#baseline-intake	
-operations	The task view identifies proposed creations, updates and deletions, including the existing fact affected by an update or deletion.	Maintainer decision: recoverable task-scoped fact view	
-provenance	A task-scoped label identifies the originating taskbook independently of other search labels.	Maintainer decision: recoverable task-scoped fact view	facts
-resume	Resuming the same task restores its pending changes and their association with the taskbook.	Maintainer decision: recoverable task-scoped fact view	
-fact-write-owner	Agents request fact writes through the designated plugin tools, which write the fact TSV files and label catalog.	Maintainer decision: recoverable task-scoped fact view	
+overlay	Stage proposed changes in the current task view before writing them to their destination files.	src/facts/taskbook-intake.ts | .fact/plugin/facts/intake.tsv#baseline-intake	facts
+operations	The task view identifies proposed creations, updates and deletions, including the existing fact affected by an update or deletion.	src/facts/taskbook-intake.ts	facts
+provenance	A task-scoped label identifies the originating taskbook independently of other search labels.	src/facts/taskbook-intake.ts	facts
+fact-write-owner	Agents request fact writes through the designated plugin tools, which write the fact TSV files and label catalog.	src/facts/taskbook-intake.ts	facts

@@ -31,7 +31,7 @@ type Replies = Partial<Record<Member, Comparison>>;
 type Candidate = { revision: string; evidenceVersion: string };
 type Goal = { id: string; text: string };
 type Input = { runId: string; goals: readonly Goal[]; candidate: Candidate };
-type Checkpoint = Input & { epoch: number; serial: number; everCrossed: boolean; priorFindings: ReviewFinding[] };
+type Progress = Input & { epoch: number; serial: number; everCrossed: boolean; priorFindings: ReviewFinding[] };
 type Discussion = { opinions: Opinions; replies: Replies; protectedFindings: ReviewFinding[]; seen: string[] };
 type Basis =
   | { kind: "pass"; draftFacts: ReviewedFact[] }
@@ -44,22 +44,22 @@ type Lead = {
   opinions?: Opinions; comparisons?: Record<Member, Comparison>; userAnswer?: string;
 };
 type Stage = Initial | Cross | Pair | Lead;
-type Working = { kind: "working"; checkpoint: Checkpoint; stage: Stage };
+type Working = { kind: "working"; progress: Progress; stage: Stage };
 export type ReviewFlow = Working |
-  { kind: "approved"; checkpoint: Checkpoint; summary: string; draftFacts: ReviewedFact[] } |
-  { kind: "rework"; checkpoint: Checkpoint; summary: string; findings: ReviewFinding[] } |
-  { kind: "needs-user"; checkpoint: Checkpoint; summary: string; question: string; findings: ReviewFinding[]; stage: Lead };
+  { kind: "approved"; progress: Progress; summary: string; draftFacts: ReviewedFact[] } |
+  { kind: "rework"; progress: Progress; summary: string; findings: ReviewFinding[] } |
+  { kind: "needs-user"; progress: Progress; summary: string; question: string; findings: ReviewFinding[]; stage: Lead };
 
 export function startReviewFlow(input: Input & { previous?: ReviewFlow }): ReviewFlow {
   const { previous } = input;
-  const old = previous?.checkpoint;
+  const old = previous?.progress;
   if (old && old.runId !== input.runId) throw new Error("Cannot reuse Review from another run.");
   const goals = input.goals.map(({ id, text }) => ({ id, text }));
   if (previous && old?.candidate.revision === input.candidate.revision && old.candidate.evidenceVersion === input.candidate.evidenceVersion &&
     JSON.stringify(old.goals) === JSON.stringify(goals)) return previous;
-  const checkpoint: Checkpoint = { runId: input.runId, goals, candidate: { ...input.candidate }, epoch: old ? old.epoch + 1 : 1,
+  const progress: Progress = { runId: input.runId, goals, candidate: { ...input.candidate }, epoch: old ? old.epoch + 1 : 1,
     serial: 1, everCrossed: old?.everCrossed ?? false, priorFindings: previous?.kind === "rework" ? previous.findings : old?.priorFindings ?? [] };
-  return { kind: "working", checkpoint, stage: { work: old ? "initial-rework" : "initial-first" } };
+  return { kind: "working", progress, stage: { work: old ? "initial-rework" : "initial-first" } };
 }
 
 const members: readonly Member[] = ["member-a", "member-b"];
@@ -73,14 +73,14 @@ function pending(stage: Stage): readonly Designer[] {
   }
 }
 
-function turnId(checkpoint: Checkpoint, designer: Designer) {
-  return `${checkpoint.runId}:review:${checkpoint.epoch}:${checkpoint.serial}:${designer}`;
+function turnId(progress: Progress, designer: Designer) {
+  return `${progress.runId}:review:${progress.epoch}:${progress.serial}:${designer}`;
 }
 
-function materials(stage: Stage, checkpoint: Checkpoint, designer: Designer) {
+function materials(stage: Stage, progress: Progress, designer: Designer) {
   switch (stage.work) {
     case "initial-first": case "cross-first": return {};
-    case "initial-rework": case "cross-repeat": return { priorFindings: checkpoint.priorFindings.map(({ issue, detail }) => ({ issue, detail })) };
+    case "initial-rework": case "cross-repeat": return { priorFindings: progress.priorFindings.map(({ issue, detail }) => ({ issue, detail })) };
     case "compare": return { opinions: stage.opinions };
     case "respond": case "reconcile": return { opinions: stage.opinions, previous: stage.prior, reviewer: designer };
     case "lead": return { basis: stage.basis, opinions: stage.opinions, comparisons: stage.comparisons,
@@ -100,18 +100,17 @@ const common = readFileSync(new URL("../../../prompts/review/common.md", import.
 
 export function reviewTurns(state: ReviewFlow) {
   if (state.kind !== "working") return [];
-  const { stage, checkpoint } = state;
+  const { stage, progress } = state;
   const prompt = readFileSync(new URL(`../../../prompts/review/${stage.work}.md`, import.meta.url), "utf8").trim();
   return pending(stage).map(designer => ({
-    id: turnId(checkpoint, designer), designer, work: stage.work,
-    cleanContext: stage.work === "cross-first" || stage.work === "cross-repeat",
-    context: structuredClone({ goals: checkpoint.goals, ...materials(stage, checkpoint, designer) }),
+    id: turnId(progress, designer), designer, work: stage.work,
+    context: structuredClone({ goals: progress.goals, ...materials(stage, progress, designer) }),
     prompt: `${prompt}\n\n${common}`, schema: schema(stage),
   }));
 }
 
-function advance(checkpoint: Checkpoint, stage: Stage): Working {
-  return { kind: "working", checkpoint: { ...checkpoint, serial: checkpoint.serial + 1 }, stage };
+function advance(progress: Progress, stage: Stage): Working {
+  return { kind: "working", progress: { ...progress, serial: progress.serial + 1 }, stage };
 }
 
 const normalize = (value: string) => value.trim().replace(/\s+/gu, " ").toLowerCase();
@@ -147,14 +146,14 @@ function disputedFactDecisions(a: ReviewedFact[], b: ReviewedFact[]): ReviewFind
   }));
 }
 
-function placeDiscussions(checkpoint: Checkpoint, stage: Pair, replies: Record<Member, Comparison>): ReviewFlow {
+function placeDiscussions(progress: Progress, stage: Pair, replies: Record<Member, Comparison>): ReviewFlow {
   const a = replies["member-a"], b = replies["member-b"];
   const findings = uniqueFindings([...findingsOf(a), ...findingsOf(b)]);
   const protectedFindings = uniqueFindings([...stage.protectedFindings, ...findings.filter(item => item.factId)]);
   const aFacts = a.draftFacts ?? stage.opinions["member-a"].draftFacts ?? [];
   const bFacts = b.draftFacts ?? stage.opinions["member-b"].draftFacts ?? [];
   function decide(basis: Basis) {
-    return advance(checkpoint, { work: "lead", basis, opinions: stage.opinions, comparisons: replies, protectedFindings });
+    return advance(progress, { work: "lead", basis, opinions: stage.opinions, comparisons: replies, protectedFindings });
   }
   if (a.kind === "pass" && b.kind === "pass") {
     if (factKey(aFacts) === factKey(bFacts)) {
@@ -172,14 +171,14 @@ function placeDiscussions(checkpoint: Checkpoint, stage: Pair, replies: Record<M
   if (stage.work === "reconcile" && (stage.seen.includes(signature) || stage.seen.length >= 4)) {
     return decide({ kind: "unresolved", findings: uniqueFindings([...findings, ...disputedFactDecisions(aFacts, bFacts)]) });
   }
-  return advance(checkpoint, { ...stage, work: stage.work === "respond" ? "reconcile" : "respond", replies: {},
+  return advance(progress, { ...stage, work: stage.work === "respond" ? "reconcile" : "respond", replies: {},
     prior: replies, seen: [...stage.seen, signature], protectedFindings });
 }
 
 export function settleReviewTurn(state: ReviewFlow, event: { id: string; settled: boolean; result: unknown }): ReviewFlow {
   if (state.kind !== "working" || !event.settled) return state;
-  const { checkpoint, stage } = state;
-  const designer = pending(stage).find(role => turnId(checkpoint, role) === event.id);
+  const { progress, stage } = state;
+  const designer = pending(stage).find(role => turnId(progress, role) === event.id);
   if (!designer) return state;
   switch (stage.work) {
     case "initial-first": case "initial-rework": case "cross-first": case "cross-repeat": {
@@ -187,30 +186,30 @@ export function settleReviewTurn(state: ReviewFlow, event: { id: string; settled
       const result = verifyOpinion(event.result);
       if (stage.work === "cross-first" || stage.work === "cross-repeat") {
         const opinions = { "member-a": stage.initial, "member-b": result };
-        return advance({ ...checkpoint, everCrossed: true }, { work: "compare", opinions, replies: {}, seen: [],
+        return advance({ ...progress, everCrossed: true }, { work: "compare", opinions, replies: {}, seen: [],
           protectedFindings: findingsOf(result).filter(item => item.factId) });
       }
-      if (result.kind === "changes") return advance(checkpoint, { work: "lead", basis: { kind: "changes", findings: result.findings },
+      if (result.kind === "changes") return advance(progress, { work: "lead", basis: { kind: "changes", findings: result.findings },
         protectedFindings: result.findings.filter(item => item.factId) });
-      return advance(checkpoint, { work: checkpoint.everCrossed ? "cross-repeat" : "cross-first", initial: result });
+      return advance(progress, { work: progress.everCrossed ? "cross-repeat" : "cross-first", initial: result });
     }
     case "compare": case "respond": case "reconcile": {
       if (!Value.Check(comparison, event.result)) throw new Error(`Invalid ${stage.work} result.`);
       const replies = { ...stage.replies, [designer]: verifyOpinion(event.result) };
       const a = replies["member-a"], b = replies["member-b"];
-      return a && b ? placeDiscussions(checkpoint, stage, { "member-a": a, "member-b": b }) : { ...state, stage: { ...stage, replies } };
+      return a && b ? placeDiscussions(progress, stage, { "member-a": a, "member-b": b }) : { ...state, stage: { ...stage, replies } };
     }
     case "lead": {
       if (!Value.Check(lead, event.result)) throw new Error("Invalid Lead Designer Review result.");
       const result = event.result;
       const { basis, protectedFindings } = stage;
       const mustAsk = !stage.userAnswer && (basis.kind === "unresolved" || protectedFindings.length > 0);
-      if (result.kind === "ask-user") return { kind: "needs-user", checkpoint, stage, summary: result.summary, question: result.question,
+      if (result.kind === "ask-user") return { kind: "needs-user", progress, stage, summary: result.summary, question: result.question,
         findings: uniqueFindings([...(basis.kind === "pass" ? [] : basis.findings), ...protectedFindings]) };
       if (mustAsk) throw new Error("The Lead Designer must ask the user about unresolved or protected facts.");
       if (result.kind === "approve") {
         if (basis.kind !== "pass") throw new Error("Review approval needs both members to agree on this candidate.");
-        return { kind: "approved", checkpoint, summary: result.summary, draftFacts: basis.draftFacts };
+        return { kind: "approved", progress, summary: result.summary, draftFacts: basis.draftFacts };
       }
       const available = uniqueFindings([...(basis.kind === "pass" ? [] : basis.findings), ...protectedFindings]);
       const needsSelection = basis.kind === "unresolved" || basis.kind === "pass";
@@ -221,12 +220,12 @@ export function settleReviewTurn(state: ReviewFlow, event: { id: string; settled
         return selected;
       }) ?? available;
       if (new Set(findings.map(issueKey)).size !== findings.length) throw new Error("Review rework needs one correction for each issue.");
-      return { kind: "rework", checkpoint, summary: result.summary, findings };
+      return { kind: "rework", progress, summary: result.summary, findings };
     }
   }
 }
 
 export function answerReviewUser(state: ReviewFlow, answer: string): ReviewFlow {
   if (state.kind !== "needs-user" || !answer.trim()) throw new Error("No Review decision is waiting for an answer.");
-  return advance(state.checkpoint, { ...state.stage, userAnswer: answer.trim() });
+  return advance(state.progress, { ...state.stage, userAnswer: answer.trim() });
 }
