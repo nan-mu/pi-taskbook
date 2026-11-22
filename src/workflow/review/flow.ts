@@ -36,7 +36,8 @@ type Progress = Input & { epoch: number; serial: number; everCrossed: boolean; p
 type Discussion = { opinions: Opinions; replies: Replies; protectedFindings: ReviewFinding[]; seen: string[] };
 type Basis =
   | { kind: "pass"; draftFacts: ReviewedFact[] }
-  | { kind: "changes" | "unresolved"; findings: ReviewFinding[] };
+  | { kind: "changes"; findings: ReviewFinding[]; selectFindings?: true }
+  | { kind: "unresolved"; findings: ReviewFinding[] };
 type Initial = { work: "initial-first" | "initial-rework" };
 type Cross = { work: "cross-first" | "cross-repeat"; initial: Static<typeof independentPass> };
 type Pair = Discussion & { work: "compare" | "respond" | "reconcile"; prior?: Record<Member, Comparison> };
@@ -92,7 +93,7 @@ function materials(stage: Stage, progress: Progress, designer: Designer) {
 function leadSchema(stage: Lead) {
   const {basis, protectedFindings, userAnswer} = stage;
   if (!userAnswer && (basis.kind === "unresolved" || protectedFindings.length)) return askUser;
-  if (basis.kind === "changes") return Type.Union([rework, askUser]);
+  if (basis.kind === "changes") return Type.Union([basis.selectFindings ? selectiveRework : rework, askUser]);
   if (basis.kind === "unresolved") return Type.Union([selectiveRework, askUser]);
   return protectedFindings.length ? Type.Union([approve, selectiveRework, askUser]) : Type.Union([approve, askUser]);
 }
@@ -175,9 +176,8 @@ function placeDiscussions(progress: Progress, stage: Pair, replies: Record<Membe
         evidence: [...new Set([...item.evidence, ...(peer.get(item.id)?.evidence ?? [])])] })) });
     }
   }
-  if (a.kind === "changes" && b.kind === "changes" &&
-    JSON.stringify(a.findings.map(findingKey).sort()) === JSON.stringify(b.findings.map(findingKey).sort())) {
-    return decide({ kind: "changes", findings });
+  if (a.kind === "changes" && b.kind === "changes") {
+    return decide({ kind: "changes", findings, selectFindings: true });
   }
   const signatureOf = (reply: Comparison, facts: ReviewedFact[]) => [reply.kind, findingsOf(reply).map(findingKey).sort(), factKey(facts)];
   const signature = JSON.stringify([signatureOf(a, aFacts), signatureOf(b, bFacts)]);
@@ -223,7 +223,7 @@ export function settleReviewTurn(state: ReviewFlow, event: { id: string; settled
         return { kind: "approved", progress, summary: result.summary, draftFacts: basis.draftFacts };
       }
       const available = uniqueFindings([...(basis.kind === "pass" ? [] : basis.findings), ...protectedFindings]);
-      const needsSelection = basis.kind === "unresolved" || basis.kind === "pass";
+      const needsSelection = basis.kind !== "changes" || basis.selectFindings;
       if (!available.length || (needsSelection && !result.selected)) throw new Error("Review rework needs an actionable finding.");
       const findings = result.selected?.map(({ issue, detail }) => {
         const selected = available.find(item => item.issue === issue && item.detail === detail);
