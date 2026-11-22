@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
-import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { queryProjectFacts, maxFactMatches } from "../facts/query.ts";
 import { readTopicFacts, taskFactLabel } from "../facts/taskbook-intake.ts";
 import { readProjectMemory } from "../facts/project-memory.ts";
@@ -17,7 +17,7 @@ import { implementerTurn, playbooks, resumeImplementer, reworkImplementer, settl
 import { readRunContext } from "./phase-input.ts";
 import type { FactPlacement } from "./register-facts.ts";
 import { answerReviewUser, reviewTurns, settleReviewTurn, startReviewFlow, type ReviewFlow } from "./review/flow.ts";
-import { isCandidateReceipt, subagentTurn, type CommandReceipt, type Seat, type WorkerReceipt, type WorkTurn } from "./subagent.ts";
+import { isCandidateReceipt, type registerSubagentTool, type CommandReceipt, type Seat, type WorkerReceipt, type WorkTurn } from "./subagent.ts";
 import { methodDefinition } from "../methods/tool.ts";
 import type { PullRequestAction } from "../integrations/github-handoff.ts";
 
@@ -139,8 +139,8 @@ export function resumeTeam(run: Run, answer: string) {
   return true;
 }
 
-export async function runTeam(run: Run, ctx: ExtensionContext, signal: AbortSignal,
-  status: (value: string) => void) {
+export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: AbortSignal,
+  status: (value: string) => void, runWorker: ReturnType<typeof registerSubagentTool>) {
   const id = run.task.digest;
   const persist = (team: Team, patch: Partial<Run["state"]> = {}) => checkpoint(run, {...run.state, ...patch, team});
   const pause = (question: string) => checkpoint(run, {...run.state, pendingQuestion: {question}});
@@ -179,7 +179,7 @@ export async function runTeam(run: Run, ctx: ExtensionContext, signal: AbortSign
     const route: RoleSelection = prior
       ? {model: resolveModel(ctx, prior.model), thinkingLevel: prior.thinking}
       : roleSelection(ctx, run.root, run.state.routes!, role);
-    const reply = await subagentTurn({run, ctx, seat, turn, route, tools, cleanContext: options.cleanContext || seat === "implementer", signal,
+    const reply = await runWorker({run, ctx, seat, turn, route, tools, cleanContext: options.cleanContext || seat === "implementer", signal,
       builtins: options.writable ? ["read", "bash", "edit", "write", "grep", "find", "ls"] : []});
     return {...reply, observations, lookedUp};
   };

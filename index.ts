@@ -29,6 +29,7 @@ import { archiveDesign, removeDesignArchive } from "./src/workflow/design-archiv
 import { modelKey, roleSelection } from "./src/models/config.ts";
 import { readFileSync } from "node:fs";
 import { resumeTeam, runTeam, selectedPlaybook } from "./src/workflow/team.ts";
+import { registerSubagentTool, subagentTool } from "./src/workflow/subagent.ts";
 import { placementParameter, registerReviewedFacts, reviewedDrafts, validatePlacements } from "./src/workflow/register-facts.ts";
 import { githubHandoff, githubHandoffTools, pullRequestActions, type PullRequestAction } from "./src/integrations/github-handoff.ts";
 import { deliveryFactDiff, preparePublication, publishDelivery, PublicationChanged } from "./src/workflow/publication.ts";
@@ -94,13 +95,14 @@ export default function taskbookExtension(pi: ExtensionAPI) {
 
   let reviewing: AbortController | undefined;
   let assisting: AbortController | undefined;
-  let coordinating: {controller: AbortController; settled: Promise<void>} | undefined;
+  let coordinating: {caller: string; controller: AbortController; settled: Promise<void>} | undefined;
   let teamProgress: string | undefined;
   let initialModel: ExtensionContext["model"];
   let initialThinking: ExtensionContext["thinkingLevel"] | undefined;
   const suspendedTools = new Set<string>();
   const observedCalls = new Map<string, string>();
   const candidateOutputs = new Map<string, Omit<RunObservation, "observed"> & { text: string[] }>();
+  const runWorker = registerSubagentTool(pi);
 
   registerMethodTool(pi, () => run && started && !reported && run.state.phase !== "exit"
     ? {phase: run.state.phase, type: run.task.type} : undefined);
@@ -165,16 +167,16 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     return active.state.taskFacts !== undefined && (phase === "design" || phase === "implement" || phase === "performance" || phase === "review");
   }
 
-  async function waitForTeam(active: Run, ctx: ExtensionToolContext, signal: AbortSignal | undefined,
+  async function waitForTeam(active: Run, caller: string, ctx: ExtensionToolContext, signal: AbortSignal | undefined,
     onUpdate: Parameters<ToolDefinition["execute"]>[3]) {
     const controller = new AbortController();
     const teamSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
-    const settled = runTeam(active, ctx, teamSignal, text => {
+    const settled = Promise.resolve().then(() => runTeam(active, ctx, teamSignal, text => {
       teamProgress = text;
       ctx.ui.setStatus("pi-taskbook", text);
       onUpdate?.({content: [{type: "text", text}], details: {}});
-    });
-    coordinating = {controller, settled};
+    }, runWorker));
+    coordinating = {caller, controller, settled};
     try {
       await settled;
       return "团队工作已到达下一检查点。";
@@ -193,12 +195,12 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     name: teamTool, label: "继续任务书团队工作", description: "Run the pending team work from its checkpoint.",
     defaultActive: false, executionMode: "sequential",
     parameters: Type.Object({attempt: Type.String()}, {additionalProperties: false}),
-    async execute(_id, params, signal, onUpdate, ctx) {
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
       if (!run || !started || reported || coordinating || attempt !== params.attempt || !teamPhase(run)) {
         throw new Error("当前没有匹配的团队任务。");
       }
       reported = true;
-      const text = await waitForTeam(run, ctx, signal, onUpdate);
+      const text = await waitForTeam(run, toolCallId, ctx, signal, onUpdate);
       return {content: [{type: "text", text}], details: {}, terminate: true};
     },
   });
@@ -869,6 +871,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
           (publishing.caller && event.parentToolCallId === publishing.caller && publishing.nestedTools.has(event.toolName))) return;
       return {block: true, reason: "PR 交付由插件通过 Magpie GitHub MCP 执行。"};
     }
+    if (event.toolName === subagentTool && coordinating && event.parentToolCallId === coordinating.caller) return;
     if (run && directDelegation(event.toolName)) {
       return {block: true, reason: "任务书的子代理由插件按项目配置派发。设计阶段可用 taskbook_consult。"};
     }
@@ -1052,7 +1055,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
           reports: [...run.state.reports, report]});
         reported = true;
         if (complete) {
-          const text = await waitForTeam(run, ctx, signal, onUpdate);
+          const text = await waitForTeam(run, toolCallId, ctx, signal, onUpdate);
           return {content: [{type: "text", text}], details: {}, terminate: true};
         }
         return {content: [{type: "text", text: conflicts?.length ? "事实同步等待用户裁决。" : "事实同步结果已登记。"}], details: {}};

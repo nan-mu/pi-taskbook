@@ -1028,9 +1028,23 @@ Complete the shared stages.
                 assert parent["data"]["isStreaming"], parent
                 assert any(event.get("type") == "tool_execution_update" and event.get("toolName") == "taskbook_report"
                            and "Design ·" in str(event.get("partialResult")) for event in client.saved)
+                running = [event for event in client.saved if event.get("type") == "tool_execution_update"
+                           and event.get("toolName") == "subagent"]
+                assert {event["partialResult"]["details"]["results"][0]["agent"] for event in running} == {
+                    "lead", "member-a", "member-b",
+                }, running
+                assert all(event.get("parentToolCallId") for event in running), running
             finally:
                 parent_inspected.set()
             client.notify("本地已签署，等待发布 PR")
+            workers = [event for event in client.saved if event.get("type") == "tool_execution_end"
+                       and event.get("toolName") == "subagent"]
+            assert {event["result"]["details"]["results"][0]["agent"] for event in workers} == {
+                "lead", "member-a", "member-b", "implementer",
+            }, workers
+            assert all(event["result"]["details"]["results"][0]["finished"] for event in workers), workers
+            assert any(event.get("type") == "tool_execution_update" and event.get("toolName") == "subagent"
+                       and "正在调用 inspect_revision" in str(event.get("partialResult")) for event in client.saved)
             signed = state_for(created, task_id)
             assert signed["exit"] == "ready"
             assert [item["phase"] for item in signed["reports"]][-5:] == ["design", "implement", "review", "fact-registration", "handoff"]

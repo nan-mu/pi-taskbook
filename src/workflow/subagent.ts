@@ -1,8 +1,9 @@
 import { lstatSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
 import {
   createAgentSession, DefaultResourceLoader, getAgentDir, ModelRuntime, SessionManager, SettingsManager,
-  type ExtensionContext, type ToolDefinition,
+  type ExtensionAPI, type ExtensionContext, type ExtensionToolContext, type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import { Type, type TSchema } from "typebox";
@@ -27,10 +28,12 @@ export function isCandidateReceipt(receipt: CommandReceipt, revision: string) {
 }
 
 const resultName = "taskbook_work_result";
+export const subagentTool = "subagent";
+const subagentDescription = "Report a Taskbook-dispatched worker to the host. Invoked by the Taskbook coordinator.";
 
-export async function subagentTurn({ run, ctx, seat, turn, route, tools = [], builtins = [], cleanContext = false, signal }: {
+export async function subagentTurn({ run, ctx, seat, turn, route, tools = [], builtins = [], cleanContext = false, signal, activity }: {
   run: Run; ctx: ExtensionContext; seat: Seat; turn: WorkTurn; route: RoleSelection; tools?: ToolDefinition[];
-  builtins?: string[]; cleanContext?: boolean; signal: AbortSignal;
+  builtins?: string[]; cleanContext?: boolean; signal: AbortSignal; activity?: (text: string) => void;
 }) {
   signal.throwIfAborted();
   const {root} = run;
@@ -94,7 +97,12 @@ export async function subagentTurn({ run, ctx, seat, turn, route, tools = [], bu
     tools: names, customTools,
   });
   const shellCalls = new Map<string, {command: string; before: string; cleanBefore: boolean}>();
+  let lastActivity = 0;
   const unsubscribe = session.subscribe(event => {
+    if (activity && event.type === "tool_execution_start" && Date.now() - lastActivity >= 1000) {
+      lastActivity = Date.now();
+      activity("正在调用 " + event.toolName);
+    }
     if (event.type === "tool_execution_start" && event.toolName === "bash" && typeof event.args.command === "string") {
       const start = commandSnapshot(run);
       shellCalls.set(event.toolCallId, {command: event.args.command, before: start.revision, cleanBefore: start.clean});
@@ -133,4 +141,59 @@ export async function subagentTurn({ run, ctx, seat, turn, route, tools = [], bu
     unsubscribe();
     session.dispose();
   }
+}
+
+export function registerSubagentTool(pi: ExtensionAPI) {
+  type Input = Parameters<typeof subagentTurn>[0];
+  type Result = Awaited<ReturnType<typeof subagentTurn>>;
+  type PendingWork = {input: Input; result?: Result; failure?: {error: unknown}};
+  const pending = new Map<string, PendingWork>();
+  pi.registerTool({
+    name: subagentTool, label: "Taskbook 子代理", description: subagentDescription, exposure: "deferred",
+    parameters: Type.Object({taskbookWorkToken: Type.String()}, {additionalProperties: false}),
+    async execute(_id, {taskbookWorkToken}, signal, onUpdate) {
+      const work = pending.get(taskbookWorkToken);
+      if (!work) throw new Error("该子代理只能由 Taskbook 派发。");
+      pending.delete(taskbookWorkToken);
+      const {seat, turn, run, route} = work.input;
+      const workerSignal = signal ? AbortSignal.any([signal, work.input.signal]) : work.input.signal;
+      const identity = {agent: seat, task: run.state.phase + " / " + turn.work, model: modelKey(route.model)};
+      // T3's Pi adapter reads details.results on subagent tool events.
+      function snapshot(text: string, stopReason?: "stop" | "error" | "aborted"): Awaited<ReturnType<ToolDefinition["execute"]>> {
+        return {content: [{type: "text", text}], details: {results: [{
+          ...identity, finished: stopReason !== undefined, stopReason,
+          messages: [{role: "assistant", content: [{type: "text", text}]}],
+          ...(stopReason === "error" || stopReason === "aborted" ? {exitCode: 1, errorMessage: text} : {}),
+        }]}};
+      }
+      onUpdate?.(snapshot("正在处理 " + identity.task));
+      try {
+        work.result = await subagentTurn({...work.input, signal: workerSignal, activity: text => onUpdate?.(snapshot(text))});
+        return snapshot("已提交 " + identity.task + " 的结果", "stop");
+      } catch (error) {
+        work.failure = {error};
+        return workerSignal.aborted ? snapshot("子代理已中断", "aborted") : snapshot("子代理工作失败，见任务书退出原因", "error");
+      }
+    },
+  });
+
+  return async (input: Input & {ctx: ExtensionToolContext}): Promise<Result> => {
+    const {ctx} = input;
+    if (!ctx.tools.some(tool => tool.name === subagentTool && tool.description === subagentDescription)) return subagentTurn(input);
+    const taskbookWorkToken = randomUUID();
+    const work: PendingWork = {input};
+    pending.set(taskbookWorkToken, work);
+    try {
+      const outcome = await ctx.executeTool(subagentTool, {taskbookWorkToken}, {signal: input.signal});
+      if (work.failure) throw work.failure.error;
+      input.signal.throwIfAborted();
+      if (!work.result || outcome.isError) {
+        const reason = outcome.result.content.map(part => part.type === "text" ? part.text : "").join("\n");
+        throw new Error("未能运行 Taskbook 子代理 " + input.seat + (reason ? " · " + reason : ""));
+      }
+      return work.result;
+    } finally {
+      pending.delete(taskbookWorkToken);
+    }
+  };
 }
