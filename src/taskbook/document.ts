@@ -100,10 +100,13 @@ export function githubRepository(remote: string) {
     ?.replace(/\.git$/i, "").toLowerCase();
 }
 
+export function validTaskBranch(root: string, branch: string) {
+  return gitOk(root, "check-ref-format", "refs/heads/" + branch) && gitOk(root, "check-ref-format", "--branch", branch);
+}
+
 export function taskRepository(cwd: string, task: Taskbook) {
   const root = git(cwd, "rev-parse", "--show-toplevel");
-  if ([task.branch, task.baseBranch].some(branch => branch &&
-    (!gitOk(root, "check-ref-format", "refs/heads/" + branch) || !gitOk(root, "check-ref-format", "--branch", branch)))) {
+  if ([task.branch, task.baseBranch].some(branch => branch && !validTaskBranch(root, branch))) {
     throw new Error("任务书中的 Git 分支名无效。");
   }
   if (repositoryIdentity(root) !== task.repository.toLowerCase()) throw new Error("origin 与任务书中的 GitHub 仓库不一致。");

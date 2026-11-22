@@ -89,6 +89,7 @@ test("Setup hands audit terms to Fact Management and recognizes a signed registr
   const preview = () => inspectAuditFacts(root, repository, digest);
   const before = preview();
   const choices = [{id: before.entries[0].id, path: ".fact/domain.tsv"}];
+  assert.throws(() => prepareAuditFactInput(root, repository, digest, "HEAD", choices, before), /工作分支/);
   const input = prepareAuditFactInput(root, repository, digest, branch, choices, before);
   assert.equal(prepareAuditFactInput(root, repository, digest, branch, choices, before).input, input.input);
   assert.equal(preview().entries[0].status, "ready");

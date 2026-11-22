@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { inspectLegacyProjectMemory } from "../facts/project-memory-migration.ts";
 import { readTopicFacts, validateSubjectPath } from "../facts/taskbook-intake.ts";
 import { decodeTsv } from "../facts/tsv.ts";
-import { git, gitOk, readTaskbook } from "../taskbook/document.ts";
+import { git, gitOk, readTaskbook, validTaskBranch } from "../taskbook/document.ts";
 import { privateDirectory } from "../workflow/run-paths.ts";
 import { taskAuthoredFacts } from "../workflow/task-context.ts";
 
@@ -63,7 +63,7 @@ export function inspectAuditFacts(root: string, repository: string, digest: stri
 
 export function prepareAuditFactInput(root: string, repository: string, digest: string, branch: string,
   selections: Selection[], inventory: ReturnType<typeof inspectAuditFacts>) {
-  if (!gitOk(root, "check-ref-format", "refs/heads/" + branch) || branch.startsWith("-") ||
+  if (!validTaskBranch(root, branch) ||
       !selections.length || new Set(selections.map(item => item.id)).size !== selections.length) {
     throw new Error("迁移需要明确工作分支和不重复的候选事实。");
   }
