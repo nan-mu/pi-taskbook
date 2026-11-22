@@ -1,0 +1,4 @@
+id	fact	source	labels
+prepare-stage-inputs	When a command or workflow state determines the required material, the plugin should collect it and supply it to the agent through the entry point.	Maintainer decision: command preparation and agent tools	prompts,workflow
+fixed-operations	The plugin executes repeatable reads and transformations in code.	Maintainer decision: command preparation and agent tools	prompts
+preparation-rationale	Reusing fixed operations aims to reduce tokens spent generating commands and gives tests and audits repeatable operations to inspect.	Maintainer decision: command preparation and agent tools	prompts

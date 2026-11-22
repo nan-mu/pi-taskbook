@@ -1,0 +1,4 @@
+id	fact	source	labels
+purpose-handoff	Summarize the delivered work, checks and limitations together with the supplied fact diff.	39c219e56dc3:prompts/handoff.md | .fact/workflow/fact-management.tsv#closing-fact-management	
+inspectable-delivery	Organize the handoff around outcomes the recipient can inspect. For each limitation that affects takeover, name the affected outcome and evidence location so the reader can decide whether to proceed.	prompts/handoff.md | https://github.com/cursor/plugins/blob/e58dd043600587dbaf58ba315e7f2b38373eeb43/pstack/skills/technical-writing/SKILL.md	
+receipt-for-publication	After the single publication call within the authorized scope, determine its outcome from the returned receipt. Report success only for the revision and action that the receipt confirms, then end the turn.	index.ts | https://github.com/cursor/plugins/blob/e58dd043600587dbaf58ba315e7f2b38373eeb43/pstack/skills/principle-prove-it-works/SKILL.md	

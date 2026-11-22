@@ -1,0 +1,2 @@
+id	fact	source	labels
+setup-tools	To refresh the available models, the agent calls the read-only taskbook_model_catalog tool.	39c219e56dc3:src/setup/command.ts	

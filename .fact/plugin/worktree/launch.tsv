@@ -1,0 +1,6 @@
+id	fact	source	labels
+t3-worktree-ownership	The /taskbook-new handler calls t3_thread_launch with workspaceStrategy.type=worktree. T3 creates and manages the worktree.	39c219e56dc3:src/integrations/t3.ts#L217-L233	t3
+t3-launch-retry-key	/taskbook-new derives the T3 clientRequestId from the taskbook digest, so retrying unchanged input submits the same request identifier.	39c219e56dc3:index.ts	t3
+t3-prepared-entry	A prepared launch rereads the taskbook and verifies its digest, pinned base, worktree when supplied, and expected branch before execution.	39c219e56dc3:src/taskbook/entry.ts	t3
+t3-destination-verification	When reading a T3 worktree binding, the plugin checks the local Git root and current branch against the binding.	39c219e56dc3:src/integrations/t3.ts#L154-L166	t3
+request-new-worktree	The /taskbook-new handler validates launch parameters with prepareTaskLaunch before requesting the T3 worktree through launchT3Thread.	src/taskbook/entry.ts | index.ts | .fact/command/taskbook-new/branch.tsv#new-branch	

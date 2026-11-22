@@ -7,7 +7,7 @@ import { answers, askConsult, designers, needsUser, type Change, type CompletedR
   type Designer, type Draft, type Reply, type Response, type RoundWork, type Work } from "./protocol-v0.1.ts";
 
 export const designerVersion = "0.1";
-export type DesignInput = {runId: string; taskbook: string; baseline: string; factsVersion: string; facts: readonly string[]; targetIds: readonly string[]};
+export type DesignInput = {runId: string; taskbook: string; baseline: string; factsVersion: string; facts: readonly string[]; observations?: readonly import("../../facts/fact-check.ts").CheckedFact[]; userAnswers?: readonly {question: string; answer: string}[]; targetIds: readonly string[]};
 type DraftEntry = {designer: Designer; version: string; draft: Draft};
 type Issue = {
   id: string; author: Designer; proposer: Designer; version: string; original: Change; proposal: Change;
@@ -192,7 +192,7 @@ function advance(state: Working): DesignerState {
     case "synthesize": {
       const {reply} = submitted(state.slots, "synthesize")[0];
       const plan = acceptPlan(reply.plan.steps, [...checkpoint.input.targetIds], checkpoint.candidate?.plan.version);
-      const candidate = {draft: reply.draft, plan, version: digest({draft: reply.draft, plan})};
+      const candidate = {draft: reply.draft, plan, version: digest({draft: reply.draft, plan, factsVersion: checkpoint.input.factsVersion})};
       return begin({...checkpoint, candidate}, "confirm", designers.slice(1).map(designer => ({designer, input: {candidate, resolved: checkpoint.resolved}})));
     }
     case "confirm": {

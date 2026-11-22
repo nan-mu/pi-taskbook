@@ -1,0 +1,6 @@
+id	fact	source	labels
+taskbook-fact-input	A taskbook may list facts directly in its Facts section.	39c219e56dc3:src/workflow/task-context.ts#L62-L72 | .fact/taskbook-format/references.tsv#fact-attachment-path	facts
+taskbook-item-references	Within a taskbook, /fact(n) refers to the authored fact numbered n in that taskbook.	src/workflow/task-context.ts | .fact/taskbook-format/references.tsv#task-item-numbering	facts,workflow
+taskbook-content-identity	The taskbook digest covers the Markdown and optional fact attachment; without a Taskbook ID the plugin derives the ID from this digest.	39c219e56dc3:src/taskbook/document.ts	workflow,facts
+fact-attachment-path	The Facts header may specify a separate attachment. Its path must be relative and resolve within the taskbook directory.	39c219e56dc3:src/taskbook/document.ts#L63-L83	facts
+task-item-numbering	Goal and Delivery items receive G and D identifiers. Inline facts use F. Attachment items use AF when inline facts exist, or F when the attachment supplies all facts.	39c219e56dc3:src/workflow/task-context.ts#L29-L72	facts,workflow

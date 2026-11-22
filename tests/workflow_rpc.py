@@ -9,6 +9,7 @@ import queue
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -402,6 +403,60 @@ def test_fact_turn(state, messages):
     return tool_call("taskbook_report", report)
 
 
+def named_work_turn(messages):
+    request = next(msg for msg in reversed(messages) if msg["role"] == "user")
+    packet = json.loads(prompt_text(request))
+    seat, stage, assignment = packet["seat"], packet["work"], packet["assignment"]
+    evidence = ["measure.py at the candidate revision"]
+    draft = {"goal": "Restore the default measurement", "facts": []}
+    last = messages[-1]
+    if stage == "draft":
+        assert "Use input 7." in json.dumps(assignment)
+        assert 'missing measurement' in json.dumps(assignment)
+        reply = {"kind": "draft", "draft": draft}
+    elif stage == "compare" and "targetIds" in assignment:
+        reply = {"kind": "compare", "reviews": [{"designer": peer, "changes": []}
+                 for peer in ("lead", "member-a", "member-b") if peer != seat]}
+    elif stage == "synthesize":
+        reply = {"kind": "synthesize", "draft": draft, "appliedIssues": [], "plan": {"steps": [
+            {"id": "restore", "action": "Use 7 for a missing input.", "checks": "Run the default and explicit cases.",
+             "targets": assignment["targetIds"]}]}}
+    elif stage in ("confirm", "lead-decision"):
+        reply = {"kind": "approved", "version": assignment["materials"]["candidate"]["version"]}
+    elif stage == "reproduce":
+        if last["role"] != "tool":
+            return tool_call("bash", {"command": "python3 measure.py"})
+        assert "missing measurement" in prompt_text(last)
+        reply = {"kind": "reproduced", "trigger": "python3 measure.py", "observed": "missing measurement", "evidence": "Exit 4"}
+    elif stage == "diagnose":
+        reply = {"kind": "done", "summary": "The missing argument exits from the first branch.", "evidence": evidence}
+    elif stage == "implement":
+        if last["role"] != "tool":
+            source = 'import sys\nprint("measurement=" + (sys.argv[1] if len(sys.argv) > 1 else "7"))\n'
+            return tool_call("bash", {"command": "printf %s " + shlex.quote(source) +
+                             " > measure.py && git add measure.py && git -c user.name=Fixture -c user.email=fixture@example.invalid commit -m 'Restore default measurement'"})
+        assert "Restore default measurement" in prompt_text(last), prompt_text(last)
+        reply = {"kind": "done", "summary": "Committed the default argument.", "evidence": evidence}
+    elif stage == "verify":
+        if last["role"] != "tool":
+            return tool_call("bash", {"command": "python3 measure.py && python3 measure.py 8"})
+        assert "measurement=7" in prompt_text(last) and "measurement=8" in prompt_text(last)
+        reply = {"kind": "verified", "summary": "Both invocations emitted the expected number.", "evidence": evidence}
+    elif stage in ("initial-first", "cross-first"):
+        if last["role"] != "tool":
+            return tool_call("inspect_revision", {"view": "candidate", "path": "measure.py"})
+        assert 'else "7"' in prompt_text(last), prompt_text(last)
+        observation = re.search(r"Observation (R\d+)", prompt_text(last))[1]
+        reply = {"kind": "pass", "summary": "The candidate keeps explicit values and defaults to 7.", "evidence": [observation]}
+    elif stage == "compare":
+        reply = {"kind": "pass", "summary": "Both inspections support the same result.", "evidence": evidence}
+    elif stage == "lead":
+        reply = {"kind": "approve", "summary": "Both members verified the candidate source."}
+    else:
+        raise AssertionError((seat, stage))
+    return tool_call("taskbook_work_result", {"result": reply})
+
+
 class Provider(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -428,6 +483,9 @@ class Provider(http.server.BaseHTTPRequestHandler):
                             ]),
                         ]}
                     }}}]}
+                elif body["method"] == "tools/call" and body["params"]["name"] == "t3_worktree_status":
+                    result = {"structuredContent": {"attached": False, "worktreePath": None, "branch": None,
+                              "projectWorkspaceRoot": str(main), "defaultStartFromOrigin": False}}
                 else:
                     assert body["method"] == "tools/call"
                     assert self.headers["Mcp-Session-Id"] == "test-session"
@@ -491,6 +549,17 @@ class Provider(http.server.BaseHTTPRequestHandler):
                     ("同意生成", "请迁移旧审计资料", "请清理已迁移的审计资料", "保存项目模型到本机", "保存项目模型并跟踪", "不追踪") for message in messages):
                 delta = {"role": "assistant", "content": "setup follow-up complete"}
                 finish = "stop"
+            elif any(tool["function"]["name"] == "taskbook_work_result" for tool in body.get("tools", [])):
+                delta = named_work_turn(messages)
+                finish = "tool_calls"
+            elif "# Handoff" in system and "taskbook_report.summary" in system:
+                packet = json.loads(system.rsplit("\n\n", 1)[1])
+                if messages[-1]["role"] == "tool":
+                    delta, finish = {"role": "assistant", "content": "Recorded handoff."}, "stop"
+                else:
+                    delta = tool_call("taskbook_report", {"attempt": packet["attempt"], "outcome": "pass", "evidence": [],
+                                      "summary": "Default 7 and explicit 8 both passed verification."})
+                    finish = "tool_calls"
             elif "PI_TASKBOOK_INDEPENDENT_REVIEW" in system:
                 user_message = next(m["content"] for m in messages if m["role"] == "user")
                 if isinstance(user_message, list):
@@ -579,6 +648,15 @@ class Provider(http.server.BaseHTTPRequestHandler):
                                   summary="测试替身阶段结果 " + phase, evidence=["fixture observation"])
                     if phase == "fact-check" and result["outcome"] == "pass":
                         result = fact_report(state)
+                        if task.startswith("task-") and not state["userAnswers"]:
+                            result = dict(attempt=state["attempt"], outcome="needs-user",
+                                          summary="Which fixed input should the premise check use?", evidence=[])
+                    if phase == "fact-management" and task.startswith("task-") and not state.get("intakeDecisions"):
+                        # The fixture deliberately presents an ambiguous fact so the new task
+                        # stops at the next authority boundary without running a Designer turn.
+                        assert state["userAnswers"][-1]["answer"] == "Use input 7."
+                        result = dict(attempt=state["attempt"], outcome="fact-conflict", evidence=[],
+                                      summary="Unclear scope.", intakeConflicts=[{"id": "F1", "reason": "Unclear scope."}])
                     if phase == "design":
                         result["plan"] = design_plan(state)
                     if phase == "implement":
@@ -603,6 +681,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
 
 class Client:
     def __init__(self, work, config, session, env=None, mcp=False):
+        self.work, self.session = work, session
         self.events = queue.Queue()
         self.saved = []
         self.notifications = []
@@ -750,8 +829,24 @@ Entry: New feature
     return path
 
 def submit(client, path, command="taskbook"):
+    # Exercise the previous review protocol by resuming historical runs in this
+    # worktree. Fresh tasks use the named-team route exercised above.
+    if command == "taskbook" and client.work == work and legacy_defaults:
+        markdown = path.read_text()
+        name = re.search(r"^Taskbook ID: `?([\w.-]+)", markdown, re.M)
+        if name:
+            attached = re.search(r"^Facts: ([^\n]+)", markdown, re.M)
+            facts = (path.parent / attached[1].strip("` ")).read_text() if attached else None
+            digest = hashlib.sha256(json.dumps([markdown, facts], ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+            location = run_directory(work) / (name[1] + "-" + digest[:16]) / "state.json"
+            if not location.exists():
+                location.parent.mkdir(parents=True, exist_ok=True)
+                location.write_text(json.dumps({**legacy_defaults, "digest": digest, "session": client.session,
+                    "base": git(work, "merge-base", "main", "HEAD"), "branch": git(work, "branch", "--show-current")}))
     result = client.command(type="prompt", message=f'/{command} "{path}"')
     assert result["success"] and result["data"]["disposition"] == "handled", result
+
+legacy_defaults = None
 
 with tempfile.TemporaryDirectory(prefix="pi-taskbook-rpc-") as tmp:
     d = Path(tmp)
@@ -802,16 +897,16 @@ with tempfile.TemporaryDirectory(prefix="pi-taskbook-rpc-") as tmp:
     client = Client(main, config, session, t3env)
     try:
         commands = client.command(type="get_commands")
-        assert {item["name"] for item in commands["data"]["commands"]} >= {"taskbook", "taskbook-new", "taskbook-exit"}, commands
+        assert {item["name"] for item in commands["data"]["commands"] if item["name"].startswith("taskbook")} == {"taskbook", "taskbook-new", "taskbook-setup"}, commands
         client.command(type="prompt", message="/taskbook-setup")
         client.settled("setup fixture report")
         assert "t3_thread_launch" in setup_reports[-1] and "discovered" in setup_reports[-1]
         assert not tuple(worktree_root.iterdir()) and not launches
         submit(client, taskfile(d, "main-rejected"))
-        client.notify("当前是主 checkout")
+        client.notify("T3 线程需要已绑定")
         assert not (main / ".audit").exists()
         assert not requests
-        new_path = d / "entry-format.md"
+        new_path = d / "entry path with spaces.md"
         base = git(main, "rev-parse", "HEAD")
         new_path.write_text(f"""# Fixture
 **Repository** `fixture/repo`
@@ -830,6 +925,10 @@ Restore the no-argument measurement command.
 
 Complete the shared stages.
 """)
+        submit(client, new_path, "taskbook-new")
+        client.notify("Work branch")
+        assert not tuple(worktree_root.iterdir()) and not launches
+        new_path.write_text(new_path.read_text().replace("**Entry**", "**Work branch** `agent/requested-name`\n**Entry**"))
         t3_root_only.set()
         client.command(type="prompt", message="/taskbook-setup")
         client.settled("setup fixture report")
@@ -839,17 +938,17 @@ Complete the shared stages.
         assert not tuple(worktree_root.iterdir()) and not launches
         t3_root_only.clear()
         submit(client, new_path, "taskbook-new")
-        client.notify("已交给新 T3 thread")
+        client.notify("T3 已接收工作区请求")
         assert len(launches) == 1 and not requests
         strategy = launches[0]["workspaceStrategy"]
         assert strategy["type"] == "worktree"
-        assert strategy["branch"].startswith("agent/task-")
+        assert strategy["branch"] == "agent/requested-name"
         assert strategy["baseRef"] == base
         created = worktree_root / "t3-managed"
         assert git(created, "rev-parse", "HEAD") == git(main, "rev-parse", "HEAD")
         assert git(created, "branch", "--show-current") == strategy["branch"]
         submit(client, new_path, "taskbook-new")
-        client.notify("已交给新 T3 thread")
+        client.notify("T3 已接收工作区请求")
         assert launches[0] == launches[1] and not requests
     finally:
         client.close()
@@ -860,13 +959,50 @@ Complete the shared stages.
     try:
         result = child.command(type="prompt", message=message)
         assert result["success"] and result["data"]["disposition"] == "handled"
-        child.notify("可交接")
+        child.notify("Which fixed input")
+        before = state_for(created, launches[0]["title"])
+        assert before["phase"] == "fact-check" and before["pendingQuestion"]
+        answer = child.command(type="prompt", message="Use input 7.")
+        assert answer["success"] and answer["data"]["disposition"] == "handled", answer
+        child.notify("Unclear scope.")
         state = state_for(created, launches[0]["title"])
-        assert state["exit"] == "ready"
-        assert [r["phase"] for r in state["reports"]] == ["fact-check", "fact-review", "design", "implement", "correctness", "quality"], state
+        assert state["phase"] == "fact-management" and state["intakeConflicts"][0]["id"] == "F1"
+        assert [r["phase"] for r in state["reports"]] == ["fact-check", "fact-check", "fact-management"], state
+        assert state["reports"][1]["factChecks"][0]["origin"] == base + ":measure.py:4"
+        assert not (created / ".fact").exists()
+        if "--entry-only" not in sys.argv:
+            # Give the pending fact a concrete destination and follow the prepared entry to delivery.
+            decision = child.command(type="prompt", message="F1 create .fact/measurement.tsv")
+            assert decision["success"] and decision["data"]["disposition"] == "handled", decision
+            child.notify("可交接")
+            signed = state_for(created, launches[0]["title"])
+            assert signed["exit"] == "ready"
+            assert [item["phase"] for item in signed["reports"]][-5:] == ["design", "implement", "review", "fact-registration", "handoff"]
+            assert (created / ".fact/measurement.tsv").read_text().count("currently diagnoses a missing measurement") == 1
+            assert git(created, "status", "--porcelain") == ""
+            assert git(created, "rev-parse", "HEAD") == signed["deliveryRevision"]
+            assert "Taskbook-Registration" in git(created, "log", "-1", "--format=%B", signed["team"]["registered"]["revision"])
+        if "--entry-only" in sys.argv or "--named-only" in sys.argv:
+            assert errors.empty(), list(errors.queue)
+            print("Verified three commands, T3 worktree launch, and a user decision at intake." if "--entry-only" in sys.argv
+                  else "Verified the signed named-team workflow from T3 launch through fact registration and local handoff.")
+            sys.exit(0)
     finally:
         child.close()
 
+    legacy_data = json.loads(subprocess.check_output(["node", "--input-type=module", "-e", """
+        import {pinUpstreamInputs} from './src/methods/upstream.ts';
+        import {localPromptDigest} from './src/workflow/phase-input.ts';
+        import {formatProjectTsv} from './src/facts/project-memory-format.ts';
+        console.log(JSON.stringify({upstream:pinUpstreamInputs(), promptDigest:localPromptDigest,
+            table:formatProjectTsv({schema:1, records:{}, applied:{}})}));
+    """], cwd=repo, text=True))
+    (work / ".fact").mkdir(exist_ok=True)
+    (work / ".fact/facts.tsv").write_text(legacy_data.pop("table"))
+    (work / "GLOSSARY.md").write_text("# Glossary\n")
+    git(work, "add", ".fact/facts.tsv", "GLOSSARY.md")
+    git(work, "commit", "-m", "Historical project memory fixture")
+    legacy_defaults = {**legacy_data, "version": 3, "reviewPolicy": 1, "phase": "fact-check", "reports": []}
     session = str(uuid.uuid4())
     client = Client(work, config, session, roots)
     try:
@@ -972,7 +1108,7 @@ Complete the shared stages.
         assert count == len(requests) + len(review_calls)
         assert conflicted["phase"] == "fact-review" and not conflict_candidates
         assert all(r["phase"] != "implement" for r in conflicted["reports"])
-        decision = client.command(type="prompt", message="/taskbook-decide F1 replace " + correct_baseline)
+        decision = client.command(type="prompt", message="F1 replace " + correct_baseline)
         assert decision["success"] and decision["data"]["disposition"] == "handled", decision
         client.notify("可交接")
         resolved = state_for(work, "conflict-review")
@@ -981,9 +1117,9 @@ Complete the shared stages.
         assert resolved["exit"] == "ready" and not resolved.get("pendingConflicts"), resolved
         submit(client, taskfile(d, "cancel"))
         assert cancel_started.wait(8)
-        assert client.command(type="prompt", message="/taskbook-exit")["success"]
-        client.notify("已取消")
-        assert state_for(work, "cancel")["exit"] == "cancelled"
+        assert client.command(type="abort")["success"]
+        client.notify("可恢复")
+        assert state_for(work, "cancel")["phase"] == "fact-check"
         cancel_end.set()
     finally:
         client.close()
@@ -1056,7 +1192,7 @@ Complete the shared stages.
         conflict_state = state_for(work, "project-conflict")
         assert conflict_state["pendingConflicts"][0]["projectVersion"] == 2
         assert conflict_state["pendingConflicts"][0]["projectHead"] == conflict_state["reports"][-1]["projectHead"]
-        router.command(type="prompt", message="/taskbook-decide project:term:endpoint keep 保留版本 2")
+        router.command(type="prompt", message="project:term:endpoint keep 保留版本 2")
         router.notify("可交接")
         assert state_for(work, "project-conflict")["exit"] == "ready"
         retire = taskfile(d, "term-retire")
@@ -1086,13 +1222,12 @@ Complete the shared stages.
         assert waiting["pendingQuestion"]["question"] == user_question, waiting
         role_file.write_text("design: fixture/invalid-test-model\n")
         submit(router, taskfile(d, "invalid-model"))
-        message = router.notify("未匹配已注册的 Pi 模型")
-        assert "taskbook-models.md" in str(message) and "design" in str(message) and "invalid-test-model" not in str(message), message
+        router.notify("请先处理当前任务的待决事项")
         before = len(requests)
         submit(router, question)
         router.notify(user_question)
         assert len(requests) == before, "Resubmission bypassed the user's pending decision."
-        answer = router.command(type="prompt", message="/taskbook-answer " + user_answer)
+        answer = router.command(type="prompt", message=user_answer)
         assert answer["success"] and answer["data"]["disposition"] == "handled", answer
         router.notify("可交接")
         answered = state_for(work, "design-question")
@@ -1143,7 +1278,8 @@ Complete the shared stages.
         setup.command(type="prompt", message="/taskbook-setup")
         setup.settled("setup fixture report")
         content = setup_reports[-1]
-        assert ".audit/legacy/facts.json" in content and "old-archive" in content
+        diagnostics = json.loads(content.split("## Runtime diagnostics\n")[1])
+        assert diagnostics["legacy"]["facts"]["pending"] >= 1
         before = (archive.read_bytes(), git(work, "rev-parse", "HEAD"))
         legacy_run = work / ".audit/pi-taskbook" / old_path.parent.name / "state.json"
         legacy_run.parent.mkdir(parents=True)
@@ -1158,22 +1294,19 @@ Complete the shared stages.
         setup.command(type="prompt", message="请迁移旧审计资料")
         assert "归档 .audit" in str(setup.confirm(True))
         setup.settled("setup follow-up complete")
-        imported = facts_at(work)["project:fact:old-archive"]
-        assert imported["deleted"] and imported["source"]["migration"]["source"] == ".audit/legacy/facts.json"
+        assert "project:fact:old-archive" not in facts_at(work), "Archiving must not register a retired fact."
         assert archive.read_bytes() == before[0] and old_path.read_bytes() == legacy_run.read_bytes()
         backups = list(run_directory(work).parent.glob("legacy-audit/*/notes.txt"))
         assert len(backups) == 1 and backups[0].read_text() == "Preserve unclassified notes."
         submit(setup, taskfile(d, "keep-audit"))
         setup.notify("可交接")
         assert (work / ".audit").exists() and state_for(work, "keep-audit")["exit"] == "ready"
+        setup.command(type="prompt", message="/taskbook-setup")
+        setup.settled("setup fixture report")
         setup.command(type="prompt", message="请清理已迁移的审计资料")
-        assert "删除" in str(setup.confirm(False))
         setup.settled("setup follow-up complete")
-        assert (work / ".audit").exists()
-        setup.command(type="prompt", message="请清理已迁移的审计资料")
-        assert "删除" in str(setup.confirm(True))
-        setup.settled("setup follow-up complete")
-        assert not (work / ".audit").exists() and state_for(work, "term-retire")["version"] == 1
+        assert archive.read_bytes() == before[0] and state_for(work, "term-retire")["version"] == 1
+        (work / ".audit").rename(d / "archive-with-pending-facts")
 
         (work / ".audit").mkdir()
         (work / ".audit/notes.txt").write_text("Approval fixture")
@@ -1210,8 +1343,8 @@ Complete the shared stages.
                                  "- create fact never-send @0 | cross-project:fact | Fixture cancelled before approval.\n")
         submit(shared, shared_cancel)
         assert cancel_started.wait(8)
-        shared.command(type="prompt", message="/taskbook-exit")
-        shared.notify("已取消")
+        shared.command(type="abort")
+        shared.notify("可恢复")
         cancel_end.set()
         calls = lambda: [json.loads(line) for line in mcp_log.read_text().splitlines()] if mcp_log.exists() else []
         assert not any(call["tool"] in ("memory_save", "memory_forget") for call in calls())
@@ -1303,7 +1436,7 @@ Complete the shared stages.
         submit(single, same)
         single.notify("未指定不同的设计模型")
         assert len(requests) == before
-        single.command(type="prompt", message="/taskbook-answer " + user_answer)
+        single.command(type="prompt", message=user_answer)
         single.notify("可交接")
         assert state_for(work, "same-model")["plan"]["version"] == 2
     finally:

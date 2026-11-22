@@ -1,0 +1,3 @@
+id	fact	source	labels
+select-upstream-methods	Track upstream PStack methods and selectively adapt methods that serve the project.	Maintainer decision: selective adaptation of PStack methods	prompts
+pstack-prompt-share	At least 90% of the project’s prompts must draw on or adapt PStack methods.	Maintainer decision: 90% PStack prompt adoption target | .fact/approach/upstream-methods.tsv#select-upstream-methods	

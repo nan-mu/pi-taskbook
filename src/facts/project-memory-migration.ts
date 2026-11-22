@@ -17,7 +17,7 @@ const legacyFile = "memory.json";
 const auditPath = ".audit";
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const checkpointSchema = Type.Object({
-  version: Type.Union([Type.Literal(1), Type.Literal(2)]),
+  version: Type.Union([Type.Literal(1), Type.Literal(2), Type.Literal(3)]),
   digest: Type.String({minLength: 1}),
   base: Type.String({pattern: "^[a-f0-9]{40}([a-f0-9]{24})?$"}),
   taskbook: Type.Object({id: Type.String({minLength: 1}), digest: Type.String(), repository: Type.String()}),
@@ -144,7 +144,7 @@ function checkpointInventory(root: string, inventory: Inventory, source: string,
   for (const [reportIndex, report] of state.reports.entries()) {
     if (!report || typeof report !== "object" || !("phase" in report) || report.phase !== "fact-review" ||
         !("outcome" in report) || report.outcome !== "pass") continue;
-    if (state.version === 2 || ("projectStore" in report && report.projectStore === "fact-v1")) continue;
+    if (state.version !== 1 || ("projectStore" in report && report.projectStore === "fact-v1")) continue;
     if (!Value.Check(reviewSchema, report)) {
       inventory.unresolved.push({source: source + "#" + (reportIndex + 1), reason: "旧核查缺少可验证的独立审核回执。"});
       continue;
@@ -243,7 +243,7 @@ export function inspectLegacyProjectMemory(root: string, repository?: string) {
       const competing = alternatives.get(entry.target)?.some(other =>
         other !== entry && !copied(other.record, entry.record) && !copied(entry.record, other.record));
       return {id: entry.id, sourceVersion: entry.sourceVersion, source: entry.source, sourceRevision: entry.sourceRevision, target: projectFactsPath + "#" + entry.target,
-        version: entry.record.version, status: localStatus === "ready" && competing ? "conflict" : localStatus,
+        version: entry.record.version, scope: entry.record.scope, text: entry.record.text, status: localStatus === "ready" && competing ? "conflict" : localStatus,
         retired: entry.record.deleted, kind: entry.record.kind};
   });
   const projectJson = preview.projectJson;

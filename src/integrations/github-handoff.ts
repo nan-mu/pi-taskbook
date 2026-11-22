@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { Type, type Static, type TSchema } from "typebox";
+import { toolProperties } from "./mcp-catalog.ts";
 import { Value } from "typebox/value";
 
 export const pullRequestActions = ["create", "draft", "update", "comment"] as const;
@@ -36,12 +37,11 @@ export function githubHandoffTools(pi: ExtensionAPI) {
   for (const method of Object.keys(contracts) as Method[]) {
     const matches = tools.filter(tool => tool.name.startsWith(tool.namespace?.name + "__") &&
       tool.name.slice((tool.namespace?.name.length ?? 0) + 2) === "github__" + method);
-    const properties = matches[0]?.parameters.properties;
+    const properties = toolProperties(matches[0]?.parameters);
     if (matches.length !== 1 || !properties || contracts[method].some(key => !Object.hasOwn(properties, key))) continue;
     if (method === "pull_request_read") {
-      const selector = properties.method;
-      if (!selector || typeof selector !== "object" || !("enum" in selector) || !Array.isArray(selector.enum) ||
-          !["get", "get_comments"].every(name => selector.enum.includes(name))) continue;
+      const methods = field(field(properties, "method"), "enum");
+      if (!Array.isArray(methods) || !["get", "get_comments"].every(name => methods.includes(name))) continue;
     }
     catalogue.set(method, matches[0]);
   }
@@ -80,7 +80,7 @@ export function githubHandoff(pi: ExtensionAPI, ctx: ExtensionToolContext, repos
       options.action === "update" ? ["update_pull_request"] as const : []),
     ...(options.comments ? ["add_issue_comment"] as const : [])];
   const missing = required.filter(name => !names.has(name) || options.action === "draft" && name === "create_pull_request" &&
-    !Object.hasOwn(names.get(name)?.parameters.properties ?? {}, "draft"));
+    !Object.hasOwn(toolProperties(names.get(name)?.parameters) ?? {}, "draft"));
   if (missing.length) throw new Error("当前 Pi 会话缺少可用的 Magpie GitHub MCP 工具 " + missing.join("、") + "。");
   const [owner, repo] = repository.split("/");
   async function call(method: Method, args: object) {

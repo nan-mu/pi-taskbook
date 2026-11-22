@@ -67,11 +67,11 @@ export function buildPhaseInput(run: Run, phase: Phase, attempt: string, project
   const guidance = consult ? [prompts["designer-consult"], ...consult.methods.map(id => readStageMethod(id, workerMethodStages("design"), "design").text)]
     : [prompts[phase]];
   if (state.taskFacts && (phase === "design" || phase === "implement")) {
-    guidance.push("Facts tagged " + taskFactLabel(task) + " are the primary facts for this task. Use project facts for background and escalate contradictions in the same scope.");
+    guidance.push("Facts tagged " + taskFactLabel(task) + " are the primary facts for this task. Locate each task fact and background fact in its task, project, and revision. For contradictions in the same scope, escalate both record locations and their overlapping scope.");
   }
   if (phase === "fact-check") guidance.push(prompts[task.type.startsWith("fix-") ? "fact-check-fix" : "fact-check-new"], magpieGuide);
   const methods = methodDirectory(workerMethodStages(phase, task.type), phaseSources(phase, task.type));
-  return [common, ...guidance, "## Reference methods\nUse taskbook_method when a method is needed. Omit name to browse.\n" + methods,
+  return [common, ...guidance, "## Reference methods\nIdentify the current role decision that needs a method. Use taskbook_method to read only the guidance needed for that decision, retain its source, and return to the assignment after finding the criterion. Omit name to browse.\n" + methods,
     "## 当前运行数据", fixed, "## 任务书原文", task.markdown,
     ...(task.facts !== undefined ? ["## 任务书随附事实", task.facts] : [])].join("\n\n");
 }

@@ -1,0 +1,4 @@
+id	fact	source	labels
+topic-format	Fact files use UTF-8 TSV with columns id, fact, source and labels. Labels are comma-separated; each row ID is stable within its file.	39c219e56dc3:src/facts/query.ts | 39c219e56dc3:src/facts/tsv.ts	
+topic-label-format	The label catalog .fact/label.tsv contains a label and description for each canonical label.	39c219e56dc3:src/facts/query.ts | 39c219e56dc3:src/facts/tsv.ts	
+topic-escapes	The TSV codec escapes backslashes, tabs, newlines and carriage returns for reversible field encoding.	39c219e56dc3:src/facts/query.ts | 39c219e56dc3:src/facts/tsv.ts	

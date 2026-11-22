@@ -1,0 +1,2 @@
+id	fact	source	labels
+command-contract	A command fact documents an input, choice, or observable outcome relevant to the user invoking the command.	Maintainer decision: user command contract	

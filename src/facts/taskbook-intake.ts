@@ -1,19 +1,21 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
+import { Type, type Static } from "typebox";
 import { git, gitOk, type Taskbook } from "../taskbook/document.ts";
 import type { TaskItem } from "../workflow/task-context.ts";
 import { readFactFile } from "./commit-files.ts";
 import { modelSettingsPath, projectModelPolicy, projectModelsFile } from "../models/storage.ts";
-import { commitTaskbookMemory, type MemoryChange, type ProjectSnapshot } from "./project-memory.ts";
+import { type MemoryChange, type ProjectSnapshot } from "./project-memory.ts";
 import type { FactMatch } from "./query.ts";
-import { decodeTsv, encodeTsv } from "./tsv.ts";
+import { decodeTsv } from "./tsv.ts";
 
 const columns = ["id", "fact", "source", "labels"];
 const labelPath = ".fact/label.tsv";
 const normalize = (text: string) => text.normalize("NFKC").trim().replace(/\s+/gu, " ").replace(/[.。]+$/u, "");
 export const taskFactLabel = (task: Pick<Taskbook, "digest">) => "taskbook:" + task.digest.slice(0, 16);
-export type IntakeDecision = {id: string; action: "create" | "use" | "update"; detail: string};
+export type IntakeDecision = {id: string; action: "create" | "use" | "update" | "delete"; detail: string};
 export type IntakeConflict = {id: string; reason: string};
 
 export function readTopicFacts(root: string) {
@@ -59,120 +61,157 @@ function parseReference(body: string) {
   return match && {id: match[1] ?? match[2], version: match[3], text: match[4]};
 }
 
-export function importTaskFacts({root, task, items, expectedHead, project, base, sessionId, memoryChanges, decisions = []}: {
+// Previous releases committed an entire input at intake. A later restore must
+// recognize a retirement from that commit without reapplying its mutations.
+function legacyRetirements(root: string, commit: string) {
+  const load = (revision: string, path: string) => {
+    const ref = revision + ":" + path;
+    if (!gitOk(root, "cat-file", "-e", ref)) return [];
+    const [header, ...rows] = decodeTsv(execFileSync("git", ["cat-file", "blob", ref], {cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024}));
+    return header?.join("\t") === columns.join("\t") ? rows : [];
+  };
+  const parent = commit + "^";
+  const paths = git(root, "diff", "--name-only", "--no-renames", "-z", parent, commit, "--", ".fact").split("\0").filter(path => path.endsWith(".tsv"));
+  return paths.flatMap(path => {
+    const after = new Set(load(commit, path).map(cells => cells[0]));
+    return load(parent, path).filter(cells => !after.has(cells[0])).map(([id, fact]) => ({id, fact, path}));
+  });
+}
+
+export const intakeTargetsParameter = Type.Array(Type.Object({
+  id: Type.String({minLength: 1}),
+  target: Type.String({minLength: 1, description: "Subject TSV for creation, or existing path#row-id for a referenced fact."}),
+}, {additionalProperties: false}));
+type IntakeTarget = Static<typeof intakeTargetsParameter>[number];
+
+export type FactOperation = "create" | "use" | "update" | "delete";
+export type TaskFactEntry = {item: string; operation: FactOperation; row: FactMatch; reason?: string};
+export type TaskFactView = {
+  label: string; topicHead: string; projectHead: string | null;
+  entries: TaskFactEntry[]; memoryChanges: MemoryChange[]; sessionId: string;
+};
+
+export function validateSubjectPath(root: string, path: string, tables: Map<string, FactMatch[]>) {
+  const reserved = [modelSettingsPath, projectModelPolicy(root)?.path, projectModelsFile, ".fact/facts.tsv", ".fact/label.tsv"];
+  const parts = path.split("/");
+  if (!path.startsWith(".fact/") || !path.endsWith(".tsv") || posix.normalize(path) !== path ||
+      parts.slice(1).some(part => !part || part.startsWith(".") || /[\\\x00-\x1f#]/u.test(part)) ||
+      reserved.includes(path) || path.startsWith(".fact/taskbook/") || ["change.tsv", "label.tsv"].includes(parts.at(-1)!) ||
+      (path === ".fact/always.tsv" && !tables.has(path)) || (readFactFile(root, path) !== undefined && !tables.has(path))) {
+    throw new Error("请选择可写入的主题事实表：" + path);
+  }
+}
+
+export function importTaskFacts({root, task, items, expectedHead, project, sessionId, memoryChanges, decisions = [], targets = []}: {
   root: string; task: Taskbook; items: TaskItem[]; expectedHead: string; project: ProjectSnapshot; base: string;
-  sessionId: string; memoryChanges: MemoryChange[]; decisions?: IntakeDecision[];
+  sessionId: string; memoryChanges: MemoryChange[]; decisions?: IntakeDecision[]; targets?: IntakeTarget[];
 }) {
   const snapshot = readTopicFacts(root);
   if (snapshot.head !== expectedHead) throw new Error("事实表已变化，请按当前版本重新核对。");
-  const {tables} = snapshot;
-  const existing = [...tables.values()].flat();
+  if (new Set(targets.map(x => x.id)).size !== targets.length || targets.some(x => !items.some(item => item.id === x.id))) {
+    throw new Error("事实定位须使用唯一的当前任务条目标识。");
+  }
   const label = taskFactLabel(task);
-  const destination = ".fact/taskbook/" + task.digest + ".tsv";
-  const changes = new Map<string, string>();
-  const edited = new Set<string>();
-  const altered = new Set<FactMatch>();
-  const facts: TaskItem[] = [];
+  const entries: TaskFactEntry[] = [];
   const conflicts: IntakeConflict[] = [];
-  const applied = Boolean(git(root, "log", "-1", "--format=%H", "--fixed-strings", "--grep=Taskbook-Input: " + task.digest));
-
+  const facts: TaskItem[] = [];
+  const existing = [...snapshot.tables.values()].flat();
+  const catalog = decodeTsv(snapshot.labels ?? "label\tdescription\n");
+  if (catalog[0]?.join("\t") !== "label\tdescription") throw new Error(".fact/label.tsv 表头无效。");
+  const knownLabels = new Set(catalog.slice(1).map(cells => cells[0]));
+  knownLabels.add("terms");
+  const marker = "Taskbook-Input: " + task.digest;
+  const recorded = git(root, "log", "-1", "--format=%H", "--fixed-strings", "--grep=" + marker);
+  const importedAt = recorded && git(root, "show", "-s", "--format=%B", recorded).split("\n").includes(marker) ? recorded : undefined;
+  let retirements: ReturnType<typeof legacyRetirements> | undefined;
+  const byItem = new Map(targets.map(x => [x.id, x.target]));
   for (const item of items) {
-    const explicit = /^`(create|use|update|delete)`\s*·\s*`[^`]+`\s*[—–-]\s*([\s\S]+)$/u.exec(item.text);
-    const action = explicit?.[1] ?? "create";
-    const body = explicit?.[2] ?? item.text;
+    const explicit = /^`(create|use|update|delete)`\s*·\s*`([^`]+)`(?:\s*·\s*`([^`]+)`)?\s*[—–-]\s*([\s\S]+)$/u.exec(item.text);
+    if (!explicit && /^`(?:create|use|update|delete)`/u.test(item.text)) throw new Error("任务书事实操作格式无效：" + item.id);
+    const authored = (explicit?.[1] ?? "create") as FactOperation;
     const decision = decisions.findLast(choice => choice.id === item.id);
-    const operation = decision?.action ?? action;
+    let operation = decision?.action ?? authored;
+    if (operation === "delete" && authored !== "delete") throw new Error("删除裁决须指向原任务书的删除操作：" + item.id);
+    const body = (explicit?.[4] ?? item.text).trim();
     const source = task.id + "@" + task.digest + "#" + item.id;
-    if (item.topicFact && item.userDecision?.action === "replace") {
-      const pointer = item.topicFact;
-      const row = tables.get(pointer.path)?.find(candidate => candidate.id === pointer.id);
-      if (!row || !row.labels.includes(label)) throw new Error("用户裁决引用的任务书事实已变化：" + item.id);
-      row.fact = item.userDecision.text;
-      row.source = source;
-      edited.add(row.path);
-      facts.push({...item, text: row.fact});
-      continue;
+    const supplied = byItem.get(item.id);
+    const labels = explicit?.[3]?.split(",").map(value => value.trim()) ?? [];
+    if (labels.some(tag => !knownLabels.has(tag)) || (labels.length && authored !== "create")) {
+      throw new Error("新事实标签须已在目录中登记：" + item.id);
     }
-    const same = existing.find(row => row.source === source);
-    if (same) {
-      if (operation !== "delete") facts.push({...item, text: same.fact, topicFact: {path: same.path, id: same.id}});
+    const conflict = (reason: string) => conflicts.push({id: item.id, reason});
+    let row: FactMatch;
+    let reason: string | undefined;
+    const imported = existing.find(row => row.source === source);
+    // Runs saved by earlier versions may already have registered these rows.
+    if (imported && !decision && !item.userDecision) {
+      row = imported;
+      operation = "use";
+    } else if (importedAt && !item.userDecision && operation !== "use") {
+      const reference = parseReference(body);
+      if (operation === "delete" && reference && !supplied && !decision) {
+        const matches = (row: {id: string; fact: string; path: string}) => row.id === reference.id ||
+          row.path + "#" + row.id === reference.id || normalize(row.fact) === normalize(reference.id);
+        retirements ??= legacyRetirements(root, importedAt);
+        if (!existing.some(matches) && retirements.filter(matches).length === 1) continue;
+      }
+      conflict("这个任务书已登记并且对应事实已变化，请核对当前版本并使用新任务书授权。");
       continue;
-    }
-
-    if (operation === "create") {
-      const duplicate = [...tables.values()].flat().find(row => normalize(row.fact) === normalize(body)) ??
-        Object.entries(project.records).flatMap(([id, record]) => !record.deleted && normalize(record.text) === normalize(body)
-          ? [{id, path: ".fact/facts.tsv"}] : [])[0];
-      if (duplicate && decision?.action !== "create") {
-        conflicts.push({id: item.id, reason: "与已登记事实 " + duplicate.id + "（" + duplicate.path + "）内容相同。"});
+    } else if (operation === "create") {
+      const path = explicit?.[2].startsWith(".fact/") ? explicit[2] :
+        decision?.detail.startsWith(".fact/") ? decision.detail : supplied ?? item.topicFact?.path;
+      if (!path) { conflict("创建事实需要目标主题 TSV 路径。"); continue; }
+      if (supplied && supplied !== path) throw new Error("提交的目标与任务书指定的创建路径不一致：" + item.id);
+      validateSubjectPath(root, path, snapshot.tables);
+      const fact = item.userDecision?.action === "replace" ? item.userDecision.text : body;
+      const duplicate = [...existing, ...entries.filter(x => x.operation !== "delete").map(x => x.row)].find(x => normalize(x.fact) === normalize(fact));
+      const prior = Object.values(project.records).find(record => !record.deleted && normalize(record.text) === normalize(fact));
+      if ((duplicate || prior) && decision?.action !== "create") {
+        conflict("与已登记或待登记事实重合：" + (duplicate ? duplicate.path + "#" + duplicate.id : prior!.key));
         continue;
       }
-      if (applied) {
-        conflicts.push({id: item.id, reason: "本任务曾导入该事实，现行记录已经改变。请用新任务书确认变更。"});
+      row = {path, id: label + ":" + item.id, fact, source, labels: [...new Set(labels)]};
+      if (snapshot.tables.get(path)?.some(candidate => candidate.id === row.id)) {
+        conflict("新记录的来源与现有标识冲突：" + row.id);
         continue;
       }
-      const rows = tables.get(destination) ?? [];
-      const id = label + ":" + item.id;
-      rows.push({path: destination, id, fact: body, source, labels: [label]});
-      tables.set(destination, rows);
-      edited.add(destination);
-      facts.push({...item, text: body, topicFact: {path: destination, id}});
-      continue;
-    }
-
-    const reference = parseReference(body);
-    const target = decision?.detail ?? reference?.id;
-    const found = existing.filter(row => row.id === target || row.path + "#" + row.id === target);
-    if (applied && operation === "delete" && !found.length && target) continue;
-    if (found.length !== 1) {
-      conflicts.push({id: item.id, reason: "需要唯一的已有事实 ID 或路径#ID，当前指定 " + (target ?? "空") + "。"});
-      continue;
-    }
-    const row = found[0];
-    if (reference?.version && !decision && !matchesVersion(root, row, reference.version)) {
-      conflicts.push({id: item.id, reason: "事实 " + row.id + " 的前版与任务书不符。"});
-      continue;
-    }
-    if (operation !== "use" && (applied || altered.has(row))) {
-      conflicts.push({id: item.id, reason: "事实 " + row.id + " 已经有变更，请核对当前版本并明确唯一的变更。"});
-      continue;
-    }
-    if (operation === "update" && !(decision && action === "create" ? body : reference?.text)?.trim()) {
-      conflicts.push({id: item.id, reason: "更新 " + row.id + " 需要提供完整的新事实。"});
-      continue;
-    }
-    if (operation === "delete") {
-      if (!reference?.text?.trim()) {
-        conflicts.push({id: item.id, reason: "退役 " + row.id + " 需要说明缘由。"});
+    } else {
+      const reference = parseReference(body);
+      const selector = decision ? decision.detail : reference?.id;
+      const locate = (target: string | undefined) => existing.filter(row => row.id === target || row.path + "#" + row.id === target ||
+        (target !== undefined && normalize(row.fact) === normalize(target)));
+      const direct = locate(selector);
+      if (!direct.length) { conflict("指定的已有事实不存在：" + selector); continue; }
+      if (direct.length > 1 && !supplied) { conflict("现有事实对应多个条目，请明确其路径：" + selector); continue; }
+      const choice = supplied ? locate(supplied) : direct;
+      if (choice.length !== 1 || (supplied && direct.length && !direct.includes(choice[0]))) {
+        conflict("需要定位唯一的已有事实：" + (selector ?? body));
         continue;
       }
-      tables.set(row.path, tables.get(row.path)!.filter(entry => entry !== row));
-      altered.add(row);
-      edited.add(row.path);
-      continue;
+      const current = choice[0];
+      if (reference?.version && !decision && !matchesVersion(root, current, reference.version)) {
+        conflict("事实 " + current.id + " 的前版与任务书不符。");
+        continue;
+      }
+      if (entries.some(entry => entry.row.path === current.path && entry.row.id === current.id &&
+           (operation !== "use" || entry.operation !== "use"))) {
+        conflict("一个事实对应多个可能冲突的操作：" + current.id);
+        continue;
+      }
+      const replacement = item.userDecision?.action === "replace" ? item.userDecision.text : authored === "create" ? body : reference?.text;
+      if (item.userDecision?.action === "replace" && operation === "use") operation = "update";
+      if ((operation === "update" || operation === "delete") && !replacement?.trim()) {
+        conflict(operation === "delete" ? "退役须说明缘由：" + current.id : "更新需要完整的新事实：" + current.id);
+        continue;
+      }
+      if (operation === "delete") reason = replacement;
+      row = operation === "update" ? {...current, fact: replacement!.trim(), source} : current;
     }
-    if (operation === "update") {
-      row.fact = (decision && action === "create" ? body : reference?.text ?? "").trim();
-      row.source = source;
-      altered.add(row);
-    }
-    row.labels = [...new Set([...row.labels, label])];
-    edited.add(row.path);
-    facts.push({...item, text: row.fact, topicFact: {path: row.path, id: row.id}});
+    entries.push({item: item.id, operation, row, ...(reason ? {reason} : {})});
+    facts.push({...item, text: operation === "delete" ? "Retire this fact: " + row.fact + "\nReason: " + reason : row.fact,
+      operation, topicFact: {path: row.path, id: row.id}});
   }
-
   if (conflicts.length) return {kind: "conflict" as const, conflicts};
-  if (facts.length) {
-    const labels = decodeTsv(snapshot.labels ?? "label\tdescription\n");
-    if (labels[0]?.join("\t") !== "label\tdescription") throw new Error(".fact/label.tsv 表头无效。");
-    if (!labels.slice(1).some(row => row[0] === label)) labels.push([label, "Facts supplied by taskbook " + task.id + "."]);
-    changes.set(labelPath, encodeTsv(labels));
-  }
-  for (const path of edited) {
-    changes.set(path, encodeTsv([columns, ...tables.get(path)!.map(row => [row.id, row.fact, row.source, row.labels.join(",")])]));
-  }
-  const savedProject = commitTaskbookMemory(root, project, task, base, memoryChanges, sessionId, changes, () => {
-    if (readTopicFacts(root).head !== expectedHead) throw new Error("事实表在同步期间已变化。");
-  });
-  return {kind: "complete" as const, facts, revision: git(root, "rev-parse", "HEAD"), head: readTopicFacts(root).head, projectHead: savedProject.head};
+  const view: TaskFactView = {label, entries, topicHead: snapshot.head, projectHead: project.head, memoryChanges, sessionId};
+  return {kind: "complete" as const, facts, view, revision: git(root, "rev-parse", "HEAD"), head: snapshot.head, projectHead: project.head};
 }

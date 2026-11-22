@@ -1,5 +1,0 @@
-id	fact	source	labels
-future-dispatch-pause	A dispatch failure or timeout should pause the workflow for the user with its last checkpoint, pending Work Turns, and already accepted results.	User workflow design decisions	future,workflow
-future-dispatch-resume	Recovery should continue the missing Work Turns from the preserved checkpoint and require a settled old call before retrying its Subagent.	User workflow design decisions	future,workflow
-future-recovery-playbook	A recovery Playbook should explain the failed operation, available evidence and continuation choices from the checkpoint before the user chooses how to proceed.	User workflow design decisions	future,prompts
-future-designer-evaluation	Later Designer versions should run with the same task inputs and model settings as the 0.1 baseline when comparing results.	User workflow design decisions	future,design

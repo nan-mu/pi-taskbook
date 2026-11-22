@@ -1,0 +1,2 @@
+id	fact	source	labels
+topic-always	When .fact/always.tsv exists, the plugin includes its project instructions in the system prompt for main-agent turns and dispatched subagent work.	39c219e56dc3:src/facts/always.ts#L4-L9 | 39c219e56dc3:index.ts#L805-L822 | 39c219e56dc3:src/workflow/subagent.ts#L39-L45	facts

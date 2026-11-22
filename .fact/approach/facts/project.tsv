@@ -1,0 +1,8 @@
+id	fact	source	labels
+term-fact-system	The Fact System is the project facility for registering, retrieving and tracing facts used in Taskbook decisions.	Maintainer decision: Fact System terminology	terms
+term-fact	A Fact is an atomic statement with an identifiable source and scope.	39c219e56dc3:.fact/terms.tsv#L18	terms
+settled	The workspace .fact directory holds established project facts.	Maintainer decision: recoverable task-scoped fact view	
+topic-purpose	Keep confirmed knowledge that informs a future decision; keep guesses and temporary progress with the task.	39c219e56dc3:docs/design/project-memory-prompt.md	
+term-taskbook-fact	A Taskbook Fact is a statement supplied by the taskbook or its fact attachment.	39c219e56dc3:.fact/terms.tsv#L19 | .fact/approach/facts/task-view.tsv#provenance	terms
+term-draft-fact	A Draft Fact is a statement proposed by a designer or implementer and awaiting review.	39c219e56dc3:.fact/terms.tsv#L20	terms
+isolated-agent-context	Each subagent receives the established facts relevant to its assignment so that assumptions from other conversations do not become inputs to its decision.	Maintainer decision: isolated subagent memory and atomic facts	

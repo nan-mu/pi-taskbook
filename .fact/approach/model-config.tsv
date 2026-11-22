@@ -1,0 +1,2 @@
+id	fact	source	labels
+model-preferences	Model setup draws on PStack role preferences and resolves model IDs and thinking levels against the active Pi catalog.	39c219e56dc3:prompts/setup.md | 39c219e56dc3:src/setup/diagnostics.ts	

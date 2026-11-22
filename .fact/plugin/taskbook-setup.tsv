@@ -1,0 +1,4 @@
+id	fact	source	labels
+setup-prompt-owner	The before_agent_start hook supplies prompts/setup.md and identifies Setup tools unavailable on that turn.	39c219e56dc3:src/setup/command.ts	
+setup-tools-active	exposeSetupTools makes Setup tools available to the conversation. Writes and cleanup remain subject to the relevant repository, inventory, and authorization checks.	39c219e56dc3:src/setup/command.ts | .fact/plugin/audit-inventory.tsv#setup-inventory | .fact/plugin/taskbook-setup.tsv#setup-project-binding	
+setup-project-binding	Setup writes require the current session and the detected repository root to match the Setup state.	39c219e56dc3:src/setup/command.ts	

@@ -1,0 +1,6 @@
+id	fact	source	labels
+review-initial-turn	Member A conducts the initial review and either requests changes or clears the candidate for cross-review.	39c219e56dc3:src/workflow/review/flow.ts	prompts
+review-cross-check-turn	Member B conducts the cross-review.	39c219e56dc3:src/workflow/review/flow.ts	prompts
+review-reconcile-turn	The Member Designers respond and reconcile disagreements. The Lead Designer receives their conclusion or unresolved evidence and signs the decision before the plugin redirects work.	39c219e56dc3:src/workflow/review/flow.ts	
+review-agreed-pass	Review approval requires both members to agree on the current candidate before the Lead signs it.	39c219e56dc3:src/workflow/review/flow.ts	facts
+review-rework-version	A revised candidate starts a new initial review.	39c219e56dc3:src/workflow/review/flow.ts | .fact/workflow/review/verdict.tsv#review-initial-turn	

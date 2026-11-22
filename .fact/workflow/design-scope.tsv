@@ -1,0 +1,4 @@
+id	fact	source	labels
+designer-delivery-constraint	Designers use the taskbook's Delivery as an input constraint and propose changes to Goal and Facts.	39c219e56dc3:prompts/designer/0.1/compare.md	
+taskbook-design-authority	Taskbook authors settle project-wide constraints, including the choice of technology stack, with the user before the work enters Design.	Maintainer decision: ownership of uncertainty between the taskbook, Design, and Implement	
+design-decision-authority	Designers choose the details needed to reach the requested outcome within the taskbook constraints. A conflict with an authored fact must go back to the user.	Maintainer decision: ownership of uncertainty between the taskbook, Design, and Implement | .fact/workflow/overview.tsv#consult-protected-facts	

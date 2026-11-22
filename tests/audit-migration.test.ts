@@ -5,6 +5,13 @@ import { join } from "node:path";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { deleteMigratedAudit, inspectAuditMigration, migrateAudit } from "../src/setup/audit-migration.ts";
+import { inspectAuditFacts, prepareAuditFactInput } from "../src/setup/audit-facts.ts";
+import { readProjectMemory } from "../src/facts/project-memory.ts";
+import { importTaskFacts, readTopicFacts } from "../src/facts/taskbook-intake.ts";
+import { git, readTaskbook } from "../src/taskbook/document.ts";
+import { prepareTaskLaunch } from "../src/taskbook/entry.ts";
+import { taskAuthoredFacts } from "../src/workflow/task-context.ts";
+import { registerReviewedFacts } from "../src/workflow/register-facts.ts";
 import { runDirectory } from "../src/workflow/run-paths.ts";
 
 test("audit migration checks the approved bytes before copying or removing an original", t => {
@@ -57,4 +64,50 @@ test("audit migration checks the approved bytes before copying or removing an or
   assert.equal(existsSync(join(root, ".audit")), false);
   assert.equal(readFileSync(join(runDirectory(root), key, "state.json"), "utf8"), legacy);
   assert.deepEqual(readFileSync(join(migrated.archive, "notes.bin")), Buffer.from([0, 255]));
+});
+
+test("Setup hands audit terms to Fact Management and recognizes a signed registration after merging the worktree", t => {
+  const dir = mkdtempSync(join(tmpdir(), "audit input "));
+  t.after(() => rmSync(dir, {recursive: true, force: true}));
+  const root = join(dir, "main");
+  const worktree = join(dir, "work");
+  mkdirSync(root);
+  git(root, "init", "-q");
+  git(root, "-c", "user.name=Fixture", "-c", "user.email=me@example.invalid", "commit", "--allow-empty", "-qm", "base");
+  git(root, "remote", "add", "origin", "https://github.com/owner/repo");
+  const base = git(root, "rev-parse", "HEAD");
+  const branch = "agent/restore-facts";
+  const repository = "owner/repo";
+  const source = {repository, taskId: "prior", taskDigest: "digest", base, reviewSession: "review", evidence: ["approved"]};
+  const record = {kind: "term", key: "entry", version: 1, scope: "project", text: "Entry selects the task type.", source, deleted: false};
+  mkdirSync(join(root, ".audit"));
+  const archive = join(root, ".audit", "terms.json");
+  writeFileSync(archive, JSON.stringify({schema: 1, records: {"project:term:entry": record}, applied: {}}));
+  const audit = inspectAuditMigration(root);
+  assert.equal(audit.status, "ready");
+  const digest = audit.snapshot.digest;
+  const preview = () => inspectAuditFacts(root, repository, digest);
+  const before = preview();
+  const choices = [{id: before.entries[0].id, path: ".fact/domain.tsv"}];
+  assert.throws(() => prepareAuditFactInput(root, repository, digest, "HEAD", choices, before), /工作分支/);
+  const input = prepareAuditFactInput(root, repository, digest, branch, choices, before);
+  assert.equal(prepareAuditFactInput(root, repository, digest, branch, choices, before).input, input.input);
+  assert.equal(preview().entries[0].status, "ready");
+  assert.equal(existsSync(join(root, ".fact")), false);
+  const task = readTaskbook(root, input.input);
+  assert.equal(prepareTaskLaunch(root, task).branch, branch);
+  git(root, "worktree", "add", "-q", "-b", branch, worktree);
+  const view = importTaskFacts({root: worktree, task, base, sessionId: "session", memoryChanges: [],
+    items: taskAuthoredFacts(task.markdown), expectedHead: readTopicFacts(worktree).head, project: readProjectMemory(worktree)});
+  assert.equal(view.kind, "complete");
+  assert.deepEqual(view.view.entries[0].row.labels, ["terms"]);
+  const {revision} = registerReviewedFacts({task, root: worktree, path: join(git(worktree, "rev-parse", "--absolute-git-dir"), "state.json"),
+    state: {version: 3, digest: task.digest, session: "s", base, branch, phase: "fact-registration", reports: [], revision: base,
+      factView: view.view, team: {review: {kind: "approved", checkpoint: {runId: task.id, goals: [], candidate: {revision: base, evidenceVersion: "v1"},
+        epoch: 1, serial: 1, everCrossed: true, priorFindings: []}, draftFacts: [], summary: "approved"}}}}, []);
+  assert.equal(preview().entries[0].status, "ready");
+  git(root, "merge", "--ff-only", revision);
+  assert.equal(preview().entries[0].status, "already-imported");
+  assert.equal(preview().archives[0].status, "already-imported");
+  assert.equal(existsSync(archive), true);
 });

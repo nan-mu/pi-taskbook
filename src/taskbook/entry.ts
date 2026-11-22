@@ -31,9 +31,10 @@ export function verifyPreparedEntry(cwd: string, task: Taskbook, prepared?: Prep
 }
 
 export function prepareTaskLaunch(cwd: string, task: Taskbook) {
+  const branch = task.branch;
+  if (!branch) throw new Error("/taskbook-new 要求任务书通过 Work branch 指定新分支。");
   const project = taskRepository(cwd, task);
   const base = resolveBase(project, task, true);
-  const branch = task.branch ?? "agent/" + task.id;
   const prepared: PreparedEntry = { path: task.sourcePath, digest: task.digest, base, branch };
   return {
     base,

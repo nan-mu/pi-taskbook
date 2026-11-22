@@ -17,8 +17,9 @@ import uuid
 MODEL_ID = "diagnostic"
 CONFIG_SENTINEL = "PRIVATE_BROKEN_CONFIG_VALUE"
 SETUP_REPORT_PROMPT = "这是 /taskbook-setup 的普通对话"
-MODEL_APPROVAL = "保存这组角色模型。"
+MODEL_APPROVAL = "保存这组角色模型，使用 .fact/config/models.tsv。"
 MODEL_POLICY = "key\tvalue\nmodelConfig\t.fact/config/models.tsv\nmodelGitTracking\tfalse\n"
+MODEL_READ_ONLY = "只检查角色模型，不要保存。"
 MODEL_RECHECK = "重查新增模型，然后写入。"
 MODEL_TSV = "role\tmodel\tthinking\ndesign\tsetup-fixture/new-model\t\n"
 
@@ -76,12 +77,18 @@ class SetupModel(http.server.BaseHTTPRequestHandler):
             content = "".join(part.get("text", "") for part in content)
         delta = {"content": "Setup report generated"}
         reason = "stop"
-        if content == MODEL_RECHECK:
+        if content == MODEL_READ_ONLY:
+            delta = self.call("taskbook_model_setup", {
+                "configuration": MODEL_TSV.replace("new-model", "diagnostic"), "approvedBy": [MODEL_READ_ONLY],
+            }, "declined")
+            reason = "tool_calls"
+        elif content == MODEL_RECHECK:
             delta = self.call("taskbook_model_catalog", {}, "catalog")
             reason = "tool_calls"
         elif latest.get("tool_call_id") == "catalog" and "setup-fixture/new-model" in str(latest):
             delta = self.call("taskbook_model_setup", {
                 "configuration": MODEL_TSV,
+                "projectPath": ".fact/config/models.tsv",
                 "approvedBy": [MODEL_APPROVAL, MODEL_RECHECK],
             }, "save")
             reason = "tool_calls"
@@ -108,7 +115,6 @@ class T3Endpoint(http.server.BaseHTTPRequestHandler):
     launch = {"properties": {"workspaceStrategy": {"properties": {
         "type": {"enum": ["root", "existing_worktree", "worktree"]}, "baseRef": {}, "branch": {}, "startFromOrigin": {},
     }}}}
-    handoff = {"properties": {name: {} for name in ("branch", "baseRef", "startFromOrigin", "continuationPrompt")}}
 
     def log_message(self, *_):
         pass
@@ -125,8 +131,7 @@ class T3Endpoint(http.server.BaseHTTPRequestHandler):
             result = {"protocolVersion": "2025-06-18"}
         elif method == "tools/list":
             result = {"tools": [{"name": name, "inputSchema": schema} for name, schema in [
-                ("t3_thread_launch", self.launch), ("t3_worktree_handoff", self.handoff),
-                ("t3_worktree_status", {}), ("t3_worktree_list", {}),
+                ("t3_thread_launch", self.launch), ("t3_worktree_status", {}),
             ]]}
         else:
             assert method == "tools/call"
@@ -137,13 +142,8 @@ class T3Endpoint(http.server.BaseHTTPRequestHandler):
                         "projectWorkspaceRoot": str(self.server.root), "defaultStartFromOrigin": False}
             elif name == "t3_thread_launch":
                 data = {"threadId": "fixture-thread", "link": "t3://fixture/thread"}
-            elif name == "t3_worktree_list":
-                data = {"refs": [], "nextCursor": None}
             else:
-                assert name == "t3_worktree_handoff"
-                data = {"worktreePath": "/fixture/linked", "branch": args["branch"], "baseRef": args["baseRef"],
-                        "startedFromOrigin": False, "continuation": {"status": "scheduled", "delivery": "queued"},
-                        "setupScript": {"status": "no-script"}}
+                raise AssertionError(name)
             result = {"structuredContent": data}
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -152,9 +152,10 @@ class T3Endpoint(http.server.BaseHTTPRequestHandler):
 
 
 def test_t3_endpoint(repo, root, config, model, mcp_log):
-    host = subprocess.check_output(["node", "-p",
+    addresses = subprocess.run(["node", "-p",
         "Object.values(require('node:os').networkInterfaces()).flat().find(x => x.family === 'IPv4' && !x.internal)?.address ?? '127.0.0.1'"],
-        text=True).strip()
+        text=True, capture_output=True)
+    host = addresses.stdout.strip() if addresses.returncode == 0 else "127.0.0.1"
     server = http.server.ThreadingHTTPServer((host, 0), T3Endpoint)
     server.root = root.resolve()
     server.calls = []
@@ -163,45 +164,41 @@ def test_t3_endpoint(repo, root, config, model, mcp_log):
         endpoint = f"http://{host}:{server.server_port}/mcp"
         checks = setup_report(repo, root, config, model, mcp_log, [], t3_endpoint=endpoint)
         assert checks["availability"]["t3"]["directTransport"] == "responding"
-        assert checks["availability"]["t3"]["taskbookNew"] and checks["availability"]["t3"]["taskbookHandoff"]
+        assert checks["availability"]["t3"]["taskbookNew"]
         assert [name for name, _ in server.calls] == ["t3_worktree_status"]
 
         base = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
         task = root.parent / "test-task.md"
-        task.write_text(f"# Fixture\n\nTaskbook ID: t3-fixture\nRepository: fixture/repo\nBase commit: {base}\nEntry: Fix feature\n\n## Goal\n\nFix fixture.\n\n## Delivery\n\nLocal only.\n")
+        task.write_text(f"# Fixture\n\nTaskbook ID: t3-fixture\nRepository: fixture/repo\nBase commit: {base}\nWork branch: agent/t3-fixture\nEntry: Fix feature\n\n## Goal\n\nFix fixture.\n\n## Delivery\n\nLocal only.\n")
         env = {"PATH": os.environ["PATH"], "HOME": str(config.parent), "PI_CODING_AGENT_DIR": str(config),
                "T3_MCP_URL": endpoint, "T3_MCP_BEARER_TOKEN": "fixture-token"}
         pi = os.getenv("PI_BIN") or shutil.which("pi")
-        for command, expected in [("taskbook-new", "已交给新 T3 thread"), ("taskbook-handoff", "T3 工作区")]:
-            with subprocess.Popen([pi, "--mode", "rpc", "--offline", "--no-mcp", "--no-skills",
-                                   "--session-id", str(uuid.uuid4()), "-e", str(repo / "index.ts")],
-                                  cwd=root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  stderr=subprocess.PIPE, text=True) as process:
-                events = queue.Queue()
+        with subprocess.Popen([pi, "--mode", "rpc", "--offline", "--no-mcp", "--no-skills",
+                               "--session-id", str(uuid.uuid4()), "-e", str(repo / "index.ts")],
+                              cwd=root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, text=True) as process:
+            events = queue.Queue()
 
-                def read_events():
-                    for line in process.stdout:
-                        if line.startswith("{"):
-                            events.put(json.loads(line))
+            def read_events():
+                for line in process.stdout:
+                    if line.startswith("{"):
+                        events.put(json.loads(line))
 
-                threading.Thread(target=read_events, daemon=True).start()
-                try:
-                    process.stdin.write(json.dumps({"type": "prompt", "message": f'/{command} "{task}"'}) + "\n")
-                    process.stdin.flush()
-                    while True:
-                        event = events.get(timeout=10)
-                        if event.get("method") == "notify":
-                            assert expected in event["message"], event
-                            break
-                finally:
-                    process.stdin.close()
-                    process.wait(timeout=5)
-        assert [name for name, _ in server.calls] == [
-            "t3_worktree_status", "t3_thread_launch", "t3_worktree_status", "t3_worktree_list", "t3_worktree_handoff"]
+            threading.Thread(target=read_events, daemon=True).start()
+            try:
+                process.stdin.write(json.dumps({"type": "prompt", "message": f'/taskbook-new "{task}"'}) + "\n")
+                process.stdin.flush()
+                while True:
+                    event = events.get(timeout=10)
+                    if event.get("method") == "notify":
+                        assert "t3://fixture/thread" in event["message"], event
+                        break
+            finally:
+                process.stdin.close()
+                process.wait(timeout=5)
+        assert [name for name, _ in server.calls] == ["t3_worktree_status", "t3_thread_launch"]
         launch = server.calls[1][1]
         assert launch["workspaceStrategy"] == {"type": "worktree", "baseRef": base, "branch": "agent/t3-fixture", "startFromOrigin": False}
-        handoff = server.calls[-1][1]
-        assert handoff["baseRef"] == base and handoff["continuationPrompt"].startswith("/taskbook --prepared ")
     finally:
         server.shutdown()
         server.server_close()
@@ -250,7 +247,7 @@ def test_setup_resume(repo, root, config, model):
                 process.wait(timeout=5)
 
     (root / ".fact").mkdir()
-    (root / ".fact/taskbook.tsv").write_text(MODEL_POLICY)
+    (root / ".fact/taskbook.tsv").write_text(MODEL_POLICY.replace(".fact/config/models.tsv", ".fact/models.tsv"))
     (root / ".fact/always.tsv").write_text("id\tfact\tsource\tlabels\nfixture\tAlways inject this fixture rule.\tfixture\t\n")
     first, output = run_prompt("/taskbook-setup " + MODEL_APPROVAL)
     assert "Always inject this fixture rule." in str(first["messages"])
@@ -259,6 +256,9 @@ def test_setup_resume(repo, root, config, model):
     assert "t3.test.invalid" not in output
     assert not (root / ".fact/config/models.tsv").exists()
 
+    _, declined = run_prompt(MODEL_READ_ONLY)
+    assert "用户只要求核对模型" in declined, declined[-1800:]
+    assert not (root / ".fact/models.tsv").exists()
     models_file = config / "models.json"
     def add_model():
         model_config = json.loads(models_file.read_text())
@@ -390,7 +390,7 @@ def test_setup():
             pstack = "judgment and prose: setup-fixture/diagnostic\n"
             (models / "pstack-models.md").write_text(pstack)
             role_file = models / "taskbook-models.tsv"
-            role_file.write_text(proposed)
+            role_file.write_text(proposed.replace("design\tsetup-fixture/diagnostic\t\n", "design\tsetup-fixture/diagnostic\toff\n"))
             (root / ".fact").mkdir()
             (root / "docs/agents").mkdir(parents=True)
             (root / "docs/agents/issue-tracker.md").write_text("Use gh issue create, gh issue comment, and gh issue close.")
@@ -401,12 +401,13 @@ def test_setup():
             valid = setup_report(repo, root, config, model, mcp_log, ["forge", "t3-code"], t3_endpoint="https://fixture.invalid/mcp")
             assert valid["readiness"] == {"runnable": True, "taskbookNew": False, "initialized": True, "blockers": []}
             assert valid["models"]["pstack"]["content"] == pstack
+            assert valid["models"]["effective"]["thinkingLevels"]["design"] == "off"
             assert valid["legacy"]["status"] == "ready"
             preflight = valid["availability"]
             assert set(preflight["t3"]["sessionTools"]) == {
-                "t3_thread_launch", "t3_worktree_handoff", "t3_worktree_status", "t3_worktree_list"}
+                "t3_thread_launch", "t3_worktree_status"}
             assert preflight["t3"]["directTransport"] == "rejected"
-            assert not preflight["t3"]["taskbookNew"] and not preflight["t3"]["taskbookHandoff"]
+            assert not preflight["t3"]["taskbookNew"]
             assert "fixture.invalid" not in str(valid)
             assert preflight["github"]["repositoryAccess"] == "not-tested"
             assert "pullRequestMetadata" in preflight["github"]["read"]
@@ -448,7 +449,7 @@ def test_setup():
         finally:
             model.shutdown()
             model.server_close()
-    print("Pi RPC passed: Setup diagnostics, delayed Magpie, local T3 preflight/launch/handoff, resumed model save")
+    print("Pi RPC passed: Setup diagnostics, delayed Magpie, local T3 preflight/launch, resumed model save")
 
 
 if __name__ == "__main__":

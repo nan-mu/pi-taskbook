@@ -5,11 +5,34 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { acceptPlan, runProbe } from "../src/workflow/design-worker.ts";
-import { formatModelConfig, modelConfigPaths, parseModelConfig, readModelConfig, reviewerModel } from "../src/models/config.ts";
+import { formatModelConfig, modelConfigPaths, parseModelConfig, readModelConfig, reviewerModel, roleSelection } from "../src/models/config.ts";
 import { modelWritePlan, projectModelPolicy, projectModelPath, writeModelSettings } from "../src/models/storage.ts";
 import { nextPhase } from "../src/workflow/transitions.ts";
 
 const step = {id: "route", action: "Implement route via the public entry.", checks: "Invoke entry with two routes.", targets: ["G1", "D1"]};
+import { commandSnapshot, isCandidateReceipt } from "../src/workflow/subagent.ts";
+
+test("verification receipts require the same clean candidate on both sides of a command", t => {
+  const root = mkdtempSync(join(tmpdir(), "pi-candidate-receipt-"));
+  t.after(() => rmSync(root, {recursive: true, force: true}));
+  const git = (...args: string[]) => execFileSync("git", args, {cwd: root, encoding: "utf8"}).trim();
+  git("init", "-q");
+  git("-c", "user.name=Tester", "-c", "user.email=test@invalid.example", "commit", "--allow-empty", "-qm", "candidate");
+  const revision = git("rev-parse", "HEAD");
+  writeFileSync(join(root, "untracked"), "pending");
+  const dirty = commandSnapshot({root});
+  rmSync(join(root, "untracked"));
+  const end = commandSnapshot({root});
+  const receipt = {turn: "verify", command: "check", before: dirty.revision, cleanBefore: dirty.clean,
+    ...end, failed: false, output: "done"};
+  assert.equal(end.clean, true);
+  assert.equal(isCandidateReceipt(receipt, revision), false);
+  assert.equal(isCandidateReceipt({...receipt, cleanBefore: undefined}, revision), false);
+  assert.equal(isCandidateReceipt({...receipt, cleanBefore: true}, revision), true);
+  assert.equal(isCandidateReceipt({...receipt, cleanBefore: true, clean: false}, revision), false);
+  assert.equal(isCandidateReceipt({...receipt, cleanBefore: true, before: "other"}, revision), false);
+});
+
 test("plans cover every goal and delivery with stable, unique steps", () => {
   assert.deepEqual(acceptPlan([step], step.targets, 3), {version: 4, steps: [step]});
   assert.throws(() => acceptPlan([step], [...step.targets, "D2"]), /D2/);
@@ -38,6 +61,21 @@ test("TSV routes preserve thinking levels and reject unknown roles", () => {
   assert.throws(() => parseModelConfig(header + "design\tauto\t\n"), /provider\/model-id/);
   assert.throws(() => parseModelConfig(header + "design\tpi/first\t\ndesign\tpi/second\t\n"), /重复字段/);
   assert.throws(() => parseModelConfig(header + "factManagement\tpi/base\t\n"), /未知字段/);
+});
+
+test("role selection inherits Pi thinking levels within the selected model's supported range", t => {
+  const root = mkdtempSync(join(tmpdir(), "pi-model-thinking-"));
+  t.after(() => rmSync(root, {recursive: true, force: true}));
+  execFileSync("git", ["init", "-q", root]);
+  const routes = {initial: "pi/source", design: "pi/worker", implement: "pi/worker", review: "pi/worker"};
+  const context = (reasoning: boolean, thinkingLevel?: "high") => ({
+    model: {id: "worker", provider: "pi", reasoning}, thinkingLevel,
+  }) as Parameters<typeof roleSelection>[0];
+  assert.equal(roleSelection(context(true, "high"), root, routes, "design").thinkingLevel, "high");
+  assert.equal(roleSelection(context(true), root, routes, "design").thinkingLevel, "medium");
+  assert.equal(roleSelection(context(true), root, {...routes, initialThinking: "xhigh"}, "design").thinkingLevel, "high");
+  assert.equal(roleSelection(context(true), root, {...routes, levels: {review: "low"}}, "designMemberA").thinkingLevel, "low");
+  assert.equal(roleSelection(context(false, "high"), root, routes, "design").thinkingLevel, "off");
 });
 
 test("TSV takes precedence over existing Markdown and JSON routes", t => {

@@ -1,0 +1,11 @@
+id	fact	source	labels
+term-workflow	Project Workflow describes the ordered project stages and their transitions.	39c219e56dc3:.fact/terms.tsv#L2	terms
+term-stage	A Stage is a unit of work in the Project Workflow with a defined result and condition for advancing.	39c219e56dc3:.fact/terms.tsv#L3	terms
+term-main-session	The Main Session is the Pi conversation in which the user starts and monitors a Taskbook run.	39c219e56dc3:.fact/terms.tsv#L4	terms
+term-subagent	A Subagent is a named task participant with its own session and assigned responsibility.	39c219e56dc3:.fact/terms.tsv#L5	terms
+workflow-order	A new team run advances through Fact Check, intake Fact Management, Design, Implement, Review, final fact registration, and Handoff.	index.ts | src/workflow/transitions.ts | .fact/workflow/fact-check.tsv#check-role | .fact/workflow/fact-management.tsv#intake-single-pass	
+term-work-state	A Work State is a step in a single agent's playbook and determines which prompt it receives next.	39c219e56dc3:.fact/terms.tsv#L14	terms
+term-work-turn	A Work Turn is one invocation of a named Subagent in a specified Work State on versioned inputs.	39c219e56dc3:.fact/terms.tsv#L15	terms
+term-round	A Round collects the results of a defined set of Work Turns before releasing their results to the next set.	39c219e56dc3:.fact/terms.tsv#L16	terms
+term-consult	Consult is a Work State in which the current agent classifies a question and resolves it or routes it to its owner.	39c219e56dc3:.fact/terms.tsv#L17	terms
+consult-protected-facts	A conflict with an authored fact pauses the project workflow for the user's decision.	39c219e56dc3:src/workflow/team.ts | .fact/workflow/fact-management.tsv#intake-conflict	prompts,facts

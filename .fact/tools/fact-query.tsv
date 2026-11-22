@@ -1,0 +1,7 @@
+id	fact	source	labels
+topic-query-label	taskbook_query_facts treats an exact registered query as a label. An explicit label restricts text lookup to matching rows.	39c219e56dc3:index.ts | 39c219e56dc3:src/facts/query.ts	
+topic-query-text	Text lookup matches normalized query terms against fact text and paths.	39c219e56dc3:index.ts | 39c219e56dc3:src/facts/query.ts	
+topic-query-results	Each query result includes the matching fact’s path, row ID, text, source, and labels.	39c219e56dc3:index.ts | 39c219e56dc3:src/facts/query.ts	
+fact-query-ranking	Text search ranks term coverage and phrase matches first; ties favor sourced facts and shorter text.	39c219e56dc3:index.ts | 39c219e56dc3:src/facts/query.ts	
+fact-query-limit	Fact queries return up to five distinct fact texts by default. The limit can be set from one to ten.	39c219e56dc3:index.ts | 39c219e56dc3:src/facts/query.ts	
+fact-locator	A project fact reference identifies its subject TSV path and row ID, joined by #.	src/facts/taskbook-intake.ts | src/facts/query.ts	

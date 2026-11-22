@@ -1,0 +1,12 @@
+id	fact	source	labels
+cmd-setup	Use /taskbook-setup to inspect project readiness, configure models, or request migration of legacy records.	Maintainer decision: user command contract | .fact/command/taskbook-setup.tsv#setup-read-only	
+setup-idle	The user can start Setup when the session is idle, with no Setup check or task workflow in progress.	39c219e56dc3:src/setup/command.ts	
+setup-read-only	Invoking /taskbook-setup without arguments returns a read-only status report.	39c219e56dc3:prompts/setup.md	
+setup-check-scope	The status report covers the current repository or worktree, available Pi models and role selections, subagent availability, the T3 binding, and Magpie tools visible to this session.	39c219e56dc3:src/setup/diagnostics.ts	
+setup-no-model	If the selected model is unavailable, the user receives the diagnostics directly. A nonempty catalog calls for selecting an available model; an empty catalog calls for registering or authenticating one.	39c219e56dc3:src/setup/command.ts	
+setup-context-input	The user can supply a specific Setup request as the command argument.	39c219e56dc3:src/setup/command.ts	
+setup-session-continuity	A model or reasoning-level change and an ordinary follow-up preserve the active Setup conversation.	39c219e56dc3:prompts/setup.md	
+user-model-policy	The user chooses the storage location of the Model Configuration Table.	39c219e56dc3:prompts/setup.md | 39c219e56dc3:src/models/storage.ts	
+user-tracking-policy	For a project Model Configuration Table, the user decides whether Git tracks the table.	39c219e56dc3:prompts/setup.md | 39c219e56dc3:src/models/storage.ts	
+audit-migration-intent	When Setup finds a legacy .audit directory, it offers to migrate its usable facts into the Fact System.	Maintainer decision: migration of .audit into the Fact System | src/setup/command.ts	migration
+audit-retention	The user decides whether to keep the original .audit directory after archival. Removing it requires specific authorization.	39c219e56dc3:src/setup/command.ts | .fact/tools/audit-migration.tsv#setup-archive-scope	audit

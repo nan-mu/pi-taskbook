@@ -1,11 +1,12 @@
 import { Type, type Static } from "typebox";
-import { posix } from "node:path";
-import { commitFactFiles, readFactFile } from "../facts/commit-files.ts";
-import { readTopicFacts } from "../facts/taskbook-intake.ts";
-import { modelSettingsPath, projectModelPolicy, projectModelsFile } from "../models/storage.ts";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { commitRegisteredMemory, readProjectMemory } from "../facts/project-memory.ts";
+import { readTopicFacts, validateSubjectPath } from "../facts/taskbook-intake.ts";
 import { decodeTsv, encodeTsv } from "../facts/tsv.ts";
 import { git } from "../taskbook/document.ts";
-import { cleanRevision, type Run } from "./checkpoint.ts";
+import { checkpoint, cleanRevision, type Run } from "./checkpoint.ts";
 
 const placement = Type.Object({
   id: Type.String({pattern: "^draft:[a-f0-9]{20}$"}),
@@ -29,58 +30,103 @@ export function reviewedDrafts(run: Run) {
 
 export function validatePlacements(run: Run, placements: FactPlacement[]) {
   const snapshot = readTopicFacts(run.root);
-  const modelPath = projectModelPolicy(run.root)?.path;
   const labels = new Set(decodeTsv(snapshot.labels ?? "").slice(1).map(row => row[0]));
+  labels.add("terms");
   const drafts = reviewedDrafts(run);
   if (placements.length !== drafts.length || new Set(placements.map(item => item.id)).size !== drafts.length ||
       placements.some(item => !drafts.some(draft => draft.id === item.id))) {
     throw new Error("每条审核通过的 Draft Fact 需要唯一的事实分类。");
   }
   for (const {path, labels: selected} of placements) {
-    const filename = path.split("/").at(-1);
-    if (posix.normalize(path) !== path || path.startsWith(".fact/taskbook/") || [modelSettingsPath, modelPath, projectModelsFile].includes(path) ||
-        ["label.tsv", "change.tsv", "settings.tsv", "facts.tsv"].includes(filename!) ||
-        (filename === "always.tsv" && !snapshot.tables.has(path))) throw new Error("请选择可写入的主题事实表 " + path);
+    validateSubjectPath(run.root, path, snapshot.tables);
     if (selected.some(label => !labels.has(label))) throw new Error("事实标签须在 .fact/label.tsv 已登记。");
-    const current = readFactFile(run.root, path);
-    if (current !== undefined && !snapshot.tables.has(path)) throw new Error("目标并非主题事实表 " + path);
   }
   return drafts;
 }
+
+const sha = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
+const norm = (value: string) => value.normalize("NFKC").trim().replace(/\s+/gu, " ").replace(/[.。]+$/u, "");
 
 export function registerReviewedFacts(run: Run, placements: FactPlacement[]) {
   const drafts = validatePlacements(run, placements);
   const base = run.state.revision;
   if (!base) throw new Error("登记事实缺少已审核提交。");
   const head = cleanRevision(run);
+  const view = run.state.factView;
   const marker = "Taskbook-Registration: " + run.task.digest;
-  if (head !== base) {
-    const changed = git(run.root, "diff", "--name-only", "-z", base, head).split("\0").filter(Boolean);
-    if (git(run.root, "rev-list", "--parents", "-n", "1", head) !== head + " " + base ||
-        !git(run.root, "log", "-1", "--format=%B", head).split("\n").includes(marker) ||
-        changed.some(path => !placements.some(item => item.path === path))) {
-      throw new Error("已审核提交在登记草稿事实前发生变化。");
-    }
-  }
+  const input = sha(JSON.stringify([run.task.digest, base, view, drafts, placements]));
   const snapshot = readTopicFacts(run.root);
-  const norm = (value: string) => value.normalize("NFKC").trim().replace(/\s+/gu, " ").replace(/[.。]+$/u, "");
-  const allFacts = [...snapshot.tables.values()].flat();
-  const changes = new Map<string, string>();
+  const project = readProjectMemory(run.root);
+  const receipt = (revision: string) => ({revision,
+    diff: revision === base ? "" : git(run.root, "diff", "--no-ext-diff", base, revision, "--", ".fact"),
+    topicHead: readTopicFacts(run.root).head, projectHead: readProjectMemory(run.root).head});
+
+  if (head !== base) {
+    // A process can stop after the Git commit but before the transition to Handoff.
+    const intent = run.state.registrationIntent;
+    const paths = git(run.root, "diff", "--name-only", "-z", base, head).split("\0").filter(Boolean);
+    const validCommit = git(run.root, "rev-list", "--parents", "-n", "1", head) === head + " " + base &&
+      git(run.root, "log", "-1", "--format=%B", head).split("\n").includes(marker);
+    if (!validCommit) throw new Error("已审核提交在登记事实前发生变化。");
+    if (intent?.input === input && paths.length === intent.files.length &&
+        intent.files.every(([path, hash]) => paths.includes(path) && sha(readFileSync(join(run.root, path))) === hash)) return receipt(head);
+    // Registration commits made by the previous release had no intent checkpoint.
+    const legacyComplete = !view && !intent && paths.every(path => placements.some(item => item.path === path)) &&
+      drafts.every(draft => [...snapshot.tables.values()].flat().some(row => norm(row.fact) === norm(draft.text)));
+    if (legacyComplete) return receipt(head);
+    throw new Error("现有登记提交与签署的事实变更不符。");
+  }
+  if ((run.state.topicFactsHead !== undefined && run.state.topicFactsHead !== snapshot.head) ||
+      (run.state.approvedProjectHead !== undefined && run.state.approvedProjectHead !== project.head) ||
+      (view && (view.topicHead !== snapshot.head || view.projectHead !== project.head))) {
+    throw new Error("事实版本在审核后发生变化，请重新核对。");
+  }
+
+  const touched = new Set<string>();
+  const tables = snapshot.tables;
+  for (const entry of view?.entries ?? []) {
+    const {operation, row} = entry;
+    if (operation === "use") continue;
+    validateSubjectPath(run.root, row.path, tables);
+    const rows = tables.get(row.path) ?? [];
+    const index = rows.findIndex(current => current.id === row.id);
+    if ((operation === "create") !== (index === -1)) throw new Error("目标事实在审核后发生变化：" + row.id);
+    if (operation === "create") rows.push(row);
+    if (operation === "update") rows[index] = row;
+    if (operation === "delete") rows.splice(index, 1);
+    tables.set(row.path, rows);
+    touched.add(row.path);
+  }
+  const texts = new Set([...tables.values()].flat().map(row => norm(row.fact)));
   for (const {id, path, labels} of placements) {
     const draft = drafts.find(item => item.id === id)!;
-    if (allFacts.some(fact => norm(fact.fact) === norm(draft.text))) continue;
-    const rows = decodeTsv(changes.get(path) ?? readFactFile(run.root, path) ?? columns);
+    if (texts.has(norm(draft.text))) continue;
+    const rows = tables.get(path) ?? [];
     const factId = "taskbook:" + run.task.digest.slice(0, 16) + ":" + id.slice("draft:".length);
-    if (rows.some(row => row[0] === factId)) throw new Error("草稿事实 ID 对应了不同的当前内容 " + factId);
+    if (rows.some(row => row.id === factId)) throw new Error("草稿事实 ID 对应了其他内容：" + factId);
     const source = [run.task.id + "@" + base, draft.seat + "/" + draft.work, draft.source].join(" | ");
-    const tags = labels;
-    changes.set(path, encodeTsv([...rows, [factId, draft.text, source, tags.join(",")]]));
-    allFacts.push({path, id: factId, fact: draft.text, source, labels: tags});
+    rows.push({path, id: factId, fact: draft.text, source, labels});
+    tables.set(path, rows);
+    touched.add(path);
+    texts.add(norm(draft.text));
   }
-  if (head !== base && changes.size) throw new Error("登记提交没有包含完整的批准事实。");
-  const revision = commitFactFiles(run.root, changes, "Register reviewed facts · " + run.task.id + "\n\n" + marker, () => {
-    if (cleanRevision(run) !== head || readTopicFacts(run.root).head !== snapshot.head) throw new Error("登记草稿前项目事实发生变化。");
-  });
-  return {revision, diff: revision === base ? "" : git(run.root, "diff", "--no-ext-diff", base, revision, "--", ".fact"),
-    topicHead: readTopicFacts(run.root).head};
+  const changes = new Map<string, string>();
+  for (const path of touched) {
+    changes.set(path, encodeTsv([columns.split("\t"), ...tables.get(path)!.map(row => [row.id, row.fact, row.source, row.labels.join(",")])]));
+  }
+  if ([...touched].some(path => tables.get(path)!.some(row => row.labels.includes("terms")))) {
+    const catalog = decodeTsv(snapshot.labels ?? "label\tdescription\n");
+    if (catalog[0]?.join("\t") !== "label\tdescription") throw new Error(".fact/label.tsv 表头无效。");
+    if (!catalog.slice(1).some(cells => cells[0] === "terms")) {
+      changes.set(labelPath, encodeTsv([...catalog, ["terms", "Definitions of project terms."]]));
+    }
+  }
+  commitRegisteredMemory(run.root, project, run.task, run.state.base, view?.memoryChanges ?? [], view?.sessionId ?? run.state.session,
+    changes, "Register reviewed facts · " + run.task.id + "\n\n" + marker, () => {
+      if (cleanRevision(run) !== base || readTopicFacts(run.root).head !== snapshot.head) throw new Error("登记前项目事实发生变化。");
+    }, mutations => {
+      const files: [string, string][] = [...mutations].map(([path, content]) => [path, sha(content)]);
+      checkpoint(run, {...run.state, registrationIntent: {input, files}});
+    });
+  return receipt(git(run.root, "rev-parse", "HEAD"));
 }

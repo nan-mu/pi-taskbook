@@ -1,0 +1,5 @@
+id	fact	source	labels
+install-agent-dir	Install Pi Taskbook in the agent directory used by the target Pi process (normally ~/.pi/agent, or PI_CODING_AGENT_DIR); a T3-launched Pi must load that installation.	39c219e56dc3:docs/setup.md	
+install-package	Install with pi install https://github.com/nan-mu/pi-taskbook or, with SSH access, pi install git:git@github.com:nan-mu/pi-taskbook.git.	39c219e56dc3:docs/setup.md	
+inspect-installation	pi list identifies the installed source and path; testing local edits requires loading the development checkout.	39c219e56dc3:docs/setup.md	
+inspect-offline	Send get_commands and get_available_models as JSON lines to pi --offline --no-mcp --mode rpc --no-session to inspect registration offline.	39c219e56dc3:docs/setup.md	

@@ -12,7 +12,8 @@ def embed(name, data, mime):
     marker='__ASSET_'+name+'__'
     assert page.count(marker)==1, marker
     page=page.replace(marker,'data:'+mime+';base64,'+base64.b64encode(data).decode('ascii'))
-for file in ["src/taskbook/document.ts","src/facts/project-memory.ts","src/review/reviewer.ts","src/workflow/design-worker.ts","index.ts","methods/magpie-memory/SKILL.md"]:
+for file in ["src/taskbook/document.ts", "src/facts/taskbook-intake.ts", "src/workflow/register-facts.ts",
+             "src/workflow/designer/v0.2.ts", "src/workflow/team.ts", "src/workflow/review/flow.ts"]:
     source=repo/file
     embed(source.name, source.read_bytes(), "text/plain")
 with tempfile.TemporaryDirectory() as temp:
@@ -35,8 +36,8 @@ for stage_map in phases.values():
    m['url']=f'https://github.com/{owner}/blob/{rev}/{path}'
    m['name'],m['text']=m['text'].split('\n',1)
    m['name']=m['name'].removeprefix('通用方法 ')
-panels={'memory':['fact-check','fact-review'],'design':['design','implement'],'review':['correctness','quality','performance']}
-labels={'fact-check':'事实核查 · 主会话','fact-review':'事实审核 · 独立会话','design':'设计 · 主会话与可选独立顾问','implement':'执行 · 主会话','correctness':'规格审核 · 独立会话','quality':'质量审核 · 独立会话','performance':'正式测量 · 主会话'}
+panels={'memory':['fact-check','fact-management'],'design':['design','implement'],'review':['review','fact-registration','handoff']}
+labels={'fact-check':'入口事实核查','fact-management':'核对任务事实','design':'设计组','implement':'实施者','review':'审核成员与组长','fact-registration':'事实登记','handoff':'交接'}
 
 for name in panels:
  start=page.index('<section',page.index('id="'+name+'"')-40)
@@ -44,9 +45,9 @@ for name in panels:
  final=page.rindex('</li>',start,end)
  pos=page.rfind('</span>',start,final)
  if pos<0: pos=final
- button=f' <button class="method-open" type="button" data-methods="{name}">查看本章附加的提示词</button>'
+ button=f' <button class="method-open" type="button" data-methods="{name}">查看本章的阶段方法</button>'
  page=page[:pos]+button+page[pos:]
-html='''<dialog id="phase-methods" aria-labelledby="method-heading"><div class="method-head"><h2 id="method-heading">本章实际附加的提示词</h2><button id="method-close" type="button">关闭</button></div>
+html='''<dialog id="phase-methods" aria-labelledby="method-heading"><div class="method-head"><h2 id="method-heading">本章的阶段方法</h2><button id="method-close" type="button">关闭</button></div>
 <label>任务类型 <select id="method-kind"><option value="new-feature">新增功能</option><option value="fix-feature">修复功能</option><option value="new-experiment">新增实验</option><option value="fix-experiment">修复实验</option></select></label>
 <div id="method-list"></div></dialog>'''
 js='''

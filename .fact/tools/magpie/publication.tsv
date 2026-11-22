@@ -1,0 +1,2 @@
+id	fact	source	labels
+delivery-github-routing	Taskbook sends reviewed branch commits with Git and performs PR reads and writes through the current Pi session's Magpie GitHub MCP tools.	39c219e56dc3:src/workflow/publication.ts	

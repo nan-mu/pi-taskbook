@@ -1,6 +1,6 @@
 import type { Taskbook } from "../taskbook/document.ts";
 
-export const stages = ["fact-management", "fact-check", "fact-review", "design", "implement", "correctness", "quality", "performance", "review", "fact-registration", "handoff"] as const;
+export const stages = ["fact-check", "fact-review", "fact-management", "design", "implement", "correctness", "quality", "performance", "review", "fact-registration", "handoff"] as const;
 export type Phase = typeof stages[number];
 export type Outcome = "pass" | "blocked" | "measure" | "rework" | "fact-conflict" | "plan-gap" | "needs-user";
 export type TaskType = Taskbook["type"];
@@ -29,13 +29,16 @@ export function restorePhase(type: TaskType, savedPhase: string): Phase {
 }
 
 export function nextPhase(type: TaskType, phase: Phase, outcome: Outcome, measured = false, unifiedReview = false): Phase | "ready" | "blocked" {
+  if (outcome === "needs-user" && phase === "fact-check") return "fact-check";
   if (outcome === "plan-gap" || outcome === "needs-user") {
     if (phase !== (outcome === "plan-gap" ? "implement" : "design")) throw new Error("此阶段不能作此设计决定。");
     return "design";
   }
   if (outcome === "blocked") return "blocked";
   if (outcome === "fact-conflict") return phase;
-  if (phase === "fact-management" && outcome === "pass") return "design";
+  if (outcome === "pass" && phase === "fact-check") return unifiedReview ? "fact-management" : "fact-review";
+  if (outcome === "pass" && phase === "fact-review") return unifiedReview ? "fact-management" : "design";
+  if (outcome === "pass" && phase === "fact-management") return "design";
   if (outcome === "rework") {
     if (phase === "fact-review") return "fact-check";
     if (phase === "review" || phase === "correctness" || phase === "quality") return "implement";

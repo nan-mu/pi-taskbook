@@ -8,7 +8,7 @@ import { defaultModelPolicy, legacyProjectModelPath, modelStorage, projectModelP
 export const modelRoles = ["design", "designMemberA", "designMemberB", "implement", "consult", "factCheck", "performance", "review", "factReview", "correctness", "quality"] as const;
 export type ModelRole = typeof modelRoles[number];
 export type ModelConfig = Partial<Record<ModelRole, string>>;
-type ThinkingLevel = ExtensionContext["thinkingLevel"];
+type ThinkingLevel = NonNullable<ExtensionContext["thinkingLevel"]>;
 type Model = NonNullable<ExtensionContext["model"]>;
 export type ModelRoutes = ModelConfig & { initial: string; design: string; implement: string; review: string;
   initialThinking?: ThinkingLevel; levels?: Partial<Record<ModelRole, ThinkingLevel>> };
@@ -207,7 +207,9 @@ export function roleSelection(ctx: ExtensionContext, root: string, pinned: Model
     role === "designMemberA" || role === "designMemberB" ? "review" : undefined;
   const model = resolveModel(ctx, routes[role] ?? (fallback ? routes[fallback] : undefined) ?? routes.initial);
   const thinking = routes.levels?.[role] ?? (fallback && !routes[role] ? routes.levels?.[fallback] : undefined);
-  return {model, thinkingLevel: thinking ?? clampThinkingLevel(routes.initialThinking ?? ctx.thinkingLevel, getSupportedThinkingLevels(model))};
+  // The Pi SDK defaults to medium when the session provides no entry level.
+  const requested = thinking ?? routes.initialThinking ?? ctx.thinkingLevel ?? "medium";
+  return {model, thinkingLevel: clampThinkingLevel(model, requested)};
 }
 
 export { getSupportedThinkingLevels };

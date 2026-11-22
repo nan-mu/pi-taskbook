@@ -1,0 +1,5 @@
+id	fact	source	labels
+magpie-transport	Session transport resolves one registered Magpie server. The CLI fallback exposes memory_context and memory_search for read-only checks.	39c219e56dc3:src/integrations/magpie-memory.ts	facts
+magpie-context-contract	Conditional writes require context declaring pi-taskbook-magpie-v1, the agent identity, the current repository’s project key github.com/<owner>/<repo>, the global search scope, and declared capabilities. The plugin matches the project key case-insensitively.	39c219e56dc3:src/integrations/magpie-memory.ts#L33-L45 | 39c219e56dc3:src/integrations/magpie-memory.ts#L493-L515	facts
+magpie-search-contract	The extended search uses scope, limit, tags and an optional cursor. Its global pages carry records and next_cursor; owner-scoped lookups require explicit retired records.	39c219e56dc3:src/integrations/magpie-memory.ts	facts
+magpie-row-contract	Extended records identify owner, fact_id and remote id; they carry kind, text, scope, version, fact_version, status, eligibility and writability. Visible text or tags alone do not establish ownership.	39c219e56dc3:src/integrations/magpie-memory.ts	facts

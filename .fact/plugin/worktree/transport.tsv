@@ -1,0 +1,2 @@
+id	fact	source	labels
+t3-local-mcp-address	Taskbook accepts the T3 session MCP endpoint on a loopback address or an IP address assigned to a local interface.	39c219e56dc3:src/integrations/t3.ts	t3

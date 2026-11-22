@@ -1,0 +1,9 @@
+id	fact	source	labels
+plugin-dispatch	The Taskbook plugin selects the next Work State and builds the context, prompt, model, and tool set before creating or continuing each Subagent.	39c219e56dc3:src/workflow/team.ts	prompts
+plugin-transition-input	Agents report structured outcomes to the plugin. The plugin validates the result, records the next transition, and dispatches the next Work Turns.	39c219e56dc3:src/workflow/team.ts	
+plugin-design-implement-count	The plugin creates the implementer session after the approved design taskbook has been committed.	39c219e56dc3:src/workflow/team.ts	design
+workflow-persistent-seats	Pi Taskbook owns four named Pi SDK sessions and keeps each seat’s configured model and reasoning level through Design, Implement and Review.	39c219e56dc3:src/workflow/team.ts	design,implement,review
+work-turn-deduplication	A designer turn accepts a result only for its pending turn ID and settles it once.	39c219e56dc3:src/workflow/designer/v0.1.ts | 39c219e56dc3:.fact/workflow.tsv#L10	design,review
+work-turn-exclusion	The dispatcher waits for all calls in a batch to settle before processing their outcomes and dispatching another batch.	39c219e56dc3:src/workflow/team.ts	design,review
+work-state-prompt-identity	A distinct work prompt has a distinct Work State. An iteration counter can reuse a state when its work prompt remains the same.	39c219e56dc3:.fact/workflow.tsv	prompts
+method-context	For phases served by buildPhaseInput, the plugin includes the method index in the phase prompt. Named-team workers outside Review can consult taskbook_method on demand.	39c219e56dc3:src/workflow/phase-input.ts#L65-L75 | 39c219e56dc3:src/workflow/team.ts#L159-L165 | .fact/tools/method.tsv#stage-method-lookup	

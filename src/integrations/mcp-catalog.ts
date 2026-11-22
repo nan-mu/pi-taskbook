@@ -129,12 +129,17 @@ const githubWrites = {
     command: /\bgh pr merge\b/, impact: "按工作流合并 PR。" },
 };
 
+export function toolProperties(parameters?: ToolInfo["parameters"]): object | undefined {
+  const properties = parameters && "properties" in parameters ? parameters.properties : undefined;
+  return properties && typeof properties === "object" ? properties : undefined;
+}
+
 function githubMatches(tool: SessionMcpTool, spec: {methods: string[]; combined?: Partial<Record<string, string[]>>}): Match[] {
   const method = tool.method.replace(/^github__/, "");
   if (spec.methods.includes(method)) return directMatch(tool);
   const commands = spec.combined && Object.hasOwn(spec.combined, method) ? spec.combined[method] : undefined;
   if (!commands) return [];
-  const properties: unknown = tool.parameters.properties;
+  const properties = toolProperties(tool.parameters);
   const schema = typeof properties === "object" && properties && "method" in properties ? properties.method : undefined;
   if (typeof schema !== "object" || schema === null || !("enum" in schema) || !Array.isArray(schema.enum)) {
     return [{tool, verified: false}];

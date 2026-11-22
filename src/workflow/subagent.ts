@@ -4,6 +4,7 @@ import {
   createAgentSession, DefaultResourceLoader, getAgentDir, ModelRuntime, SessionManager, SettingsManager,
   type ExtensionContext, type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import { Type, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { modelKey, type RoleSelection } from "../models/config.ts";
@@ -15,7 +16,16 @@ import { cleanRevision, type Run } from "./checkpoint.ts";
 export type Seat = "lead" | "member-a" | "member-b" | "implementer";
 export type WorkTurn = {id: string; work: string; prompt: string; context: unknown; schema: TSchema};
 export type WorkerReceipt = {id: string; seat: Seat; work: string; session: string; model: string; thinking: RoleSelection["thinkingLevel"]};
-export type CommandReceipt = {turn: string; command: string; before: string; revision: string; clean: boolean; failed: boolean; output: string};
+export type CommandReceipt = {turn: string; command: string; before: string; cleanBefore?: boolean; revision: string; clean: boolean; failed: boolean; output: string};
+export function commandSnapshot(run: Pick<Run, "root">) {
+  try { return {revision: cleanRevision(run), clean: true}; }
+  catch { return {revision: git(run.root, "rev-parse", "HEAD"), clean: false}; }
+}
+
+export function isCandidateReceipt(receipt: CommandReceipt, revision: string) {
+  return receipt.cleanBefore === true && receipt.clean && receipt.before === revision && receipt.revision === revision;
+}
+
 const resultName = "taskbook_work_result";
 
 export async function subagentTurn({ run, ctx, seat, turn, route, tools = [], builtins = [], cleanContext = false, signal }: {
@@ -34,7 +44,7 @@ export async function subagentTurn({ run, ctx, seat, turn, route, tools = [], bu
     : SessionManager.create(root, directory, {parentSession});
   if (manager.getCwd() !== root) throw new Error("子代理会话的工作区不匹配 " + seat);
   if (cleanContext && manager.getLeafId()) {
-    manager.appendCompaction("Previous turns are archived. Use the current assignment and its tools.", null, 0);
+    manager.appendCompaction("Previous turns are archived. Use the current assignment, revision and available evidence to locate the behavior to check; use earlier verdicts only as leads.", null, 0);
   }
   const settingsManager = SettingsManager.inMemory();
   const agentDir = getAgentDir();
@@ -42,7 +52,7 @@ export async function subagentTurn({ run, ctx, seat, turn, route, tools = [], bu
     alwaysPrompt(root),
     turn.prompt,
     "The plugin owns scheduling. Work only on this assignment and use its tools. Finish by calling " + resultName +
-      " exactly once with the state-specific result. Give all evidence in that call and end the turn.",
+      " exactly once with the state-specific result. In any permitted reason or evidence fields, identify the observation and its location, including what changed a prior judgment. Use only fields the state accepts, then end the turn.",
   ].filter(Boolean).join("\n\n");
   const resourceLoader = new DefaultResourceLoader({
     cwd: root, agentDir, settingsManager, noExtensions: true, disabledBuiltinExtensions: ["mcp"], noSkills: true,
@@ -81,19 +91,17 @@ export async function subagentTurn({ run, ctx, seat, turn, route, tools = [], bu
     cwd: root, agentDir, model, thinkingLevel, modelRuntime, sessionManager: manager, resourceLoader, settingsManager,
     tools: names, customTools,
   });
-  const shellCalls = new Map<string, {command: string; before: string}>();
+  const shellCalls = new Map<string, {command: string; before: string; cleanBefore: boolean}>();
   const unsubscribe = session.subscribe(event => {
     if (event.type === "tool_execution_start" && event.toolName === "bash" && typeof event.args.command === "string") {
-      shellCalls.set(event.toolCallId, {command: event.args.command, before: git(root, "rev-parse", "HEAD")});
+      const start = commandSnapshot(run);
+      shellCalls.set(event.toolCallId, {command: event.args.command, before: start.revision, cleanBefore: start.clean});
     }
     if (event.type === "tool_execution_end" && event.toolName === "bash") {
       const call = shellCalls.get(event.toolCallId);
       if (!call) return;
-      const output = event.result.content.flatMap(part => part.type === "text" ? [part.text] : []).join("\n");
-      const revision = git(root, "rev-parse", "HEAD");
-      let clean = false;
-      try { clean = cleanRevision(run) === revision; } catch {}
-      commands.push({...call, turn: turn.id, failed: event.isError, output: output.slice(0, 4000), revision, clean});
+      const output = event.result.content.flatMap((part: TextContent | ImageContent) => part.type === "text" ? [part.text] : []).join("\n");
+      commands.push({...call, ...commandSnapshot(run), turn: turn.id, failed: event.isError, output: output.slice(0, 4000)});
       shellCalls.delete(event.toolCallId);
     }
   });
