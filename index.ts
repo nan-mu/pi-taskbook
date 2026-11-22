@@ -147,6 +147,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     const controller = new AbortController();
     const teamSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
     const reader = active.state.phase === "design" ? magpieRepositoryReader(pi) : undefined;
+    const sourceReads = new Map<string, Promise<string>>();
     const sourceTool: ToolDefinition<typeof designSourceParameters> | undefined = reader && {
       name: "inspect_github", label: "Inspect pinned GitHub source",
       description: "Read a file or directory in a GitHub repository at the exact commit used by the task.",
@@ -154,11 +155,24 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       annotations: {readOnlyHint: true},
       async execute(_id, {owner, repo, commit, path}, workerSignal) {
         if (isFactPath(path)) throw new Error(factSearchOnly);
-        const result = await ctx.executeTool(reader.name, {owner, repo, path, [reader.revisionField]: commit},
-          {signal: workerSignal ? AbortSignal.any([teamSignal, workerSignal]) : teamSignal});
-        if (result.isError || result.result.isError) throw new Error("Magpie GitHub could not read the pinned source.");
-        const text = result.result.content.filter(part => part.type === "text").map(part => part.text).join("\n");
-        return {content: [{type: "text", text: `${owner}/${repo}@${commit}:${path}\n` + text.slice(0, 16000)}], details: {}};
+        workerSignal?.throwIfAborted();
+        const key = JSON.stringify([owner.toLowerCase(), repo.toLowerCase(), commit.toLowerCase(), path]);
+        let content = sourceReads.get(key);
+        if (!content) {
+          content = ctx.executeTool(reader.name, {owner, repo, path, [reader.revisionField]: commit}, {signal: teamSignal})
+            .then(result => {
+              if (result.isError || result.result.isError) throw new Error("Magpie GitHub could not read the pinned source.");
+              return result.result.content.filter(part => part.type === "text").map(part => part.text).join("\n").slice(0, 16000);
+            })
+            .catch(error => {
+              sourceReads.delete(key);
+              throw error;
+            });
+          sourceReads.set(key, content);
+        }
+        const text = await content;
+        workerSignal?.throwIfAborted();
+        return {content: [{type: "text", text: `${owner}/${repo}@${commit}:${path}\n` + text}], details: {}};
       },
     };
     const settled = Promise.resolve().then(() => runTeam(active, ctx, teamSignal, text => {
