@@ -4,7 +4,6 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ExecutionPlan } from "./design-worker.ts";
 import { modelConfigPaths, modelRoles, modelRoutes, readModelConfig, resolveModel, type ModelRoutes } from "../models/config.ts";
 import { verifyPreparedEntry, type PreparedEntry } from "../taskbook/entry.ts";
-import type { CheckedFact } from "../facts/fact-check.ts";
 import type { MagpieSyncResult } from "../integrations/magpie-memory.ts";
 import type { FactConflict, FactDecision, TaskItem } from "./task-context.ts";
 import { legacyProjectFactsPath, projectFactsPath, projectGlossaryPath, readProjectMemory, taskbookMemoryChanges, type MemoryChange } from "../facts/project-memory.ts";
@@ -17,7 +16,7 @@ import type { Team } from "./team.ts";
 import type { PublicationReceipt } from "./publication.ts";
 
 export type Report = {phase: Phase; outcome: Outcome; summary: string; evidence: string[]; planVersion?: number;
-  plan?: ExecutionPlan; factChecks?: CheckedFact[]; candidateId?: string; projectHead?: string | null; reviewInput?: string};
+  plan?: ExecutionPlan; candidateId?: string; projectHead?: string | null; reviewInput?: string};
 type State = {
   session: string;
   routes: ModelRoutes;
@@ -27,7 +26,6 @@ type State = {
   candidateId?: string;
   pendingConflicts?: FactConflict[];
   decisions?: (FactDecision & { conflict: FactConflict; session: string; at: string; projectChange?: MemoryChange })[];
-  cycleStart?: number;
   base: string;
   branch: string;
   phase: Phase | "exit";
@@ -63,7 +61,7 @@ export function startRun(ctx: ExtensionContext, cwd: string, task: Taskbook, pre
   }
   const routes = modelRoutes(ctx, readModelConfig(modelConfigPaths(root)));
   for (const route of new Set(modelRoles.map(role => routes[role]))) if (route) resolveModel(ctx, route);
-  return {task, root, state: {session: ctx.sessionManager.getSessionId(), routes, base, branch, phase: "fact-check", reports: []}};
+  return {task, root, state: {session: ctx.sessionManager.getSessionId(), routes, base, branch, phase: "fact-management", reports: []}};
 }
 
 export function matchesDeliveryHead(run: Run, head: string) {

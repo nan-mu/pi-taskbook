@@ -1,5 +1,4 @@
 import type { Taskbook } from "../taskbook/document.ts";
-import type { CheckedFact } from "../facts/fact-check.ts";
 
 export type TaskItem = { id: string; text: string; operation?: import("../facts/taskbook-intake.ts").FactOperation; userDecision?: FactDecision; topicFact?: {path: string; id: string} };
 export type FactConflict = { factId: string; observation: string; projectVersion?: number; projectHead?: string | null };
@@ -62,22 +61,13 @@ export function taskAuthoredFacts(markdown: string) {
   return items(section(markdown, "Facts") ?? "", "F");
 }
 
-export function taskMemory(task: Pick<Taskbook, "markdown" | "facts">, decisions: FactDecision[] = [], verified: CheckedFact[] = []) {
+export function taskMemory(task: Pick<Taskbook, "markdown" | "facts">, decisions: FactDecision[] = []) {
   const goal = (section(task.markdown, "Goal") ?? "").replace(/^(?:Type:\s*|\*\*Type:?\*\*:?\s+)[^\n]*\n?/, "");
   const goals = items(goal, "G");
   const delivery = items(section(task.markdown, "Delivery") ?? "", "D");
   if (!goals.length || !delivery.length) throw new Error("Goal 和 Delivery 需要可审核的正文。");
   const facts = taskAuthoredFacts(task.markdown);
   if (task.facts) facts.push(...items(section(task.facts, "Facts") ?? task.facts, facts.length ? "AF" : "F"));
-  const seen = new Set<string>();
-  for (const record of verified) {
-    const key = JSON.stringify([record.claim, record.origin, record.observed]);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    facts.push({ id: "V" + seen.size, text: JSON.stringify({
-      claim: record.claim, observed: record.observed, origin: record.origin, toolError: record.toolError,
-    }) });
-  }
   for (const decision of decisions) {
     const fact = facts.find(fact => fact.id === decision.factId);
     if (!fact) throw new Error("用户事实决策引用了当前记忆中不存在的标识 " + decision.factId);
@@ -85,12 +75,6 @@ export function taskMemory(task: Pick<Taskbook, "markdown" | "facts">, decisions
     fact.userDecision = { ...decision };
   }
   return { goals, facts, delivery };
-}
-
-export function validateConflict(facts: TaskItem[], conflict: FactConflict) {
-  if (!facts.some(fact => fact.id === conflict.factId) || !conflict.observation.trim()) {
-    throw new Error("事实冲突须指向有效的 factId，并说明有分歧的观察及其出处。");
-  }
 }
 
 export function parseFactDecision(argument: string, conflict: FactConflict): FactDecision {

@@ -3,19 +3,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { projectFacts, readProjectMemory, type ProjectSnapshot } from "../facts/project-memory.ts";
 import { taskFactLabel } from "../facts/taskbook-intake.ts";
-import { readSourceProjectFacts, type recallMagpieMemory } from "../integrations/magpie-memory.ts";
-import { methodDirectory, workerMethodStages } from "../methods/catalog.ts";
-import { phaseSources } from "../methods/upstream.ts";
 import type { Run } from "./run.ts";
 import { taskMemory } from "./task-context.ts";
-import type { Phase } from "./transitions.ts";
 
 const promptDir = fileURLToPath(new URL("../../prompts/", import.meta.url));
-export const magpieGuide = readFileSync(join(promptDir, "magpie-memory.md"), "utf8");
-const common = readFileSync(join(promptDir, "common.md"), "utf8");
-const factCheck = readFileSync(join(promptDir, "fact-check.md"), "utf8");
-const factCheckFix = readFileSync(join(promptDir, "fact-check-fix.md"), "utf8");
-const factCheckNew = readFileSync(join(promptDir, "fact-check-new.md"), "utf8");
 const factManagement = readFileSync(join(promptDir, "fact-management.md"), "utf8");
 
 export function readRunContext(run: Run, snapshot = readProjectMemory(run.root)) {
@@ -30,8 +21,6 @@ export function readRunContext(run: Run, snapshot = readProjectMemory(run.root))
       return decision ? {...fact, text: decision.action === "replace" ? decision.text : fact.text, userDecision: decision} : fact;
     });
   }
-  const referencedFactIds = new Set([...decisions, ...(run.state.pendingConflicts ?? [])].map(item => item.factId));
-  result.facts = result.facts.filter(item => !item.id.startsWith("V") || referencedFactIds.has(item.id));
   result.facts.push(...projectFacts(snapshot, run.state.base).map(fact => {
     const version = snapshot.records[fact.id].version;
     const decision = decisions.findLast(d => d.factId === fact.id &&
@@ -41,17 +30,9 @@ export function readRunContext(run: Run, snapshot = readProjectMemory(run.root))
   return result;
 }
 
-export function buildPhaseInput(run: Run, phase: Extract<Phase, "fact-management" | "fact-check">, attempt: string,
-  magpieCandidates?: Awaited<ReturnType<typeof recallMagpieMemory>> & {receipts?: string[]}) {
+export function buildIntakeInput(run: Run, attempt: string) {
   const { task, state } = run;
-  const {goals, facts, delivery} = taskMemory(task, state.decisions?.filter(decision => !decision.factId.startsWith("project:")));
-  const fixed = JSON.stringify({task: task.id, root: run.root, type: task.type, base: state.base, branch: state.branch,
-    phase, attempt, goals, facts, delivery, userAnswers: state.userAnswers, decisions: state.decisions,
-    ...(phase === "fact-management" ? {intakeDecisions: state.intakeDecisions} :
-      {magpieCandidates, sourceProjectFactCandidates: readSourceProjectFacts(run.root, task.repository.toLowerCase())})});
-  const guidance = phase === "fact-management" ? [factManagement] : [factCheck,
-    task.type.startsWith("fix-") ? factCheckFix : factCheckNew, magpieGuide,
-    "Use taskbook_method for relevant methods.\n" + methodDirectory(workerMethodStages(phase, task.type), phaseSources(phase, task.type))];
-  return [common, ...guidance, "## 当前运行数据", fixed, "## 任务书原文", task.markdown,
-    ...(task.facts !== undefined ? ["## 任务书随附事实", task.facts] : [])].join("\n\n");
+  const {facts} = taskMemory(task, state.decisions?.filter(decision => !decision.factId.startsWith("project:")));
+  const fixed = {attempt, base: state.base, facts, intakeDecisions: state.intakeDecisions};
+  return factManagement + "\n\n" + JSON.stringify(fixed);
 }

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
-import type { CheckedFact } from "../../facts/fact-check.ts";
+import type { TaskType } from "../transitions.ts";
 import { acceptPlan, planParameter, type ExecutionPlan } from "../design-worker.ts";
 import { investigationPrompt, investigationRequest, investigationResult, investigations, pstackGuidance, readTransition, transition, type Investigation } from "../playbook.ts";
 
@@ -10,8 +10,8 @@ const members = ["member-a", "member-b"] as const;
 type Member = typeof members[number];
 type Designer = "lead" | Member;
 
-type DesignInput = {runId: string; taskbook: string; baseline: string; factsVersion: string; facts: readonly string[];
-  observations: readonly CheckedFact[]; factSummary?: string; userAnswers: readonly {question: string; answer: string}[];
+type DesignInput = {runId: string; taskbook: string; taskType: TaskType; baseline: string; factsVersion: string; facts: readonly string[];
+  userAnswers: readonly {question: string; answer: string}[];
   targetIds: readonly string[]; previousPlanVersion?: number};
 
 const text = Type.String({minLength: 1, pattern: "\\S"});
@@ -102,19 +102,22 @@ function revisionSummary(value: unknown) {
 export function designerTurns(state: DesignerState) {
   if (state.kind !== "working") return [];
   const {input, candidate, previous, findings, resolutions, consultations} = state.progress;
-  const {observations, ...assignment} = input;
   return state.slots.filter(slot => !slot.review).map(({job}) => {
     const prompt = job.work === "how" || job.work === "why" ? investigationPrompt(job.work) :
       readFileSync(new URL(`../../../prompts/designer/0.3/${job.work}.md`, import.meta.url), "utf8").trim();
     return {id: job.id, designer: job.designer, work: job.work, schema: destinations(job, state.progress),
       prompt: job.work === "draft" || job.work === "revise" ? prompt + "\n\n" + pstackGuidance("architect", "design") : prompt,
-      context: structuredClone({...assignment, observations: observations.map(({claim, origin}, index) => ({id: "observation:P" + (index + 1), claim, origin})),
+      context: structuredClone({...input,
         candidate, ...(job.work === "revise" ? {findings} : {}),
         ...(job.work === "confirm" ? {changesSincePrevious: changedSteps(previous, candidate),
+          findingTargets: [...input.targetIds, ...(candidate?.plan.steps.map(step => step.id) ?? [])],
           resolutions: resolutions.filter(item => item.reviewedVersion === previous?.version)} : {}),
         ...(job.work === "signoff" ? {approvedBy: members} : {}),
         ...("returnTo" in job ? {question: job.question, evidence: job.evidence, returnTo: job.returnTo.work} : {}),
         consultations: consultations.filter(entry => entry.designer === job.designer).slice(-6)}),
+      validateResult(result: unknown) {
+        settleDesignerTurn(state, {id: job.id, settled: true, result});
+      },
       summarizeResult: job.work === "confirm" ? reviewSummary : job.work === "revise" ? revisionSummary : undefined};
   });
 }
@@ -157,7 +160,9 @@ function settleConfirmation(state: Working, job: PrimaryJob, review: MemberReply
   if (job.designer === "lead" || !candidate || candidate.version !== review.version) throw new Error("Confirmation needs the current candidate version.");
   if (review.kind === "objected") {
     const targets = new Set([...input.targetIds, ...candidate.plan.steps.map(step => step.id)]);
-    if (review.findings.some(item => !targets.has(item.target))) throw new Error("A design finding needs a Goal, Delivery or plan step ID.");
+    const invalid = review.findings.filter(item => !targets.has(item.target));
+    if (invalid.length) throw new Error("Use exactly one ID from findingTargets in each finding's target field: " +
+      [...targets].join(", ") + ". Put other affected IDs and explanations in counterexample or evidence. Correct the report and submit again.");
   }
   const slots = state.slots.map(slot => slot.job.id === job.id ? {...slot, review} : slot);
   if (slots.some(slot => !slot.review)) return {...state, slots};

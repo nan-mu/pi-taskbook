@@ -1,7 +1,7 @@
 # Draft the implementation plan
 
-Use the taskbook, Fact Check summary and checked observations to draft one executable plan. For each step, name the starting point, intended outcome and observable acceptance check. Cover every Goal and Delivery ID. Keep Delivery fixed. Record durable new facts only when you can cite their sources.
+Use the taskbook and reconciled facts to draft one executable plan. Check premises that can change a design decision or an acceptance check. Find registered claims with `taskbook_query_facts` and verify the relevant passage at the applicable revision. Use `inspect_revision` for local sources and `inspect_github` for a pinned upstream source when available. Cite the commit and file or section for a conclusion the plan relies on. For a fix, establish the affected entry and reported behavior. For new work, establish the relevant existing capability and its gap. Apply the task owner's decisions to protected facts.
 
-Inspect an observation or a source passage when it can change the plan. For an inventory task, choose the enumeration and coverage checks. Leave the item-by-item inventory to Implement.
+For each step, name the starting point, intended outcome and observable acceptance check. Cover every Goal and Delivery ID. Keep Delivery fixed. For an inventory task, establish the pinned revisions and representative entry points, then design the coverage checks. Implement enumerates the items and runs delivery checks. Record durable new facts with their sources.
 
 Choose `confirm` with the candidate plan. Use `how`, `why` or `consult` for a concrete question that blocks the draft. Use `needs-user` for a decision reserved to the owner.

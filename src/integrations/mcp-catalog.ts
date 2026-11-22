@@ -134,6 +134,17 @@ export function toolProperties(parameters?: ToolInfo["parameters"]): object | un
   return properties && typeof properties === "object" ? properties : undefined;
 }
 
+export function magpieRepositoryReader(pi: ExtensionAPI) {
+  const tools = (sessionCatalogue(pi).get("magpie") ?? []).filter(tool =>
+    tool.method === "github__get_file_contents" && tool.exposure !== "hidden");
+  if (tools.length !== 1) return;
+  const tool = tools[0];
+  const properties = toolProperties(tool.parameters);
+  if (!properties || !["owner", "repo", "path"].every(key => Object.hasOwn(properties, key))) return;
+  const revisionField = "sha" in properties ? "sha" : "ref" in properties ? "ref" : undefined;
+  if (revisionField) return {name: tool.name, revisionField};
+}
+
 function githubMatches(tool: SessionMcpTool, spec: {methods: string[]; combined?: Partial<Record<string, string[]>>}): Match[] {
   const method = tool.method.replace(/^github__/, "");
   if (spec.methods.includes(method)) return directMatch(tool);

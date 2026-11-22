@@ -1,6 +1,6 @@
 id	fact	source	labels
 term-fact-management	Fact Management reconciles the facts supplied for a task against the project facts used in that task.	src/facts/taskbook-intake.ts	terms
-intake-single-pass	At intake, the main conversation reports its reconciliation. On a pass, the plugin records the proposed fact operations in the current task view.	src/facts/taskbook-intake.ts | index.ts | .fact/plugin/facts/intake.tsv#baseline-intake | .fact/approach/facts/task-view.tsv#overlay	facts
+intake-single-pass	Task entry opens Fact Management. The main conversation compares the taskbook facts with the local register using taskbook_query_facts and reports the comparison. On a pass the plugin prepares the current task view and starts Design.	Maintainer decision: entry compares taskbook and local facts | index.ts | prompts/fact-management.md	facts
 intake-conflict	Fact Management pauses for the user when a supplied fact overlaps a registered fact and the requested update or separate scope is unclear.	39c219e56dc3:src/facts/taskbook-intake.ts	facts
 intake-provenance	Fact Management tags supplied facts with the active taskbook's label so later stages can distinguish them from project background.	39c219e56dc3:src/facts/taskbook-intake.ts	facts
 fact-manager-model	Fact Management uses the executing Pi session’s model and thinking level.	39c219e56dc3:prompts/setup.md	

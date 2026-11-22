@@ -1,5 +1,0 @@
-id	fact	source	labels
-check-role	The main conversation performs the lightweight fact check at entry.	Maintainer decision: lightweight task-entry fact check | .fact/workflow/fact-management.tsv#intake-single-pass	
-check-fix	For a fix or performance task, check whether the reported symptom can be observed. Record the input, revision, and observed result.	Maintainer decision: lightweight task-entry fact check	
-check-new	For a new feature, check the current capability boundary and identify the gap described in the taskbook.	Maintainer decision: lightweight task-entry fact check	
-check-out	Once the evidence supports the premise, hand the task to Fact Management. If the premise fails or requires a user decision, identify the affected goal and the information needed to continue.	Maintainer decision: lightweight task-entry fact check | index.ts | prompts/fact-check.md | .fact/workflow/fact-check.tsv#check-role	

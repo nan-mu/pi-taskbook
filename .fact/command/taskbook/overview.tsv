@@ -1,2 +1,2 @@
 id	fact	source	labels
-cmd-run	Use /taskbook with a taskbook path or pasted Markdown. In an unbound T3 session, it moves the current thread to a new worktree and continues the workflow there. In a linked worktree, it starts the workflow there.	index.ts | .fact/prompts/fact-check.tsv#new-follow	worktree
+cmd-run	Use /taskbook with a taskbook path or pasted Markdown. In an unbound T3 session, it moves the current thread to a new worktree and continues the workflow there. In a linked worktree, it starts the workflow there.	index.ts | .fact/workflow/fact-management.tsv#intake-single-pass	worktree

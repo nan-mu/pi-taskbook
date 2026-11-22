@@ -150,23 +150,6 @@ function readOnlyGateway(root: string): MagpieTransport {
   };
 }
 
-export async function recallMagpieMemory(root: string, query: string, sharedKeys: string[] = [], transport = readOnlyGateway(root)) {
-  try {
-    if (!transport.tools.has("memory_search")) throw new Error("当前 Pi 会话缺少 memory_search。");
-    const terms = new Set([query, ...sharedKeys.map(key => key.replace(/[._/-]+/g, " "))]);
-    const searches = [{scope: "global", kind: "rule", limit: 8}, {scope: "global", kind: "preference", limit: 8},
-      ...[...terms].map(term => ({scope: "global", query: term.slice(0, 128), limit: 8}))];
-    const results: string[] = [];
-    for (const args of searches) {
-      const reply = await transport.call("memory_search", args);
-      results.push((typeof reply === "string" ? reply : JSON.stringify(reply)).slice(0, 6000));
-    }
-    return {status: "available" as const, results, searches};
-  } catch {
-    return {status: "unavailable" as const, reason: "Magpie memory_search 只读召回不可用。", results: []};
-  }
-}
-
 function assertSnapshot(root: string, input: SyncInput) {
   const snapshot = readProjectMemory(root);
   if (snapshot.head !== input.projectHead || git(root, "rev-parse", "HEAD") !== input.revision) {
@@ -335,14 +318,6 @@ function readSourceTables(root: string, repository: string) {
     }
   }
   return records;
-}
-
-export function readSourceProjectFacts(root: string, repository: string) {
-  try {
-    return {status: "available" as const, records: readSourceTables(root, repository.toLowerCase())};
-  } catch {
-    return {status: "unavailable" as const, reason: "无法核对来源项目的事实表格式或归属。"};
-  }
 }
 
 function configureLocalExclusion(root: string, path: string, temporary?: string) {

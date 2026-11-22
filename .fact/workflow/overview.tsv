@@ -3,7 +3,7 @@ term-workflow	Project Workflow describes the ordered project stages and their tr
 term-stage	A Stage is a unit of work in the Project Workflow with a defined result and condition for advancing.	39c219e56dc3:.fact/terms.tsv#L3	terms
 term-main-session	The Main Session is the Pi conversation in which the user starts and monitors a Taskbook run.	39c219e56dc3:.fact/terms.tsv#L4	terms
 term-subagent	A Subagent is a named task participant with its own session and assigned responsibility.	39c219e56dc3:.fact/terms.tsv#L5	terms
-workflow-order	A new team run advances through Fact Check, intake Fact Management, Design, Implement, Review, final fact registration, Handoff and Publication. The Handoff report waits for Publication to return the signed work’s pull request.	index.ts | src/workflow/transitions.ts | .fact/workflow/handoff.tsv#term-handoff	workflow
+workflow-order	A new team run advances through intake Fact Management, Design, Implement, Review, final fact registration, Handoff and Publication. The Handoff report waits for Publication to return the signed work’s pull request.	index.ts | src/workflow/transitions.ts | .fact/workflow/handoff.tsv#term-handoff	workflow
 term-work-state	A Work State is a step in a single agent's playbook and determines which prompt it receives next.	39c219e56dc3:.fact/terms.tsv#L14	terms
 term-work-turn	A Work Turn is one invocation of a named Subagent in a specified Work State on versioned inputs.	39c219e56dc3:.fact/terms.tsv#L15	terms
 term-round	A Round collects the results of a defined set of Work Turns before releasing their results to the next set.	39c219e56dc3:.fact/terms.tsv#L16	terms

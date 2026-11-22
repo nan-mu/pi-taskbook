@@ -1,6 +1,6 @@
-# Reconcile the taskbook's facts
+# Compare taskbook facts with the project register
 
-Reconcile the authored facts and attachment with `taskbook_query_facts`. Search by exact ID, file path plus row ID, or the supplied wording. Match the entity, version, scope and effective status. For a unique exact `use` match, record it and finish. Source code and upstream research belong to the stages that need that evidence.
+Compare the supplied facts with the local register using `taskbook_query_facts`. Search by exact ID, file path plus row ID, or the supplied wording. Match the entity, version, scope and effective status. For a unique exact `use` match, report it and move on. Design verifies the source and any premise that affects the plan.
 
 Keep the authored wording and operations. The plugin uses the default fact table for new facts and preserves explicit file paths from the taskbook. Use `intakeTargets` only to disambiguate an existing reference with the taskbook's stated scope. When only a similar record exists, show the candidate to the user for a decision. Preserve the authored replacement or retirement reason.
 

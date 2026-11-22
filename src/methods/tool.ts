@@ -1,15 +1,11 @@
 import { Type } from "typebox";
-import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { methodDirectory, readStageMethod, workerMethodStages } from "./catalog.ts";
 import { phaseSources } from "./upstream.ts";
 import type { Phase } from "../workflow/transitions.ts";
 import type { Taskbook } from "../taskbook/document.ts";
 
 export const methodTool = "taskbook_method";
-
-export function registerMethodTool(pi: ExtensionAPI, current: () => {phase: Phase; type: Taskbook["type"]} | undefined) {
-  pi.registerTool(methodDefinition(current));
-}
 
 const methodParameters = Type.Object({ name: Type.Optional(Type.String({ minLength: 1 })) }, { additionalProperties: false });
 

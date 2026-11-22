@@ -1,9 +1,8 @@
-import { buildPhaseInput, readRunContext } from "./src/workflow/phase-input.ts";
+import { buildIntakeInput, readRunContext } from "./src/workflow/phase-input.ts";
 import { registerSetupCommand } from "./src/setup/command.ts";
 import { setRunState, cleanRevision, matchesDeliveryHead, startRun, type Report, type Run } from "./src/workflow/run.ts";
-import { magpieSessionTransport, readSourceProjectFacts, recallMagpieMemory, syncMagpieMemory, type MagpieSyncResult } from "./src/integrations/magpie-memory.ts";
-import { magpieSessionTools } from "./src/integrations/mcp-catalog.ts";
-import { methodTool, registerMethodTool } from "./src/methods/tool.ts";
+import { magpieSessionTransport, syncMagpieMemory, type MagpieSyncResult } from "./src/integrations/magpie-memory.ts";
+import { magpieRepositoryReader, magpieSessionTools } from "./src/integrations/mcp-catalog.ts";
 import type { ExtensionAPI, ExtensionContext, ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { randomUUID } from "node:crypto";
@@ -13,14 +12,13 @@ import { prepareTaskLaunch, readEntryArgument, readTaskbookInput } from "./src/t
 import { registerHelpCommand } from "./src/taskbook/help.ts";
 import { handoffT3Thread, hasT3Context, launchT3Thread, readT3Workspace } from "./src/integrations/t3.ts";
 
-import { validateConflict, parseFactDecision, taskMemory } from "./src/workflow/task-context.ts";
-import { checkFacts, factChecksParameter, type Observation } from "./src/facts/fact-check.ts";
+import { parseFactDecision, taskMemory } from "./src/workflow/task-context.ts";
 import { maxFactMatches, queryProjectFacts } from "./src/facts/query.ts";
-import { factAccessRestriction } from "./src/facts/access.ts";
+import { factAccessRestriction, factSearchOnly, isFactPath } from "./src/facts/access.ts";
 import { intakeTargetsParameter, importTaskFacts, readFactTables, type IntakeDecision } from "./src/facts/taskbook-intake.ts";
 import { alwaysPrompt } from "./src/facts/always.ts";
 
-import { pendingMemoryChanges, readProjectMemory, taskbookMemoryChanges, type MemoryChange, type ProjectSnapshot } from "./src/facts/project-memory.ts";
+import { pendingMemoryChanges, readProjectMemory, type MemoryChange, type ProjectSnapshot } from "./src/facts/project-memory.ts";
 
 import { removeDesignArchive } from "./src/workflow/design-archive.ts";
 import { readFileSync } from "node:fs";
@@ -38,17 +36,21 @@ const kickoffType = "pi-taskbook-stage";
 const t3Continuation = "pi-taskbook-t3-continuation";
 const taskbookPrefix = "/taskbook ";
 const handoffPrompt = readFileSync(new URL("./prompts/handoff.md", import.meta.url), "utf8");
+const designSourceParameters = Type.Object({
+  owner: Type.String({pattern: "^[A-Za-z0-9-]+$", maxLength: 100}),
+  repo: Type.String({pattern: "^[A-Za-z0-9_.-]+$", maxLength: 100}),
+  commit: Type.String({pattern: "^[0-9a-fA-F]{40}$"}),
+  path: Type.String({maxLength: 500}),
+}, {additionalProperties: false});
 const reportParameters = Type.Object({
   attempt: Type.String({ description: "当前阶段提示词中给出的执行标识。" }),
-  outcome: Type.Union([Type.Literal("pass"), Type.Literal("blocked"), Type.Literal("fact-conflict"), Type.Literal("needs-user")]),
+  outcome: Type.Union([Type.Literal("pass"), Type.Literal("blocked"), Type.Literal("fact-conflict")]),
   summary: Type.String({ minLength: 1, maxLength: 4000 }),
   evidence: Type.Array(Type.String({ minLength: 1, maxLength: 1200 }), { maxItems: 20 }),
-  factChecks: Type.Optional(factChecksParameter),
   pullRequest: Type.Optional(Type.Union(pullRequestActions.map(action => Type.Literal(action)))),
   intakeTargets: Type.Optional(intakeTargetsParameter),
   intakeConflicts: Type.Optional(Type.Array(Type.Object({id: Type.String(), reason: Type.String({minLength: 1, maxLength: 4000})},
     {additionalProperties: false}), {minItems: 1})),
-  conflicts: Type.Optional(Type.Array(Type.Object({factId: Type.String(), observation: Type.String({minLength: 1, maxLength: 4000})}, {additionalProperties: false}), {minItems: 1, maxItems: 20})),
 }, { additionalProperties: false });
 
 function requireApprovedFacts(run: Run, snapshot: ProjectSnapshot) {
@@ -72,21 +74,16 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   let phaseInput: string | undefined;
   let workerSnapshot: ProjectSnapshot | undefined;
   let intakeSnapshot: ReturnType<typeof readFactTables> | undefined;
-  const observations = new Map<string, Observation>();
 
-  let coordinating: {caller: string; controller: AbortController; settled: Promise<void>} | undefined;
+  let coordinating: {caller: string; controller: AbortController; settled: Promise<void>; sourceReader?: string} | undefined;
   let teamProgress: string | undefined;
   const suspendedTools = new Set<string>();
-  const observedCalls = new Map<string, string>();
   const runWorker = registerSubagentTool(pi);
-
-  registerMethodTool(pi, () => run && started && !reported && run.state.phase !== "exit"
-    ? {phase: run.state.phase, type: run.task.type} : undefined);
 
   pi.registerTool({
     name: queryFactsTool,
     label: "Search project facts",
-    description: "Find relevant project memory and source pointers in the task view of project facts. An exact registered label searches across tables. Check the source before using a result as evidence.",
+    description: "Find registered project facts by ID, exact text, keywords, or label. Results include their source pointers.",
     parameters: Type.Object({
       query: Type.String({ minLength: 1, maxLength: 240, description: "An exact label such as worktree, or search terms." }),
       label: Type.Optional(Type.String({ minLength: 1, maxLength: 100, description: "Restrict a text query to one registered label." })),
@@ -106,9 +103,9 @@ export default function taskbookExtension(pi: ExtensionAPI) {
 
   function toggleReportTool(enabled: boolean) {
     const tools = [...new Set([...pi.getActiveTools(), ...suspendedTools])]
-      .filter(name => name !== reportTool && name !== teamTool && name !== methodTool);
+      .filter(name => name !== reportTool && name !== teamTool);
     suspendedTools.clear();
-    if (enabled) tools.push(reportTool, methodTool);
+    if (enabled) tools.push(reportTool);
     const phase = run?.state.phase;
     pi.setActiveTools(phase ? tools.filter(name => {
       if (!directDelegation(name) && !(relocated && name === "read") && phaseAllowsTool(phase, name)) return true;
@@ -118,10 +115,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   }
 
   function phaseAllowsTool(phase: Run["state"]["phase"], name: string) {
-    if (phase === "fact-management") return name === queryFactsTool || name === reportTool;
-    if (phase === "fact-check") return !["codemode", "compress", "edit", "write"].includes(name);
-    if (phase === "handoff") return name === queryFactsTool || name === reportTool;
-    return true;
+    return (phase !== "fact-management" && phase !== "handoff") || name === queryFactsTool || name === reportTool;
   }
 
   function pauseForUser(ctx: ExtensionContext, active: Run) {
@@ -152,12 +146,27 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     onUpdate: Parameters<ToolDefinition["execute"]>[3]) {
     const controller = new AbortController();
     const teamSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
+    const reader = active.state.phase === "design" ? magpieRepositoryReader(pi) : undefined;
+    const sourceTool: ToolDefinition<typeof designSourceParameters> | undefined = reader && {
+      name: "inspect_github", label: "Inspect pinned GitHub source",
+      description: "Read a file or directory in a GitHub repository at the exact commit used by the task.",
+      parameters: designSourceParameters,
+      annotations: {readOnlyHint: true},
+      async execute(_id, {owner, repo, commit, path}, workerSignal) {
+        if (isFactPath(path)) throw new Error(factSearchOnly);
+        const result = await ctx.executeTool(reader.name, {owner, repo, path, [reader.revisionField]: commit},
+          {signal: workerSignal ? AbortSignal.any([teamSignal, workerSignal]) : teamSignal});
+        if (result.isError || result.result.isError) throw new Error("Magpie GitHub could not read the pinned source.");
+        const text = result.result.content.filter(part => part.type === "text").map(part => part.text).join("\n");
+        return {content: [{type: "text", text: `${owner}/${repo}@${commit}:${path}\n` + text.slice(0, 16000)}], details: {}};
+      },
+    };
     const settled = Promise.resolve().then(() => runTeam(active, ctx, teamSignal, text => {
       teamProgress = text;
       ctx.ui.setStatus("pi-taskbook", text);
       onUpdate?.({content: [{type: "text", text}], details: {}});
-    }, runWorker));
-    coordinating = {caller, controller, settled};
+    }, runWorker, sourceTool));
+    coordinating = {caller, controller, settled, sourceReader: reader?.name};
     try {
       await settled;
       return "团队工作已完成本阶段。";
@@ -175,6 +184,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: teamTool, label: "继续任务书团队工作", description: "Run the current Taskbook team phase.",
     defaultActive: false, executionMode: "sequential",
+    reachesTools: () => run?.state.phase === "design" ? ["magpie"] : [],
     parameters: Type.Object({attempt: Type.String()}, {additionalProperties: false}),
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       if (!run || !started || reported || coordinating || attempt !== params.attempt || !teamPhase(run)) {
@@ -220,25 +230,13 @@ export default function taskbookExtension(pi: ExtensionAPI) {
         team: {...team, registered: {revision}}, reports: [...active.state.reports, report]});
       return startPhase(ctx);
     }
-    if (phase !== "fact-check" && phase !== "fact-management" && phase !== "handoff") {
+    if (phase !== "fact-management" && phase !== "handoff") {
       throw new Error("任务书阶段无可用的执行者：" + phase);
     }
     const tail = phase === "handoff";
     toggleReportTool(true);
     const token = randomUUID();
     const active = run;
-    const priorState = active.state;
-    const magpieCandidates = phase === "fact-check" ? await recallMagpieMemory(active.root, active.task.repository.split("/")[1],
-      taskbookMemoryChanges(active.task.markdown, active.task.id).filter(c => c.scope.startsWith("cross-project:")).map(c => c.key)) : undefined;
-    if (run !== active || active.state !== priorState) return;
-    observedCalls.clear();
-    observations.clear();
-    const receipts = magpieCandidates?.status === "available" ? magpieCandidates.results.map((text, index) => {
-      const receipt = randomUUID();
-      observations.set(receipt, {toolName:"magpie:memory_search", toolCallId:receipt, isError:false,
-        input:magpieCandidates.searches[index], head:active.state.base, text:[text]});
-      return receipt;
-    }) : [];
     workerSnapshot = readProjectMemory(active.root);
     requireApprovedFacts(active, workerSnapshot);
     intakeSnapshot = phase === "fact-management" ? readFactTables(active.root) : undefined;
@@ -255,7 +253,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       candidate: active.state.revision,
       reports: ["implement", "review", "fact-registration"].map(name =>
         active.state.reports.findLast(report => report.phase === name && report.outcome === "pass")),
-    }) : buildPhaseInput(active, phase, token, magpieCandidates ? {...magpieCandidates, receipts} : undefined);
+    }) : buildIntakeInput(active, token);
     attempt = token;
     started = false;
     reported = false;
@@ -265,8 +263,6 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   }
 
   async function release(ctx: ExtensionContext) {
-    observedCalls.clear();
-    observations.clear();
     coordinating?.controller.abort();
     if (coordinating) await coordinating.settled.catch(() => {});
     coordinating = undefined;
@@ -498,13 +494,12 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       const conflict = pending.find(entry => entry.factId === args.trim().split(/\s+/)[0]);
       if (!conflict) throw new Error("请选择待裁决的事实标识。");
       const decision = parseFactDecision(args, conflict);
-      const factStage = active.state.taskFacts ? "fact-management" : "fact-check";
       let projectChange: MemoryChange | undefined;
       if (decision.factId.startsWith("project:")) {
         const snapshot = readProjectMemory(active.root);
         if (conflict.projectHead !== snapshot.head) {
-          setRunState(active, { ...active.state, pendingConflicts: [], phase: factStage,
-            approvedProjectHead: undefined, revision: undefined, candidateId: undefined, cycleStart: active.state.reports.length });
+          setRunState(active, { ...active.state, pendingConflicts: [], phase: "fact-management",
+            approvedProjectHead: undefined, revision: undefined, candidateId: undefined });
           ctx.ui.notify("冲突所用的 .fact 版本已变化。将重新核查，未登记本次裁决。", "warning");
           return startPhase(ctx);
         }
@@ -517,9 +512,8 @@ export default function taskbookExtension(pi: ExtensionAPI) {
           scope: record.scope, text: decision.text, expected: record.version, authorization: "用户裁决 " + args.trim() };
       }
       const remaining = pending.filter(item => item.factId !== decision.factId);
-      setRunState(active, { ...active.state, pendingConflicts: remaining, phase: factStage,
-        approvedProjectHead: undefined, revision: undefined, candidateId: undefined, cycleStart: active.state.reports.length,
-        ...(active.state.team ? {team: undefined} : {}),
+      setRunState(active, { ...active.state, pendingConflicts: remaining, phase: "fact-management",
+        approvedProjectHead: undefined, revision: undefined, candidateId: undefined, team: undefined,
         decisions: [...(active.state.decisions ?? []), { ...decision, conflict, projectChange, at: new Date().toISOString(),
           session: ctx.sessionManager.getSessionId() }] });
       await startPhase(ctx);
@@ -575,7 +569,8 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       }
       return {block: true, reason: "交付阶段由插件通过 Magpie 执行。"};
     }
-    if (event.toolName === subagentTool && coordinating && event.parentToolCallId === coordinating.caller) return;
+    if (coordinating && event.parentToolCallId === coordinating.caller &&
+        (event.toolName === subagentTool || (run?.state.phase === "design" && event.toolName === coordinating.sourceReader))) return;
     if (run && directDelegation(event.toolName)) {
       return {block: true, reason: "任务书的子代理由插件按项目配置派发。"};
     }
@@ -597,26 +592,6 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     if (started && run && !phaseAllowsTool(run.state.phase, event.toolName)) {
       return {block: true, reason: "请使用当前阶段提示中的工具。"};
     }
-    if (started && run?.state.phase === "fact-check" && ![reportTool, methodTool].includes(event.toolName)) {
-      try { observedCalls.set(event.toolCallId, cleanRevision(run)); } catch { return; }
-    }
-  });
-
-  pi.on("tool_result", event => {
-    if (!started || reported || !run) return;
-    const before = observedCalls.get(event.toolCallId);
-    if (!before) return;
-    observedCalls.delete(event.toolCallId);
-    let after: string;
-    try { after = cleanRevision(run); } catch { return; }
-    if (before !== after) return;
-    const text = event.content.flatMap(part => part.type === "text" && part.text.trim() ? [part.text] : []);
-    if (!text.length) return;
-    const receipt = randomUUID();
-    observations.set(receipt, {toolName: event.toolName, toolCallId: event.toolCallId,
-      input: event.input, head: before, isError: event.isError, text});
-    return {content: [...event.content, {type: "text" as const, text: "事实核查回执 " + receipt}],
-      structuredContent: event.structuredContent};
   });
 
   pi.registerTool({
@@ -625,7 +600,8 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     description: "登记本阶段结果。Handoff 通过时在本调用内等待签署交付的 PR 回执。",
     defaultActive: false,
     executionMode: "sequential",
-    reachesTools: input => run?.state.phase === "handoff" && input.outcome === "pass" ? ["magpie"] : [],
+    reachesTools: input => input.outcome === "pass" &&
+      (run?.state.phase === "handoff" || run?.state.phase === "fact-management") ? ["magpie"] : [],
     parameters: reportParameters,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       if (!run || !started || reported || !attempt || params.attempt !== attempt || run.state.phase === "exit") {
@@ -672,7 +648,6 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       if (phase === "fact-management") {
         if (!intakeSnapshot || !workerSnapshot || readProjectMemory(run.root).head !== workerSnapshot.head ||
             readFactTables(run.root).head !== intakeSnapshot.head) throw new Error("事实同步输入已变化，请重新提交任务书。");
-        if (outcome !== "pass" && outcome !== "fact-conflict" && outcome !== "blocked") throw new Error("无效的事实同步结果。");
         if (params.intakeConflicts && outcome !== "fact-conflict") throw new Error("同步冲突须使用 fact-conflict。");
         const items = taskMemory(run.task).facts.map(fact => {
           const previous = run?.state.taskFacts?.find(item => item.id === fact.id);
@@ -705,33 +680,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
         }
         return {content: [{type: "text", text: conflicts?.length ? "事实同步等待用户裁决。" : "事实同步结果已登记。"}], details: {}};
       }
-      if (phase !== "fact-check") throw new Error("当前阶段由插件派发。");
-      if (outcome !== "pass" && outcome !== "blocked" && outcome !== "needs-user" && outcome !== "fact-conflict") {
-        throw new Error("无效的事实核查结果。");
-      }
-      const summary = params.summary.trim();
-      if (!summary || ((outcome === "fact-conflict") !== Boolean(params.conflicts?.length))) {
-        throw new Error("请提交具体结论，事实冲突须附冲突条目。");
-      }
-      if (outcome === "pass" && !params.factChecks?.length) throw new Error("事实核查通过需要至少一项可定位、有摘录的 factChecks。");
-      const project = readProjectMemory(run.root);
-      requireApprovedFacts(run, project);
-      if (!workerSnapshot || project.head !== workerSnapshot.head) throw new Error("本轮使用的 .fact 版本已变化。");
-      workspace(run.root, run.task, run.state.base, run.state.branch);
-      const facts = readRunContext(run, project).facts;
-      const conflicts = params.conflicts?.map(item => {
-        validateConflict(facts, item);
-        return {...item, projectVersion: project.records[item.factId]?.version,
-          projectHead: item.factId.startsWith("project:") ? project.head : undefined};
-      });
-      const factChecks = params.factChecks && checkFacts(run.root, run.state.base, params.factChecks, observations);
-      const report: Report = {phase, outcome, summary, evidence: params.evidence, factChecks};
-      setRunState(run, {...run.state, reports: [...run.state.reports, report],
-        pendingConflicts: conflicts, pendingQuestion: outcome === "needs-user" ? {question: summary} : undefined,
-        phase: outcome === "pass" ? "fact-management" : outcome === "blocked" ? "exit" : phase,
-        exit: outcome === "blocked" ? "blocked" : undefined});
-      reported = true;
-      return {content: [{type: "text", text: "事实核查结果已登记。"}], details: {}, terminate: true};
+      throw new Error("当前阶段由插件派发。");
     },
   });
 

@@ -10,17 +10,12 @@ export function phaseSources(phase: Phase, type: Taskbook["type"]): string[] {
     case "publication": return [];
     case "handoff": return ["matt:pr", "pstack:principle-prove-it-works"];
     case "review": return ["pstack:principle-prove-it-works", "pstack:blast-radius"];
-    case "fact-check":
-      return [
-        "pstack:in-your-own-words", "matt:triage", "pstack:principle-prove-it-works",
-        "matt:research", "matt:domain-modeling", ...(fix ? ["matt:diagnosing-bugs"] : []),
-      ];
     case "fact-review":
       return ["pstack:principle-prove-it-works", "matt:research", "matt:domain-modeling"];
     case "design":
       return [
         "matt:to-spec", "pstack:architect", "pstack:principle-model-the-domain", "matt:codebase-design",
-        "pstack:principle-sequence-verifiable-units",
+        "pstack:principle-sequence-verifiable-units", "matt:research",
         ...(fix ? ["pstack:principle-fix-root-causes"] : ["pstack:principle-experience-first"]),
       ];
     case "implement":

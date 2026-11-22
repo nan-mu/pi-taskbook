@@ -58,17 +58,9 @@ const needsUserResult = Type.Object({result: Type.Object({kind: Type.Literal("ne
 function factTool(run: Run, lookup: Set<string>): ToolDefinition<typeof factParameters> {
   return {
     name: "taskbook_query_facts", label: "Query facts",
-    description: "Search project facts by label, exact ID or keywords. In Design, query an observation:Pn ID from the assignment to read one checked excerpt. Use draft, designer, implementer, a seat, or a work state to find draft facts.",
+    description: "Search project facts by label, exact ID or keywords. Use draft, designer, implementer, a seat, or a work state to find draft facts.",
     parameters: factParameters,
     async execute(_id, {query, label, limit = 5, offset = 0}) {
-      const evidence = /^observation:P([1-9]\d*)$/iu.exec(query.trim());
-      if (evidence && run.state.phase === "design") {
-        const design = run.state.team?.design;
-        const observation = design?.kind === "working" ? design.progress.input.observations?.[Number(evidence[1]) - 1] : undefined;
-        if (!observation) throw new Error("没有该核查观察。请选择当前任务包中的观察 ID。");
-        const {claim, observed, origin, source} = observation;
-        return {content: [{type: "text", text: JSON.stringify({claim, observed, origin, source})}], details: {}};
-      }
       const key = (label ?? query).trim().toLowerCase();
       const drafts = run.state.team?.drafts ?? [];
       const matches = drafts.filter(fact => {
@@ -99,7 +91,7 @@ function addDrafts(existing: DraftFact[], facts: readonly {text: string; source:
   return next;
 }
 
-function checkFacts(run: Run) {
+function assertFactVersions(run: Run) {
   const {state, root} = run;
   if (readFactTables(root).head !== state.topicFactsHead || readProjectMemory(root).head !== state.approvedProjectHead) {
     throw new Error("事实版本已变化，请恢复任务使用的版本后重试。");
@@ -145,7 +137,7 @@ export function resumeTeam(run: Run, answer: string) {
 }
 
 export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: AbortSignal,
-  status: (value: string) => void, runWorker: ReturnType<typeof registerSubagentTool>) {
+  status: (value: string) => void, runWorker: ReturnType<typeof registerSubagentTool>, sourceTool?: ToolDefinition) {
   const id = run.task.digest;
   const updateTeam = (team: Team, patch: Partial<Run["state"]> = {}) => setRunState(run, {...run.state, ...patch, team});
   const pause = (question: string) => setRunState(run, {...run.state, pendingQuestion: {question}});
@@ -163,6 +155,7 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
     const observations: Inspection[] = [];
     const lookedUp = new Set<string>();
     const tools: ToolDefinition[] = [factTool(run, lookedUp)];
+    if (run.state.phase === "design" && sourceTool) tools.push(sourceTool);
     if (!options.writable || options.review) tools.push(inspectionTool({root: run.root,
       base: options.review ? run.state.team?.archiveRevision ?? run.state.base : run.state.base, revision: snapshot}, observations));
     if (!options.review) tools.push(methodDefinition(() => ({phase: seat === "implementer" ? "implement" : "design", type: run.task.type})));
@@ -197,7 +190,7 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
     const results = await Promise.allSettled(turns.map(perform));
     signal.throwIfAborted();
     workspace(run.root, run.task, run.state.base, run.state.branch);
-    checkFacts(run);
+    assertFactVersions(run);
     const failure = results.find(result => result.status === "rejected");
     if (failure) throw failure.reason;
     const acceptedOrder = [...results.entries()];
@@ -213,19 +206,17 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
   while (true) {
     signal.throwIfAborted();
     workspace(run.root, run.task, run.state.base, run.state.branch);
-    checkFacts(run);
+    assertFactVersions(run);
     const {state} = run;
     const team = state.team ?? {};
     const context = readRunContext(run);
     if (state.phase === "design") {
       if (!team.design) {
         const baseline = git(run.root, "rev-parse", "HEAD");
-        const factCheck = state.reports.slice(state.cycleStart ?? 0).findLast(r => r.phase === "fact-check" && r.outcome === "pass");
-        const observations = factCheck?.factChecks ?? [];
         const userAnswers = state.userAnswers ?? [];
-        const factsVersion = hash([state.topicFactsHead, state.approvedProjectHead, state.factView, context.facts, observations, userAnswers]);
-        const design = startDesigner({runId: id + ":design:" + (state.plan?.version ?? 0), baseline, factsVersion, observations, factSummary: factCheck?.summary,
-          userAnswers, previousPlanVersion: state.plan?.version,
+        const factsVersion = hash([state.topicFactsHead, state.approvedProjectHead, state.factView, context.facts, userAnswers]);
+        const design = startDesigner({runId: id + ":design:" + (state.plan?.version ?? 0), baseline, factsVersion,
+          userAnswers, previousPlanVersion: state.plan?.version, taskType: run.task.type,
           taskbook: run.task.markdown, facts: context.facts.map(fact => fact.id + " " + fact.text +
             (fact.userDecision ? " (User decision: " + JSON.stringify(fact.userDecision) + ")" : "")),
           targetIds: [...context.goals, ...context.delivery].map(item => item.id)});
@@ -255,7 +246,7 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
       status("Design · " + turns.map(turn => turn.designer + "/" + turn.work).join(", "));
       await settledBatch(turns, turn => dispatch(turn.designer, {
         ...turn, prompt: turn.prompt + "\n\n" + "Primary taskbook facts are tagged " + taskFactLabel(run.task) +
-          ". Query project facts or an observation ID through taskbook_query_facts when the decision needs it. Inspect only the source passage needed for the current judgment. For a conflict with an authored fact, flag both source locations and the affected decision for the Lead.",
+          ". Use taskbook_query_facts to find governing facts and their source pointers. Inspect the source passage needed for the current decision. For a conflict with an authored fact, flag both sources and the decision affected.",
       }, team.designBase!), (turn, reply) => {
         const current = run.state.team!;
         const design = settleDesignerTurn(current.design!, {id: turn.id, settled: true, result: reply.result});
