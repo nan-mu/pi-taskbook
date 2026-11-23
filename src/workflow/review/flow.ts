@@ -32,7 +32,7 @@ type Replies = Partial<Record<Member, Comparison>>;
 type Candidate = { revision: string; evidenceVersion: string };
 type Goal = { id: string; text: string };
 type Input = { runId: string; goals: readonly Goal[]; candidate: Candidate };
-type Progress = Input & { epoch: number; serial: number; everCrossed: boolean; priorFindings: ReviewFinding[] };
+type Progress = Input & { epoch: number; serial: number; everCrossed: boolean; priorFindings: ReviewFinding[]; previousRevision?: string };
 type Discussion = { opinions: Opinions; replies: Replies; protectedFindings: ReviewFinding[]; seen: string[] };
 type Basis =
   | { kind: "pass"; draftFacts: ReviewedFact[] }
@@ -60,7 +60,8 @@ export function startReviewFlow(input: Input & { previous?: ReviewFlow }): Revie
   if (previous && old?.candidate.revision === input.candidate.revision && old.candidate.evidenceVersion === input.candidate.evidenceVersion &&
     JSON.stringify(old.goals) === JSON.stringify(goals)) return previous;
   const progress: Progress = { runId: input.runId, goals, candidate: { ...input.candidate }, epoch: old ? old.epoch + 1 : 1,
-    serial: 1, everCrossed: old?.everCrossed ?? false, priorFindings: previous?.kind === "rework" ? previous.findings : old?.priorFindings ?? [] };
+    serial: 1, everCrossed: old?.everCrossed ?? false, priorFindings: previous?.kind === "rework" ? previous.findings : old?.priorFindings ?? [],
+    previousRevision: old?.candidate.revision === input.candidate.revision ? old.previousRevision : old?.candidate.revision };
   return { kind: "working", progress, stage: { work: old ? "initial-rework" : "initial-first" } };
 }
 
@@ -114,7 +115,8 @@ export function reviewTurns(state: ReviewFlow) {
   const prompt = readFileSync(new URL(`../../../prompts/review/${stage.work}.md`, import.meta.url), "utf8").trim();
   return pending(stage).map(designer => ({
     id: turnId(progress, designer), designer, work: stage.work,
-    context: structuredClone({ goals: progress.goals, ...materials(stage, progress, designer) }),
+    context: structuredClone({ goals: progress.goals, previousReviewedRevision: progress.previousRevision,
+      ...materials(stage, progress, designer) }),
     prompt: `${prompt}\n\n${common}`, schema: schema(stage),
     summarizeResult(result: unknown) {
       if (Value.Check(askUser, result)) return result.kind + " · " + result.question;

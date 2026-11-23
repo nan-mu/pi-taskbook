@@ -41,9 +41,13 @@ const parameters = Type.Object({
   limit: Type.Optional(Type.Integer({minimum: 1, maximum: 120, description: "行数，默认 60"})),
 }, { additionalProperties: false });
 
-export function inspectionTool(input: Pick<ReviewInput,"root"|"base"|"revision">, observations: Inspection[]): ToolDefinition<typeof parameters> {
+export function inspectionTool(input: Pick<ReviewInput,"root"|"base"|"revision"> & {diffBase?: string},
+  observations: Inspection[]): ToolDefinition<typeof parameters> {
+  const diffBase = input.diffBase ?? input.base;
   return {
-    name: "inspect_revision", label: "检查固定 Git 提交", description: "files 列出当前固定提交中的文件，可用 path 指定目录。base 和 candidate 读取指定文件。changes 和 diff 查看两版改动。history 查看指定路径的提交历史和提交说明。每次返回一页。",
+    name: "inspect_revision", label: "检查固定 Git 提交",
+    description: "files 列出候审提交文件，可用 path 指定目录。base 和 candidate 读取指定版本的文件。changes 和 diff 比较 " +
+      (input.diffBase ? "上一个候审提交与当前候审提交。" : "基线与候审提交。") + "history 查看指定路径的提交历史和提交说明。每次返回一页。",
     parameters,
     async execute(_id, { view, path, start = 1, limit = 60 }) {
       if (path && (posix.isAbsolute(path) || posix.normalize(path) !== path || path === ".." || path.startsWith("../"))) {
@@ -61,7 +65,7 @@ export function inspectionTool(input: Pick<ReviewInput,"root"|"base"|"revision">
         args = ["log", "--reverse", "--date=short", "--format=%H %ad%n%B", input.revision, "--", ":(literal)" + path, ":(exclude,top,literal).fact"];
       } else {
         args = ["diff", "--no-ext-diff", "--no-textconv", "--no-color",
-          ...(view === "changes" ? ["--name-status"] : []), input.base, input.revision, "--",
+          ...(view === "changes" ? ["--name-status"] : []), diffBase, input.revision, "--",
           ...(path ? [":(literal)" + path] : []), ":(exclude,top,literal).fact"];
       }
       const raw = execFileSync("git", args, {

@@ -157,7 +157,8 @@ export async function runTeam(run: Run, ctx: ExtensionToolContext, signal: Abort
     const tools: ToolDefinition[] = [factTool(run, lookedUp)];
     if ((run.state.phase === "design" || options.review) && sourceTool) tools.push(sourceTool);
     if (!options.writable || options.review) tools.push(inspectionTool({root: run.root,
-      base: options.review ? run.state.team?.archiveRevision ?? run.state.base : run.state.base, revision: snapshot}, observations));
+      base: options.review ? run.state.team?.archiveRevision ?? run.state.base : run.state.base,
+      diffBase: options.review ? run.state.team?.review?.progress.previousRevision : undefined, revision: snapshot}, observations));
     if (!options.review) tools.push(methodDefinition(() => ({phase: seat === "implementer" ? "implement" : "design", type: run.task.type})));
     if (options.evidence) {
       tools.push({

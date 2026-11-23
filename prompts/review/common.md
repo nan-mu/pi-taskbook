@@ -6,4 +6,6 @@ For a behavioral finding, identify the triggering input, actual outcome, require
 
 When a conclusion depends on an upstream file, use `inspect_github` if available. Read the relevant file at the taskbook's exact upstream commit and cite its path and lines. Pair that evidence with the candidate inspection for the finding.
 
+When the assignment supplies `previousReviewedRevision`, start re-review with `inspect_revision` changes or diff to see the update since that candidate. Check the earlier findings and regressions introduced by the changes. Read candidate files for the affected context and base files for the original baseline.
+
 Report a concise summary and cite observation IDs from the current candidate. Give each actionable finding a short, stable `issue` name, a concrete `detail`, and its `evidence`. Add `factId` when a proposed change conflicts with a governing fact. In initial and cross-review, record `keep` or `drop` with evidence for every draft fact.
