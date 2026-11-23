@@ -146,7 +146,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
     onUpdate: Parameters<ToolDefinition["execute"]>[3]) {
     const controller = new AbortController();
     const teamSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
-    const reader = active.state.phase === "design" ? magpieRepositoryReader(pi) : undefined;
+    const reader = magpieRepositoryReader(pi);
     const sourceReads = new Map<string, Promise<string>>();
     const sourceTool: ToolDefinition<typeof designSourceParameters> | undefined = reader && {
       name: "inspect_github", label: "Inspect pinned GitHub source",
@@ -198,7 +198,7 @@ export default function taskbookExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: teamTool, label: "继续任务书团队工作", description: "Run the current Taskbook team phase.",
     defaultActive: false, executionMode: "sequential",
-    reachesTools: () => run?.state.phase === "design" ? ["magpie"] : [],
+    reachesTools: () => run && teamPhase(run) ? ["magpie"] : [],
     parameters: Type.Object({attempt: Type.String()}, {additionalProperties: false}),
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       if (!run || !started || reported || coordinating || attempt !== params.attempt || !teamPhase(run)) {
@@ -584,7 +584,8 @@ export default function taskbookExtension(pi: ExtensionAPI) {
       return {block: true, reason: "交付阶段由插件通过 Magpie 执行。"};
     }
     if (coordinating && event.parentToolCallId === coordinating.caller &&
-        (event.toolName === subagentTool || (run?.state.phase === "design" && event.toolName === coordinating.sourceReader))) return;
+        (event.toolName === subagentTool ||
+          ((run?.state.phase === "design" || run?.state.phase === "review") && event.toolName === coordinating.sourceReader))) return;
     if (run && directDelegation(event.toolName)) {
       return {block: true, reason: "任务书的子代理由插件按项目配置派发。"};
     }
